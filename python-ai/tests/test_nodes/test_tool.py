@@ -1,0 +1,92 @@
+import pytest
+from unittest.mock import AsyncMock, Mock, patch
+from src.nodes.tool import ToolNode
+from src.core.context import ExecutionContext
+
+@pytest.mark.asyncio
+async def test_tool_node_http_call():
+    context = ExecutionContext(
+        execution_id="exec_test",
+        session_id="sess_test",
+        workflow_code="flight_booking",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variable("city", "Beijing")
+
+    node = ToolNode("tool1", {
+        "tool": {
+            "method": "GET",
+            "url": "https://api.example.com/weather?city=${city}",
+            "headers": {}
+        }
+    })
+
+    with patch('src.nodes.tool.httpx.AsyncClient') as mock_client:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {"temperature": 25}
+        mock_response.text = '{"temperature": 25}'
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.request.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        result = await node.execute(context)
+        assert result["status_code"] == 200
+
+@pytest.mark.asyncio
+async def test_tool_node_with_params():
+    context = ExecutionContext(
+        execution_id="exec_test",
+        session_id="sess_test",
+        workflow_code="flight_booking",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variable("id", "123")
+
+    node = ToolNode("tool2", {
+        "tool": {
+            "method": "GET",
+            "url": "https://api.example.com/items",
+            "params": {"id": {"$ref": "id"}}
+        }
+    })
+
+    # Test configuration setup
+    assert node.method == "GET"
+    assert node.url == "https://api.example.com/items"
+
+
+@pytest.mark.asyncio
+async def test_tool_node_retry_and_idempotency():
+    context = ExecutionContext(
+        execution_id="exec_retry",
+        session_id="sess_retry",
+        workflow_code="flight_booking",
+        workflow_version="2.0.0"
+    )
+    context.add_execution_variables({
+        "departure_city": "北京",
+        "arrival_city": "上海",
+        "departure_date": "2026-04-09",
+        "passengers": 1
+    })
+
+    node = ToolNode("search_flights", {
+        "config": {
+            "tool_code": "flight_search_api",
+            "retry_policy": "network_timeout",
+            "simulate_failures": 1,
+            "idempotent": True
+        }
+    })
+
+    first_result = await node.execute(context)
+    second_result = await node.execute(context)
+
+    assert first_result["output"]["flight_options"]
+    assert first_result["metrics"]["cached"] is False
+    assert second_result["metrics"]["cached"] is True

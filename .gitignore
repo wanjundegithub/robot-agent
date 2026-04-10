@@ -37,3 +37,17 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Frontend ###
+frontend/node_modules/
+frontend/dist/
+
+### Runtime Output ###
+output/
+.playwright-cli/
+*.log
+2026-04-07-220038-local-command-caveatcaveat-the-messages-below-w.txt
+
+### Python ###
+__pycache__/
+*.pyc
