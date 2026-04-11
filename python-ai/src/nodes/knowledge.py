@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 from src.core.knowledge_store import get_knowledge_store
+from src.core.protection import vector_access_optimizer
 from .base import BaseNode
 
 
@@ -17,14 +18,21 @@ class KnowledgeNode(BaseNode):
 
     async def execute(self, context) -> Dict[str, Any]:
         query = context.get_variable("user_message", "")
-        documents = get_knowledge_store().search(
-            kb_code=self.knowledge_base_code,
-            kb_version=self.kb_version,
-            query=query,
-            retrieval_mode=self.retrieval_mode,
-            top_k=self.top_k,
-            score_threshold=self.score_threshold,
-        )
+        plan = vector_access_optimizer.plan(self.knowledge_base_code, self.kb_version, query)
+        cached_documents = vector_access_optimizer.get_cached(plan.cache_key)
+        cache_hit = cached_documents is not None
+        if cache_hit:
+            documents = cached_documents
+        else:
+            documents = get_knowledge_store().search(
+                kb_code=self.knowledge_base_code,
+                kb_version=self.kb_version,
+                query=query,
+                retrieval_mode=self.retrieval_mode,
+                top_k=self.top_k,
+                score_threshold=self.score_threshold,
+            )
+            vector_access_optimizer.put_cached(plan.cache_key, documents)
         output = {
             "documents": documents,
             "document_count": len(documents),
@@ -41,5 +49,16 @@ class KnowledgeNode(BaseNode):
             "metrics": {
                 "retrieval_mode": self.retrieval_mode,
                 "document_count": len(documents),
+                "vector_shard": plan.shard_id,
+                "vector_cache_hit": cache_hit,
             },
+            "protection_events": [{
+                "event_type": "optimization.vector_access",
+                "data": {
+                    "kb_code": self.knowledge_base_code,
+                    "kb_version": self.kb_version,
+                    "vector_shard": plan.shard_id,
+                    "vector_cache_hit": cache_hit,
+                },
+            }],
         })

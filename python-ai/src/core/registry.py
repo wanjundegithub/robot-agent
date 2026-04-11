@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from .context import ExecutionContext
+from .protection import runtime_protection_manager
 from .runtime import ExecutionRuntime
 from .workflow_registry import get_workflow
 
@@ -52,8 +53,18 @@ class ExecutionRegistry:
                 route_decision=payload.get("route_decision", "start"),
                 route_reason=payload.get("route_reason"),
                 route_confidence=float(payload.get("route_confidence", 0.0)),
+                user_id=payload.get("user_id", "anonymous"),
+                experiment_id=payload.get("experiment_id"),
+                experiment_group=payload.get("experiment_group"),
+                dynamic_threshold=payload.get("dynamic_threshold"),
+                threshold_source=payload.get("threshold_source"),
+                requested_tool_code=payload.get("requested_tool_code"),
+                confirmed_tool_codes=list(payload.get("confirmed_tool_codes", []) or []),
             )
             context.add_execution_variables(payload.get("input_variables", {}))
+            if context.confirmed_tool_codes:
+                context.add_execution_variable("confirmed_tool_codes", list(context.confirmed_tool_codes))
+            runtime_protection_manager.check_execution_start(context)
 
             runtime = ExecutionRuntime(context=context, workflow=workflow)
             self._executions[execution_id] = runtime

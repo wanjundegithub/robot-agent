@@ -11,6 +11,7 @@ import reactor.core.publisher.Mono;
 import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.request.FormSubmitRequest;
 
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -58,6 +59,31 @@ public class PythonClient {
         return webClient.post()
                 .uri("/api/executions/{executionId}/resume", executionId)
                 .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
+    }
+
+    public Mono<Map<String, Object>> recommendSubflows(String workflowCode, String message) {
+        return webClient.post()
+                .uri("/api/phase4/subflow-recommendations")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "workflow_code", workflowCode,
+                        "message", message == null ? "" : message
+                ))
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
+    }
+
+    public Mono<Map<String, Object>> evaluateRag(List<Map<String, Object>> dataset) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("dataset", dataset);
+        return webClient.post()
+                .uri("/api/phase4/evaluations/rag")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
     }

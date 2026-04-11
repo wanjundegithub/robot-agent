@@ -17,9 +17,22 @@ export interface SendMessageResponse {
   route_decision?: string
   route_confidence?: number
   route_reason?: string
+  route_threshold?: number
+  threshold_source?: string
   candidate_workflows?: string[]
   active_execution_id?: string | null
   priority?: number
+  experiment_id?: string
+  experiment_group?: string
+  permission_effect?: string
+  permission_reason?: string
+  requested_tool_code?: string
+  confirmation_id?: string
+  confirmation_expires_at?: string
+  protection_status?: string
+  protection_reason?: string
+  retry_after_seconds?: number
+  degradation_message?: string
 }
 
 export interface FormSubmitResponse {
@@ -52,6 +65,14 @@ export type ExecutionEventType =
   | 'tool.returned'
   | 'security.prompt_sanitized'
   | 'security.output_rejected'
+  | 'cost.recorded'
+  | 'budget.alert'
+  | 'replay.snapshot_ready'
+  | 'confirmation.required'
+  | 'protection.rate_limited'
+  | 'protection.degraded'
+  | 'protection.circuit_open'
+  | 'optimization.vector_access'
 
 export interface ExecutionEventEnvelope {
   type: 'event'
@@ -111,6 +132,60 @@ export interface ExecutionDetail {
   error?: string | null
 }
 
+export interface CostAlert {
+  scope: string
+  scope_id: string
+  total_cost: number
+  threshold: number
+  message: string
+}
+
+export interface AnalyticsSummary {
+  total_executions: number
+  active_executions: number
+  success_rate: number
+  task_completion_rate: number
+  avg_completion_seconds: number
+  intent_accuracy: number
+  human_intervention_rate: number
+  total_cost: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface AnalyticsDashboard {
+  summary: AnalyticsSummary
+  workflow_breakdown: Array<Record<string, unknown>>
+  experiment_summary: Array<Record<string, unknown>>
+  cost_alerts: CostAlert[]
+}
+
+export interface ReplayResponse {
+  execution_id: string
+  workflow_code: string
+  workflow_version: string
+  session_id: string
+  status: string
+  input_variables: Record<string, unknown>
+  output_variables: Record<string, unknown>
+  variables: Record<string, unknown>
+  metrics: Record<string, unknown>
+  node_logs: Array<Record<string, unknown>>
+  event_stream: Array<Record<string, unknown>>
+}
+
+export interface RagEvaluationResponse {
+  dataset_size: number
+  hit_rate: number
+  avg_relevance: number
+  results: Array<Record<string, unknown>>
+}
+
+export interface SubflowRecommendationResponse {
+  workflow_code: string
+  recommendations: Array<Record<string, unknown>>
+}
+
 export interface WorkflowSummary {
   id: number
   workflowCode: string
@@ -131,3 +206,29 @@ export interface WorkflowVersionSummary {
 }
 
 export type SocketState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
+export interface GovernanceNotice {
+  title: string
+  detail: string
+  tone: 'info' | 'warning' | 'danger'
+  updated_at: string
+}
+
+export interface OperationalReadiness {
+  protection: {
+    circuit: Record<string, unknown>
+    rate_limits: Array<Record<string, unknown>>
+    degradation_modes: string[]
+  }
+  archive: {
+    retention: Record<string, unknown>
+    summary: Record<string, unknown>
+    recent_candidates: Array<Record<string, unknown>>
+    restore_entrypoints: string[]
+  }
+  platform: {
+    index_targets: Array<Record<string, unknown>>
+    redis_cluster: Record<string, unknown>
+    vector_sharding: Record<string, unknown>
+  }
+}

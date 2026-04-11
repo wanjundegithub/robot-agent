@@ -1,10 +1,12 @@
 import pytest
 
+from src.core.protection import runtime_protection_manager
 from src.core.registry import ExecutionRegistry
 
 
 @pytest.mark.asyncio
 async def test_registry_returns_existing_runtime_for_duplicate_message_id():
+    runtime_protection_manager.reset()
     registry = ExecutionRegistry()
 
     payload = {
@@ -29,6 +31,7 @@ async def test_registry_returns_existing_runtime_for_duplicate_message_id():
 
 @pytest.mark.asyncio
 async def test_registry_enforces_session_concurrency_limit():
+    runtime_protection_manager.reset()
     registry = ExecutionRegistry()
 
     await registry.create_execution({

@@ -9,7 +9,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from prometheus_client import Counter, Histogram, make_asgi_app
+from prometheus_client import Counter, Gauge, Histogram, make_asgi_app
 
 from .settings import settings
 
@@ -30,6 +30,11 @@ class WorkflowTelemetry:
             ["workflow_code", "node_type"],
             buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0),
         )
+        self.intent_accuracy = Gauge("intent_accuracy", "Intent accuracy proxy", ["workflow_code"])
+        self.task_completion_rate = Gauge("task_completion_rate", "Task completion rate", ["workflow_code"])
+        self.human_intervention_rate = Gauge("human_intervention_rate", "Human intervention rate", ["workflow_code"])
+        self.llm_cost_total = Counter("llm_cost_total_dollars", "Total LLM cost in dollars", ["model", "workflow"])
+        self.token_consumption = Counter("token_consumption_total", "Total tokens consumed", ["model", "type", "workflow"])
 
     def initialize(self) -> None:
         if self._initialized or not settings.otel_enabled:
@@ -61,6 +66,11 @@ class WorkflowTelemetry:
     def record_node(self, workflow_code: str, node_type: str, status: str, duration_ms: int) -> None:
         self.node_executions.labels(workflow_code=workflow_code, node_type=node_type, status=status).inc()
         self.node_duration.labels(workflow_code=workflow_code, node_type=node_type).observe(duration_ms / 1000)
+
+    def record_llm_cost(self, model: str, workflow_code: str, input_tokens: int, output_tokens: int, cost: float) -> None:
+        self.token_consumption.labels(model=model, type="input", workflow=workflow_code).inc(input_tokens)
+        self.token_consumption.labels(model=model, type="output", workflow=workflow_code).inc(output_tokens)
+        self.llm_cost_total.labels(model=model, workflow=workflow_code).inc(cost)
 
     def exporter_status(self) -> str:
         return "otlp" if self._exporter_enabled else "disabled"

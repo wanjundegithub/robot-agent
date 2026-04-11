@@ -18,6 +18,13 @@ class ExecutionContext:
     route_decision: str = "start"
     route_reason: Optional[str] = None
     route_confidence: float = 0.0
+    user_id: str = "anonymous"
+    experiment_id: Optional[str] = None
+    experiment_group: Optional[str] = None
+    dynamic_threshold: Optional[float] = None
+    threshold_source: Optional[str] = None
+    requested_tool_code: Optional[str] = None
+    confirmed_tool_codes: List[str] = field(default_factory=list)
 
     current_node_id: Optional[str] = None
     status: str = "pending"
@@ -25,6 +32,7 @@ class ExecutionContext:
     session_variables: Dict[str, Any] = field(default_factory=dict)
     execution_variables: Dict[str, Any] = field(default_factory=dict)
     execution_stack: List[Dict[str, Any]] = field(default_factory=list)
+    runtime_metrics: Dict[str, Any] = field(default_factory=dict)
 
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -49,4 +57,8 @@ class ExecutionContext:
 
     def update_node_position(self, node_id: str) -> None:
         self.current_node_id = node_id
+        self.updated_at = datetime.now()
+
+    def add_runtime_metric(self, key: str, value: Any) -> None:
+        self.runtime_metrics[key] = value
         self.updated_at = datetime.now()

@@ -49,7 +49,7 @@ public class WorkflowService {
 
     public WorkflowResponse createWorkflow(String userId, String workflowCode, String name, String description, Long workspaceId) {
         Long effectiveWorkspaceId = workspaceId != null ? workspaceId : 1L;
-        accessControlService.requireAnyRole(userId, effectiveWorkspaceId, Set.of("workflow_admin"));
+        accessControlService.requireWorkflowAdminAction(userId, effectiveWorkspaceId, workflowCode, "workflow.create");
 
         Workflow workflow = new Workflow();
         workflow.setWorkflowCode(workflowCode);
@@ -89,7 +89,7 @@ public class WorkflowService {
     public WorkflowResponse publishWorkflow(String userId, String workflowCode, String version) {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
-        accessControlService.requireAnyRole(userId, workflow.getWorkspaceId(), Set.of("workflow_admin"));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.publish");
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
 
@@ -109,7 +109,7 @@ public class WorkflowService {
     public WorkflowResponse rollbackWorkflow(String userId, String workflowCode, String version) {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
-        accessControlService.requireAnyRole(userId, workflow.getWorkspaceId(), Set.of("workflow_admin"));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.rollback");
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
 
@@ -130,7 +130,7 @@ public class WorkflowService {
     public WorkflowVersionResponse createWorkflowVersion(String userId, String workflowCode, CreateWorkflowVersionRequest request) {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
-        accessControlService.requireAnyRole(userId, workflow.getWorkspaceId(), Set.of("workflow_admin"));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.create");
 
         WorkflowVersion version = new WorkflowVersion();
         version.setWorkflowCode(workflowCode);
@@ -198,6 +198,7 @@ public class WorkflowService {
                 ? "entry_rule_and_model"
                 : (modelIntent.workflowCode().equals(best.version().getWorkflowCode()) ? "model_fallback" : "default_fallback");
         double confidence = best.totalScore() > 0 ? modelIntent.confidence() : 0.55d;
+        DynamicThreshold dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
 
         if (best.entryRuleScore() == 0 && modelIntent.confidence() < 0.6d) {
             WorkflowVersion fallbackVersion = versions.stream()
@@ -208,13 +209,24 @@ public class WorkflowService {
             decision = "fallback";
             reason = "low_confidence_fallback";
             confidence = Math.max(modelIntent.confidence(), 0.55d);
+            dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
+        } else if (!dynamicThreshold.accepted()) {
+            WorkflowVersion fallbackVersion = versions.stream()
+                    .filter(version -> "general_query".equals(version.getWorkflowCode()))
+                    .findFirst()
+                    .orElse(best.version());
+            best = new WorkflowScore(fallbackVersion, 0, 0, extractPriority(fallbackVersion.getEntryRule()));
+            decision = "fallback";
+            reason = "dynamic_threshold_fallback";
+            confidence = Math.max(confidence, 0.55d);
+            dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
         }
 
         if (activeExecution != null
                 && !activeExecution.getStatus().isTerminal()
                 && activeExecution.getStatus() != ExecutionStatus.SUSPENDED
                 && !activeExecution.getWorkflowCode().equals(best.version().getWorkflowCode())
-                && confidence >= 0.6d) {
+                && dynamicThreshold.accepted()) {
             decision = "switch_required";
             reason = "active_execution_conflict";
         }
@@ -224,6 +236,8 @@ public class WorkflowService {
                 best.version().getWorkflowCode(),
                 best.version().getVersion(),
                 confidence,
+                dynamicThreshold.threshold(),
+                dynamicThreshold.thresholdSource(),
                 reason,
                 candidates,
                 best.priority()
@@ -315,6 +329,39 @@ public class WorkflowService {
         return false;
     }
 
+    private DynamicThreshold resolveDynamicThreshold(
+            String workflowCode,
+            String intentCode,
+            double confidence,
+            String normalizedContent
+    ) {
+        double base = switch (workflowCode) {
+            case "flight_booking" -> 0.72d;
+            case "hotel_booking" -> 0.68d;
+            case "general_query" -> 0.52d;
+            default -> 0.60d;
+        };
+        String source = "dynamic:default";
+
+        if (normalizedContent.length() <= 8) {
+            base += 0.05d;
+            source = "dynamic:short_query";
+        } else if (containsAny(normalizedContent, "政策", "规则", "policy", "refund")) {
+            base -= 0.04d;
+            source = "dynamic:knowledge_query";
+        } else if (containsAny(normalizedContent, "航班", "机票", "flight", "ticket")) {
+            base -= 0.02d;
+            source = "dynamic:travel_query";
+        }
+
+        if ("general_query".equals(intentCode)) {
+            base = Math.min(base, 0.58d);
+        }
+
+        double threshold = Math.max(0.45d, Math.min(0.85d, Math.round(base * 100.0d) / 100.0d));
+        return new DynamicThreshold(threshold, source, confidence >= threshold);
+    }
+
     private int countMatches(JsonNode values, String normalizedContent) {
         if (!values.isArray()) {
             return 0;
@@ -345,5 +392,8 @@ public class WorkflowService {
         int totalScore() {
             return entryRuleScore + modelScore;
         }
+    }
+
+    private record DynamicThreshold(double threshold, String thresholdSource, boolean accepted) {
     }
 }

@@ -1,6 +1,7 @@
 package robot.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,9 @@ public class ExecutionService {
     private final WebSocketPublisher webSocketPublisher;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
+    private final AccessControlService accessControlService;
+    private final ConfirmationService confirmationService;
+    private final EntryProtectionService entryProtectionService;
 
     public ExecutionService(
             SessionService sessionService,
@@ -48,7 +52,10 @@ public class ExecutionService {
             PythonClient pythonClient,
             WebSocketPublisher webSocketPublisher,
             AuditService auditService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            ConfirmationService confirmationService,
+            EntryProtectionService entryProtectionService
     ) {
         this.sessionService = sessionService;
         this.workflowService = workflowService;
@@ -58,11 +65,17 @@ public class ExecutionService {
         this.webSocketPublisher = webSocketPublisher;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
+        this.accessControlService = accessControlService;
+        this.confirmationService = confirmationService;
+        this.entryProtectionService = entryProtectionService;
     }
 
     @Transactional
     public SendMessageResponse startExecution(String sessionId, SendMessageRequest request) {
         Session session = sessionService.getOrCreateSession(sessionId, request.getUserId());
+        String effectiveUserId = request.getUserId() == null || request.getUserId().isBlank()
+                ? session.getUserId()
+                : request.getUserId();
         if (request.getMessageId() != null && !request.getMessageId().isBlank()) {
             Execution existingExecution = executionRepository.findBySessionIdAndClientMessageId(session.getId(), request.getMessageId())
                     .orElse(null);
@@ -73,14 +86,99 @@ public class ExecutionService {
 
         Execution activeExecution = resolveActiveExecution(session);
         RoutingDecision routingDecision = workflowService.routeMessage(request.getContent(), activeExecution);
+        String requestedToolCode = confirmationService.resolveRequestedToolCode(
+                request.getRequestedToolCode(),
+                request.getContent()
+        );
 
         if (routingDecision.isSwitchRequired() && !Boolean.TRUE.equals(request.getConfirmSwitch())) {
             return buildRouteDecisionResponse(session, activeExecution, routingDecision);
         }
 
+        AccessControlService.AuthorizationDecision authorizationDecision = accessControlService.evaluateExecutionAccess(
+                effectiveUserId,
+                session.getWorkspaceId(),
+                routingDecision.workflowCode(),
+                requestedToolCode,
+                session.getUserId()
+        );
+        if (!authorizationDecision.allowed()) {
+            auditService.logAction(
+                    session.getWorkspaceId(),
+                    effectiveUserId,
+                    "execution.permission_denied",
+                    "execution",
+                    session.getId(),
+                    Map.of(
+                            "workflow_code", routingDecision.workflowCode(),
+                            "requested_tool_code", requestedToolCode == null ? "" : requestedToolCode,
+                            "reason", authorizationDecision.reason()
+                    ),
+                    403
+            );
+            return buildPermissionDeniedResponse(session, routingDecision, authorizationDecision, requestedToolCode);
+        }
+
+        ConfirmationService.ConfirmationEvaluation confirmationEvaluation = confirmationService.evaluate(
+                session.getId(),
+                effectiveUserId,
+                request.getContent(),
+                requestedToolCode,
+                request.getConfirmationId(),
+                Boolean.TRUE.equals(request.getCancelConfirmation())
+        );
+        if (confirmationEvaluation.cancelled()) {
+            auditService.logAction(
+                    session.getWorkspaceId(),
+                    effectiveUserId,
+                    "execution.confirmation_cancelled",
+                    "execution",
+                    session.getId(),
+                    confirmationEvaluation.asAuditPayload(),
+                    200
+            );
+            return buildConfirmationCancelledResponse(session, routingDecision, confirmationEvaluation);
+        }
+        if (confirmationEvaluation.requiresConfirmation()) {
+            auditService.logAction(
+                    session.getWorkspaceId(),
+                    effectiveUserId,
+                    "execution.confirmation_requested",
+                    "execution",
+                    session.getId(),
+                    confirmationEvaluation.asAuditPayload(),
+                    202
+            );
+            return buildConfirmationRequiredResponse(session, routingDecision, confirmationEvaluation);
+        }
+
+        EntryProtectionService.ProtectionDecision protectionDecision = entryProtectionService.evaluateExecutionStart(
+                effectiveUserId,
+                session.getId(),
+                routingDecision.workflowCode(),
+                confirmationEvaluation.toolCode()
+        );
+        if (!protectionDecision.allowed()) {
+            auditService.logAction(
+                    session.getWorkspaceId(),
+                    effectiveUserId,
+                    "execution.protected",
+                    "execution",
+                    session.getId(),
+                    Map.of(
+                            "protection_status", protectionDecision.status(),
+                            "reason", protectionDecision.reason()
+                    ),
+                    "rate_limited".equals(protectionDecision.status()) ? 429 : 503
+            );
+            return buildProtectionResponse(session, routingDecision, protectionDecision, confirmationEvaluation.toolCode());
+        }
+
         if (routingDecision.isSwitchRequired() && activeExecution != null) {
             suspendForSwitch(session, activeExecution, routingDecision);
         }
+
+        ExperimentAssignment experimentAssignment = assignExperiment(session.getId(), routingDecision.workflowCode());
 
         Execution execution = new Execution();
         execution.setId(UUID.randomUUID().toString());
@@ -89,11 +187,16 @@ public class ExecutionService {
         execution.setWorkflowVersion(routingDecision.workflowVersion());
         execution.setClientMessageId(request.getMessageId());
         execution.setStatus(ExecutionStatus.PENDING);
-        execution.setInputVariables(writeJson(Map.of(
-                "user_message", request.getContent(),
-                "route_decision", routingDecision.decision(),
-                "route_confidence", routingDecision.confidence()
-        )));
+        Map<String, Object> inputVariables = new LinkedHashMap<>();
+        inputVariables.put("user_message", request.getContent());
+        inputVariables.put("user_id", effectiveUserId);
+        inputVariables.put("route_decision", routingDecision.decision());
+        inputVariables.put("route_confidence", routingDecision.confidence());
+        inputVariables.put("route_threshold", routingDecision.threshold());
+        inputVariables.put("threshold_source", routingDecision.thresholdSource());
+        inputVariables.put("experiment_id", experimentAssignment.experimentId());
+        inputVariables.put("experiment_group", experimentAssignment.experimentGroup());
+        execution.setInputVariables(writeJson(inputVariables));
         execution.setCreatedAt(LocalDateTime.now());
         Execution saved = executionRepository.save(execution);
 
@@ -109,10 +212,26 @@ public class ExecutionService {
         executeRequest.setRouteDecision(routingDecision.decision());
         executeRequest.setRouteReason(routingDecision.reason());
         executeRequest.setRouteConfidence(routingDecision.confidence());
-        executeRequest.setInputVariables(Map.of("user_message", request.getContent()));
+        executeRequest.setUserId(effectiveUserId);
+        executeRequest.setExperimentId(experimentAssignment.experimentId());
+        executeRequest.setExperimentGroup(experimentAssignment.experimentGroup());
+        executeRequest.setDynamicThreshold(routingDecision.threshold());
+        executeRequest.setThresholdSource(routingDecision.thresholdSource());
+        executeRequest.setRequestedToolCode(confirmationEvaluation.toolCode());
+        executeRequest.setConfirmedToolCodes(
+                confirmationEvaluation.toolCode() == null ? List.of() : List.of(confirmationEvaluation.toolCode())
+        );
+        Map<String, Object> executeInput = new LinkedHashMap<>();
+        executeInput.put("user_message", request.getContent());
+        executeInput.put("experiment_id", experimentAssignment.experimentId());
+        executeInput.put("experiment_group", experimentAssignment.experimentGroup());
+        executeInput.put("requested_tool_code", confirmationEvaluation.toolCode());
+        executeInput.put("confirmed_tool_codes", executeRequest.getConfirmedToolCodes());
+        executeRequest.setInputVariables(executeInput);
 
         Flux<ServerSentEvent<String>> stream = pythonClient.execute(executeRequest);
         stream.subscribe(event -> handleEvent(saved.getId(), event), error -> {
+            entryProtectionService.recordPythonFailure(error.getMessage());
             Execution failure = executionRepository.findById(saved.getId()).orElse(saved);
             failure.setStatus(ExecutionStatus.FAILED);
             failure.setError(error.getMessage());
@@ -121,7 +240,7 @@ public class ExecutionService {
         });
 
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, 200);
-        return buildSendMessageResponse(saved, routingDecision, activeExecution);
+        return buildSendMessageResponse(saved, routingDecision, activeExecution, experimentAssignment);
     }
 
     @Transactional
@@ -216,6 +335,7 @@ public class ExecutionService {
                 webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
                 break;
             case "execution.started":
+                entryProtectionService.recordPythonSuccess();
                 updateExecutionStatus(executionId, ExecutionStatus.RUNNING, payload, null);
                 webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
                 break;
@@ -256,6 +376,14 @@ public class ExecutionService {
             case "form.requested":
             case "security.prompt_sanitized":
             case "security.output_rejected":
+            case "cost.recorded":
+            case "budget.alert":
+            case "replay.snapshot_ready":
+            case "confirmation.required":
+            case "protection.rate_limited":
+            case "protection.degraded":
+            case "protection.circuit_open":
+            case "optimization.vector_access":
                 webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
                 break;
             case "message.delta":
@@ -405,6 +533,8 @@ public class ExecutionService {
         response.setStatus(routingDecision.decision());
         response.setRouteDecision(routingDecision.decision());
         response.setRouteConfidence(routingDecision.confidence());
+        response.setRouteThreshold(routingDecision.threshold());
+        response.setThresholdSource(routingDecision.thresholdSource());
         response.setRouteReason(routingDecision.reason());
         response.setCandidateWorkflows(routingDecision.candidateWorkflows());
         response.setActiveExecutionId(activeExecution == null ? null : activeExecution.getId());
@@ -415,7 +545,8 @@ public class ExecutionService {
     private SendMessageResponse buildSendMessageResponse(
             Execution execution,
             RoutingDecision routingDecision,
-            Execution activeExecution
+            Execution activeExecution,
+            ExperimentAssignment experimentAssignment
     ) {
         SendMessageResponse response = new SendMessageResponse();
         response.setSessionId(execution.getSessionId());
@@ -430,11 +561,92 @@ public class ExecutionService {
         if (routingDecision != null) {
             response.setRouteDecision(routingDecision.decision());
             response.setRouteConfidence(routingDecision.confidence());
+            response.setRouteThreshold(routingDecision.threshold());
+            response.setThresholdSource(routingDecision.thresholdSource());
             response.setRouteReason(routingDecision.reason());
             response.setCandidateWorkflows(routingDecision.candidateWorkflows());
             response.setPriority(routingDecision.priority());
         }
+        if (experimentAssignment != null) {
+            response.setExperimentId(experimentAssignment.experimentId());
+            response.setExperimentGroup(experimentAssignment.experimentGroup());
+        }
         response.setActiveExecutionId(activeExecution == null ? null : activeExecution.getId());
+        return response;
+    }
+
+    private SendMessageResponse buildSendMessageResponse(
+            Execution execution,
+            RoutingDecision routingDecision,
+            Execution activeExecution
+    ) {
+        return buildSendMessageResponse(execution, routingDecision, activeExecution, null);
+    }
+
+    private SendMessageResponse buildPermissionDeniedResponse(
+            Session session,
+            RoutingDecision routingDecision,
+            AccessControlService.AuthorizationDecision authorizationDecision,
+            String requestedToolCode
+    ) {
+        SendMessageResponse response = buildBaseGovernanceResponse(session, routingDecision, "permission_denied", requestedToolCode);
+        response.setPermissionEffect(authorizationDecision.effect());
+        response.setPermissionReason(authorizationDecision.reason());
+        return response;
+    }
+
+    private SendMessageResponse buildConfirmationRequiredResponse(
+            Session session,
+            RoutingDecision routingDecision,
+            ConfirmationService.ConfirmationEvaluation confirmationEvaluation
+    ) {
+        SendMessageResponse response = buildBaseGovernanceResponse(session, routingDecision, "confirmation_required", confirmationEvaluation.toolCode());
+        response.setConfirmationId(confirmationEvaluation.confirmationId());
+        response.setConfirmationExpiresAt(confirmationEvaluation.confirmationExpiresAt());
+        return response;
+    }
+
+    private SendMessageResponse buildConfirmationCancelledResponse(
+            Session session,
+            RoutingDecision routingDecision,
+            ConfirmationService.ConfirmationEvaluation confirmationEvaluation
+    ) {
+        return buildBaseGovernanceResponse(session, routingDecision, "confirmation_cancelled", confirmationEvaluation.toolCode());
+    }
+
+    private SendMessageResponse buildProtectionResponse(
+            Session session,
+            RoutingDecision routingDecision,
+            EntryProtectionService.ProtectionDecision protectionDecision,
+            String requestedToolCode
+    ) {
+        SendMessageResponse response = buildBaseGovernanceResponse(session, routingDecision, protectionDecision.status(), requestedToolCode);
+        response.setProtectionStatus(protectionDecision.status());
+        response.setProtectionReason(protectionDecision.reason());
+        response.setRetryAfterSeconds(protectionDecision.retryAfterSeconds());
+        response.setDegradationMessage(protectionDecision.degradationMessage());
+        return response;
+    }
+
+    private SendMessageResponse buildBaseGovernanceResponse(
+            Session session,
+            RoutingDecision routingDecision,
+            String status,
+            String requestedToolCode
+    ) {
+        SendMessageResponse response = new SendMessageResponse();
+        response.setSessionId(session.getId());
+        response.setStatus(status);
+        response.setWorkflowCode(routingDecision.workflowCode());
+        response.setWorkflowVersion(routingDecision.workflowVersion());
+        response.setRouteDecision(routingDecision.decision());
+        response.setRouteConfidence(routingDecision.confidence());
+        response.setRouteThreshold(routingDecision.threshold());
+        response.setThresholdSource(routingDecision.thresholdSource());
+        response.setRouteReason(routingDecision.reason());
+        response.setCandidateWorkflows(routingDecision.candidateWorkflows());
+        response.setPriority(routingDecision.priority());
+        response.setRequestedToolCode(requestedToolCode);
         return response;
     }
 
@@ -463,13 +675,45 @@ public class ExecutionService {
             return new HashMap<>();
         }
         try {
-            return objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {});
+            JsonNode node = readLenientJson(data);
+            return objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             return new HashMap<>();
         }
     }
 
+    private JsonNode readLenientJson(String raw) throws Exception {
+        String candidate = raw;
+        for (int attempt = 0; attempt < 4; attempt++) {
+            try {
+                JsonNode node = objectMapper.readTree(candidate);
+                if (node.isTextual()) {
+                    candidate = node.asText();
+                    continue;
+                }
+                return node;
+            } catch (Exception ignored) {
+                candidate = candidate.trim();
+                if (candidate.startsWith("\"") && candidate.endsWith("\"") && candidate.length() >= 2) {
+                    candidate = candidate.substring(1, candidate.length() - 1);
+                }
+                candidate = candidate.replace("\\\"", "\"").replace("\"\"", "\"");
+            }
+        }
+        return objectMapper.readTree("{}");
+    }
+
     private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private ExperimentAssignment assignExperiment(String sessionId, String workflowCode) {
+        String experimentId = "phase4-routing-ab";
+        int bucket = Math.abs((sessionId + ":" + workflowCode).hashCode()) % 2;
+        String group = bucket == 0 ? "A" : "B";
+        return new ExperimentAssignment(experimentId, group);
+    }
+
+    private record ExperimentAssignment(String experimentId, String experimentGroup) {
     }
 }

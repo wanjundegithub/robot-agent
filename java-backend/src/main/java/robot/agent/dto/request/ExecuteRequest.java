@@ -1,6 +1,7 @@
 package robot.agent.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
 import java.util.Map;
 
 public class ExecuteRequest {
@@ -21,6 +22,20 @@ public class ExecuteRequest {
     private String routeReason;
     @JsonProperty("route_confidence")
     private double routeConfidence;
+    @JsonProperty("user_id")
+    private String userId;
+    @JsonProperty("experiment_id")
+    private String experimentId;
+    @JsonProperty("experiment_group")
+    private String experimentGroup;
+    @JsonProperty("dynamic_threshold")
+    private Double dynamicThreshold;
+    @JsonProperty("threshold_source")
+    private String thresholdSource;
+    @JsonProperty("requested_tool_code")
+    private String requestedToolCode;
+    @JsonProperty("confirmed_tool_codes")
+    private List<String> confirmedToolCodes;
     @JsonProperty("input_variables")
     private Map<String, Object> inputVariables;
 
@@ -50,6 +65,27 @@ public class ExecuteRequest {
 
     public double getRouteConfidence() { return routeConfidence; }
     public void setRouteConfidence(double routeConfidence) { this.routeConfidence = routeConfidence; }
+
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
+
+    public String getExperimentId() { return experimentId; }
+    public void setExperimentId(String experimentId) { this.experimentId = experimentId; }
+
+    public String getExperimentGroup() { return experimentGroup; }
+    public void setExperimentGroup(String experimentGroup) { this.experimentGroup = experimentGroup; }
+
+    public Double getDynamicThreshold() { return dynamicThreshold; }
+    public void setDynamicThreshold(Double dynamicThreshold) { this.dynamicThreshold = dynamicThreshold; }
+
+    public String getThresholdSource() { return thresholdSource; }
+    public void setThresholdSource(String thresholdSource) { this.thresholdSource = thresholdSource; }
+
+    public String getRequestedToolCode() { return requestedToolCode; }
+    public void setRequestedToolCode(String requestedToolCode) { this.requestedToolCode = requestedToolCode; }
+
+    public List<String> getConfirmedToolCodes() { return confirmedToolCodes; }
+    public void setConfirmedToolCodes(List<String> confirmedToolCodes) { this.confirmedToolCodes = confirmedToolCodes; }
 
     public Map<String, Object> getInputVariables() { return inputVariables; }
     public void setInputVariables(Map<String, Object> inputVariables) { this.inputVariables = inputVariables; }

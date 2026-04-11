@@ -28,7 +28,7 @@ class PromptSanitizer:
 SENSITIVE_PATTERNS = (
     (r"password", "password"),
     (r"secret", "secret"),
-    (r"token", "token"),
+    (r"(^|[_-])token($|[_-])", "token"),
     (r"api[_-]?key", "api_key"),
     (r"phone", "phone"),
     (r"mobile", "mobile"),

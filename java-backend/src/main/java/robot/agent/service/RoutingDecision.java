@@ -7,6 +7,8 @@ public record RoutingDecision(
         String workflowCode,
         String workflowVersion,
         double confidence,
+        double threshold,
+        String thresholdSource,
         String reason,
         List<String> candidateWorkflows,
         int priority

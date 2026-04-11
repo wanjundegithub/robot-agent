@@ -55,14 +55,25 @@ public class SessionService {
     }
 
     public Session getOrCreateSession(String sessionId, String userId) {
-        return sessionRepository.findById(sessionId).orElseGet(() -> {
-            Session session = new Session(
-                    sessionId,
-                    1L,
-                    userId == null ? "anonymous" : userId
-            );
-            return sessionRepository.save(session);
-        });
+        return sessionRepository.findById(sessionId)
+                .map(session -> {
+                    if ((session.getUserId() == null || session.getUserId().isBlank() || "anonymous".equalsIgnoreCase(session.getUserId()))
+                            && userId != null
+                            && !userId.isBlank()) {
+                        session.setUserId(userId);
+                        session.setLastActivityAt(LocalDateTime.now());
+                        return sessionRepository.save(session);
+                    }
+                    return session;
+                })
+                .orElseGet(() -> {
+                    Session session = new Session(
+                            sessionId,
+                            1L,
+                            userId == null ? "anonymous" : userId
+                    );
+                    return sessionRepository.save(session);
+                });
     }
 
     public Session updateCurrentExecutionId(Session session, String executionId) {

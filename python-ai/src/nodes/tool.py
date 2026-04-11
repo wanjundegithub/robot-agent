@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import httpx
+from src.core.protection import runtime_protection_manager, tool_confirmation_gate
 from src.core.tool_registry import tool_registry
 from .base import BaseNode
 
@@ -24,17 +25,59 @@ class ToolNode(BaseNode):
     async def execute(self, context) -> Dict[str, Any]:
         if self.tool_code:
             params = self._build_tool_params(context)
-            result = await tool_registry.execute(self.tool_code, params, self.tool_config)
-            output = self._build_tool_output(result)
-            context.add_execution_variables(output)
-            return self.prepare_output({
-                "status": "completed",
-                "output": output,
-                "message_deltas": [result.get("summary")] if result.get("summary") else [],
-                "tool_called": {"tool_code": self.tool_code, "params": params},
-                "tool_returned": {"tool_code": self.tool_code, "output": result},
-                "metrics": {"cached": bool(result.get("cached", False))}
-            })
+            tool_confirmation_gate.ensure_confirmed(context, self.tool_code, params)
+            dependency_key = f"tool:{self.tool_code}"
+            try:
+                runtime_protection_manager.before_dependency(dependency_key)
+                result = await tool_registry.execute(self.tool_code, params, self.tool_config)
+                runtime_protection_manager.record_dependency_success(dependency_key)
+                output = self._build_tool_output(result)
+                context.add_execution_variables(output)
+                return self.prepare_output({
+                    "status": "completed",
+                    "output": output,
+                    "message_deltas": [result.get("summary")] if result.get("summary") else [],
+                    "tool_called": {"tool_code": self.tool_code, "params": params},
+                    "tool_returned": {"tool_code": self.tool_code, "output": result},
+                    "metrics": {"cached": bool(result.get("cached", False))},
+                })
+            except Exception as exc:
+                circuit_state = runtime_protection_manager.record_dependency_failure(dependency_key, exc)
+                degraded_output = {
+                    "tool_code": self.tool_code,
+                    "tool_status": "degraded",
+                    "fallback_message": "工具暂时不可用，已返回降级结果。",
+                }
+                context.add_execution_variables(degraded_output)
+                return self.prepare_output({
+                    "status": "completed",
+                    "output": degraded_output,
+                    "message_deltas": [degraded_output["fallback_message"]],
+                    "tool_called": {"tool_code": self.tool_code, "params": params},
+                    "tool_returned": {"tool_code": self.tool_code, "output": degraded_output},
+                    "metrics": {
+                        "cached": False,
+                        "degraded": True,
+                        "degradation_reason": str(exc),
+                    },
+                    "protection_events": [
+                        {
+                            "event_type": "protection.degraded",
+                            "data": {
+                                "tool_code": self.tool_code,
+                                "reason": str(exc),
+                            },
+                        },
+                        {
+                            "event_type": "protection.circuit_open",
+                            "data": {
+                                "tool_code": self.tool_code,
+                                "state": "open" if float(circuit_state.get("opened_until", 0.0)) > 0 else "closed",
+                                "failures": int(circuit_state.get("failures", 0)),
+                            },
+                        },
+                    ],
+                })
 
         request_params = await self._prepare_request(context)
 

@@ -2,7 +2,9 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from .costing import budget_alert_evaluator
 from .events import utc_now_iso
+from .protection import ConfirmationRequiredError
 from .runtime import ExecutionRuntime
 from .security import InvalidOutputError
 from .state_machine import ExecutionStateMachine, TransitionEvent
@@ -35,6 +37,10 @@ class WorkflowScheduler:
             "trace_id": context.trace_id,
         })
         state_machine.transition(TransitionEvent.ROUTE)
+        total_cost = 0.0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        models_used: set[str] = set()
         runtime.emit("execution.started", {
             "execution_id": context.execution_id,
             "session_id": context.session_id,
@@ -43,6 +49,10 @@ class WorkflowScheduler:
             "workflow_code": context.workflow_code,
             "workflow_version": context.workflow_version,
             "priority": context.priority,
+            "experiment_id": context.experiment_id,
+            "experiment_group": context.experiment_group,
+            "dynamic_threshold": context.dynamic_threshold,
+            "threshold_source": context.threshold_source,
             "trace_id": context.trace_id,
         })
 
@@ -85,6 +95,14 @@ class WorkflowScheduler:
                         "session_id": context.session_id,
                         "node_id": node_def["id"],
                         **security_event.get("data", {}),
+                        "trace_id": context.trace_id,
+                    })
+                for protection_event in result.get("protection_events", []):
+                    runtime.emit(protection_event["event_type"], {
+                        "execution_id": context.execution_id,
+                        "session_id": context.session_id,
+                        "node_id": node_def["id"],
+                        **protection_event.get("data", {}),
                         "trace_id": context.trace_id,
                     })
 
@@ -146,6 +164,40 @@ class WorkflowScheduler:
                 metrics = dict(result.get("metrics", {}))
                 metrics.setdefault("duration_ms", duration_ms)
                 metrics.setdefault("trace_id", context.trace_id)
+                if "cost" in metrics:
+                    total_cost += float(metrics.get("cost", 0.0))
+                    total_input_tokens += int(metrics.get("input_tokens", 0))
+                    total_output_tokens += int(metrics.get("output_tokens", 0))
+                    if metrics.get("model"):
+                        models_used.add(str(metrics["model"]))
+                        workflow_telemetry.record_llm_cost(
+                            str(metrics["model"]),
+                            context.workflow_code,
+                            int(metrics.get("input_tokens", 0)),
+                            int(metrics.get("output_tokens", 0)),
+                            float(metrics.get("cost", 0.0)),
+                        )
+                    runtime.emit("cost.recorded", {
+                        "execution_id": context.execution_id,
+                        "session_id": context.session_id,
+                        "workflow_code": context.workflow_code,
+                        "workflow_version": context.workflow_version,
+                        "experiment_id": context.experiment_id,
+                        "experiment_group": context.experiment_group,
+                        **metrics,
+                        "trace_id": context.trace_id,
+                    })
+                    for alert in budget_alert_evaluator.evaluate(context.workflow_code, context.user_id, total_cost):
+                        runtime.emit("budget.alert", {
+                            "execution_id": context.execution_id,
+                            "session_id": context.session_id,
+                            "scope": alert.scope,
+                            "scope_id": alert.scope_id,
+                            "total_cost": alert.total_cost,
+                            "threshold": alert.threshold,
+                            "message": alert.message,
+                            "trace_id": context.trace_id,
+                        })
                 runtime.emit("node.completed", {
                     "execution_id": context.execution_id,
                     "session_id": context.session_id,
@@ -172,7 +224,27 @@ class WorkflowScheduler:
                 "ended_at": utc_now_iso(),
                 "output": dict(context.execution_variables),
                 "variables": dict(context.execution_variables),
-                "metrics": {"trace_id": context.trace_id},
+                "metrics": {
+                    "trace_id": context.trace_id,
+                    "total_cost": round(total_cost, 6),
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "models_used": sorted(models_used),
+                    "route_decision": context.route_decision,
+                    "route_confidence": context.route_confidence,
+                    "experiment_id": context.experiment_id,
+                    "experiment_group": context.experiment_group,
+                    "dynamic_threshold": context.dynamic_threshold,
+                    "threshold_source": context.threshold_source,
+                },
+                "trace_id": context.trace_id,
+            })
+            runtime.emit("replay.snapshot_ready", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "workflow_code": context.workflow_code,
+                "workflow_version": context.workflow_version,
+                "snapshot": runtime.snapshot(),
                 "trace_id": context.trace_id,
             })
         except InvalidOutputError as exc:
@@ -183,6 +255,22 @@ class WorkflowScheduler:
                 "node_id": context.current_node_id,
                 "error": str(exc),
                 "details": exc.details,
+                "trace_id": context.trace_id,
+            })
+            state_machine.transition(TransitionEvent.FAIL)
+            runtime.emit("execution.failed", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "error": str(exc),
+                "trace_id": context.trace_id,
+            })
+        except ConfirmationRequiredError as exc:
+            self.logger.exception("High-risk tool confirmation required")
+            runtime.emit("confirmation.required", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "node_id": context.current_node_id,
+                **exc.payload,
                 "trace_id": context.trace_id,
             })
             state_machine.transition(TransitionEvent.FAIL)

@@ -76,5 +76,12 @@ class ExecutionRuntime:
             "current_node_id": self.context.current_node_id,
             "status": self.context.status,
             "priority": self.context.priority,
+            "experiment_id": self.context.experiment_id,
+            "experiment_group": self.context.experiment_group,
+            "dynamic_threshold": self.context.dynamic_threshold,
+            "threshold_source": self.context.threshold_source,
+            "requested_tool_code": self.context.requested_tool_code,
+            "confirmed_tool_codes": list(self.context.confirmed_tool_codes),
             "variables": dict(self.context.execution_variables),
+            "runtime_metrics": dict(self.context.runtime_metrics),
         }

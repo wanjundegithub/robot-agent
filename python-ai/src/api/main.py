@@ -9,9 +9,13 @@ from .models import (
     ExecuteRequest,
     ExecuteStatusResponse,
     FormSubmitRequest,
+    RagEvaluationRequest,
+    RecommendationRequest,
     ResumeExecutionResponse,
     SuspendExecutionRequest,
+    ThresholdResolveRequest,
 )
+from src.core.evaluation import rag_evaluator
 from src.core.events import utc_now_iso
 from src.core.idempotency import (
     get_idempotency_backend,
@@ -19,6 +23,8 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
+from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
+from src.core.protection import ProtectionError, runtime_protection_manager
 from src.core.registry import ExecutionRegistry
 from src.core.scheduler import WorkflowScheduler
 from src.core.telemetry import metrics_app, workflow_telemetry
@@ -52,6 +58,9 @@ async def startup() -> None:
 async def execute(request: ExecuteRequest):
     try:
         runtime = await registry.create_execution(request.model_dump())
+    except ProtectionError as exc:
+        status_code = 429 if exc.payload.get("scope") else 503
+        raise HTTPException(status_code=status_code, detail=exc.payload or str(exc))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -137,3 +146,42 @@ async def health_check():
             "telemetry": workflow_telemetry.exporter_status(),
         },
     }
+
+
+@app.get("/api/phase5/runtime-status")
+async def runtime_status():
+    return runtime_protection_manager.build_runtime_status()
+
+
+@app.post("/api/phase4/route-thresholds/resolve")
+async def resolve_dynamic_threshold(request: ThresholdResolveRequest):
+    decision = dynamic_threshold_manager.resolve(
+        workflow_code=request.workflow_code,
+        intent_code=request.intent_code,
+        confidence=request.confidence,
+        message=request.message,
+    )
+    return {
+        "workflow_code": decision.workflow_code,
+        "intent_code": decision.intent_code,
+        "threshold": decision.threshold,
+        "threshold_source": decision.threshold_source,
+        "accepted": decision.accepted,
+    }
+
+
+@app.post("/api/phase4/subflow-recommendations")
+async def recommend_subflows(request: RecommendationRequest):
+    recommendations = subflow_recommendation_service.recommend(
+        workflow_code=request.workflow_code,
+        message=request.message,
+    )
+    return {
+        "workflow_code": request.workflow_code,
+        "recommendations": recommendations,
+    }
+
+
+@app.post("/api/phase4/evaluations/rag")
+async def evaluate_rag(request: RagEvaluationRequest):
+    return rag_evaluator.evaluate_dataset(request.dataset)

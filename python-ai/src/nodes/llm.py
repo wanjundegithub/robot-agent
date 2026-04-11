@@ -1,8 +1,10 @@
 import re
+import json
 from datetime import date, timedelta
 from typing import Any, Dict, List
 
 from .base import BaseNode
+from src.core.costing import cost_tracker, estimate_tokens
 from src.core.security import PromptSanitizer, StructuredOutputValidator
 
 
@@ -14,6 +16,7 @@ class LLMNode(BaseNode):
         config = data.get("config", {})
         self.prompt = config.get("prompt", data.get("prompt", ""))
         self.structured_output = config.get("structured_output", {})
+        self.model = config.get("model", "gpt-4.1-mini")
 
     async def execute(self, context) -> Dict[str, Any]:
         original_message = context.get_variable("user_message", "")
@@ -32,11 +35,24 @@ class LLMNode(BaseNode):
         if self.prompt == "knowledge_answer":
             answer = self._answer_with_knowledge(context)
             context.add_execution_variable("answer", answer)
+            input_tokens = estimate_tokens(message)
+            output_tokens = estimate_tokens(answer)
+            cost_metrics = cost_tracker.build_cost_payload(
+                model=self.model,
+                workflow_code=context.workflow_code,
+                workflow_version=context.workflow_version,
+                execution_id=context.execution_id,
+                session_id=context.session_id,
+                user_id=context.user_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
             return self.prepare_output({
                 "status": "completed",
                 "output": {"answer": answer},
                 "message_deltas": [answer],
                 "security_events": security_events,
+                "metrics": cost_metrics,
             })
 
         extracted = self._extract_slots(message, hotel_mode=self.prompt == "hotel_slot_extraction")
@@ -45,12 +61,25 @@ class LLMNode(BaseNode):
             context.add_execution_variables(extracted)
 
         deltas = ["Slots extracted." if extracted else "No slots extracted, need more info."]
+        output_tokens = estimate_tokens(json.dumps(extracted, ensure_ascii=False))
+        input_tokens = estimate_tokens(message)
+        cost_metrics = cost_tracker.build_cost_payload(
+            model=self.model,
+            workflow_code=context.workflow_code,
+            workflow_version=context.workflow_version,
+            execution_id=context.execution_id,
+            session_id=context.session_id,
+            user_id=context.user_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
         return self.prepare_output({
             "status": "completed",
             "output": extracted,
             "message_deltas": deltas,
             "security_events": security_events,
+            "metrics": cost_metrics,
         })
 
     def _extract_slots(self, message: str, hotel_mode: bool = False) -> Dict[str, Any]:

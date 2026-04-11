@@ -1,8 +1,14 @@
 import type {
+  AnalyticsDashboard,
+  CostAlert,
   ExecutionDetail,
   FormSubmitResponse,
+  RagEvaluationResponse,
+  ReplayResponse,
   ResumeExecutionResponse,
   SendMessageResponse,
+  SubflowRecommendationResponse,
+  OperationalReadiness,
   WorkflowSummary,
   WorkflowVersionSummary,
 } from '../types'
@@ -15,7 +21,13 @@ export async function sendMessage(
   messageId: string,
   content: string,
   attachments: string[] = [],
-  options?: { confirmSwitch?: boolean }
+  options?: {
+    confirmSwitch?: boolean
+    userId?: string
+    requestedToolCode?: string
+    confirmationId?: string
+    cancelConfirmation?: boolean
+  }
 ): Promise<SendMessageResponse> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
     method: 'POST',
@@ -24,7 +36,11 @@ export async function sendMessage(
       message_id: messageId,
       content,
       attachments,
+      user_id: options?.userId ?? 'demo-user',
       confirm_switch: options?.confirmSwitch ?? false,
+      requested_tool_code: options?.requestedToolCode ?? null,
+      confirmation_id: options?.confirmationId ?? null,
+      cancel_confirmation: options?.cancelConfirmation ?? false,
     }),
   })
 
@@ -82,6 +98,57 @@ export async function getSessionExecutions(sessionId: string): Promise<Execution
   return await response.json()
 }
 
+export async function getAnalyticsDashboard(sessionId?: string): Promise<AnalyticsDashboard> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  const response = await fetch(`${API_BASE_URL}/analytics/dashboard${query}`)
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function getCostAlerts(sessionId?: string): Promise<CostAlert[]> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  const response = await fetch(`${API_BASE_URL}/analytics/cost-alerts${query}`)
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function getExecutionReplay(executionId: string): Promise<ReplayResponse> {
+  const response = await fetch(`${API_BASE_URL}/executions/${executionId}/replay`)
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function getSubflowRecommendations(
+  workflowCode: string,
+  message: string
+): Promise<SubflowRecommendationResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/workflows/${workflowCode}/subflow-recommendations?message=${encodeURIComponent(message)}`
+  )
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function runRagEvaluation(dataset?: Array<Record<string, unknown>>): Promise<RagEvaluationResponse> {
+  const response = await fetch(`${API_BASE_URL}/evaluations/rag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dataset: dataset ?? null }),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
 export async function getWorkflows(): Promise<WorkflowSummary[]> {
   const response = await fetch(`${API_BASE_URL}/workflows`)
   if (!response.ok) {
@@ -92,6 +159,15 @@ export async function getWorkflows(): Promise<WorkflowSummary[]> {
 
 export async function getWorkflowVersions(workflowCode: string): Promise<WorkflowVersionSummary[]> {
   const response = await fetch(`${API_BASE_URL}/workflows/${workflowCode}/versions`)
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function getOperationalReadiness(sessionId?: string): Promise<OperationalReadiness> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  const response = await fetch(`${API_BASE_URL}/operations/readiness${query}`)
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)
   }

@@ -1,10 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
+from src.core.protection import ConfirmationRequiredError, runtime_protection_manager
 from src.nodes.tool import ToolNode
 from src.core.context import ExecutionContext
 
 @pytest.mark.asyncio
 async def test_tool_node_http_call():
+    runtime_protection_manager.reset()
     context = ExecutionContext(
         execution_id="exec_test",
         session_id="sess_test",
@@ -39,6 +41,7 @@ async def test_tool_node_http_call():
 
 @pytest.mark.asyncio
 async def test_tool_node_with_params():
+    runtime_protection_manager.reset()
     context = ExecutionContext(
         execution_id="exec_test",
         session_id="sess_test",
@@ -62,6 +65,7 @@ async def test_tool_node_with_params():
 
 @pytest.mark.asyncio
 async def test_tool_node_retry_and_idempotency():
+    runtime_protection_manager.reset()
     context = ExecutionContext(
         execution_id="exec_retry",
         session_id="sess_retry",
@@ -90,3 +94,49 @@ async def test_tool_node_retry_and_idempotency():
     assert first_result["output"]["flight_options"]
     assert first_result["metrics"]["cached"] is False
     assert second_result["metrics"]["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_tool_node_degrades_when_registry_execute_fails():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_degraded",
+        session_id="sess_degraded",
+        workflow_code="flight_booking",
+        workflow_version="2.0.0"
+    )
+
+    node = ToolNode("unknown_tool", {
+        "config": {
+            "tool_code": "unsupported_tool",
+            "retry_policy": "validation_error",
+            "idempotent": False
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["output"]["tool_status"] == "degraded"
+    assert result["metrics"]["degraded"] is True
+
+
+@pytest.mark.asyncio
+async def test_tool_node_blocks_unconfirmed_high_risk_tool():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_risk",
+        session_id="sess_risk",
+        workflow_code="general_query",
+        workflow_version="1.0.0"
+    )
+
+    node = ToolNode("cancel_order", {
+        "config": {
+            "tool_code": "cancel_order",
+            "retry_policy": "validation_error",
+            "idempotent": False
+        }
+    })
+
+    with pytest.raises(ConfirmationRequiredError):
+        await node.execute(context)
