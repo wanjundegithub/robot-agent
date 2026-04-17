@@ -1,22 +1,24 @@
-import re
 import json
-from datetime import date, timedelta
 from typing import Any, Dict, List
 
 from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
+from src.core.model_runtime import execute_profile_completion
 from src.core.security import PromptSanitizer, StructuredOutputValidator
 
 
 class LLMNode(BaseNode):
-    """LLM-like node with prompt sanitization and structured validation."""
+    """LLM node backed by configured provider + model profiles."""
 
     def __init__(self, node_id: str, data: Dict[str, Any]):
         super().__init__(node_id, "llm")
         config = data.get("config", {})
         self.prompt = config.get("prompt", data.get("prompt", ""))
         self.structured_output = config.get("structured_output", {})
-        self.model = config.get("model", "gpt-4.1-mini")
+        self.system_prompt = config.get("system_prompt", "")
+        self.user_prompt = config.get("user_prompt", "")
+        self.model_profile_ref = config.get("model_profile_ref")
+        self.fallback_model_profile_ref = config.get("fallback_model_profile_ref")
 
     async def execute(self, context) -> Dict[str, Any]:
         original_message = context.get_variable("user_message", "")
@@ -32,13 +34,22 @@ class LLMNode(BaseNode):
                 },
             })
 
+        profile_code = self._resolve_profile_code(context)
         if self.prompt == "knowledge_answer":
-            answer = self._answer_with_knowledge(context)
+            answer = context.get_variable("knowledge_answer")
+            if not answer:
+                answer = await execute_profile_completion(
+                    profile_code=profile_code,
+                    provider_configs=context.provider_configs,
+                    model_profiles=context.model_profiles,
+                    system_prompt="你是服务机器人知识问答助手，请基于提供的知识片段回答用户问题。",
+                    user_prompt=self._knowledge_prompt(message, context.get_variable("retrieved_docs", []) or []),
+                )
             context.add_execution_variable("answer", answer)
             input_tokens = estimate_tokens(message)
             output_tokens = estimate_tokens(answer)
             cost_metrics = cost_tracker.build_cost_payload(
-                model=self.model,
+                model=self._resolve_model_code(profile_code, context),
                 workflow_code=context.workflow_code,
                 workflow_version=context.workflow_version,
                 execution_id=context.execution_id,
@@ -55,7 +66,15 @@ class LLMNode(BaseNode):
                 "metrics": cost_metrics,
             })
 
-        extracted = self._extract_slots(message, hotel_mode=self.prompt == "hotel_slot_extraction")
+        completion = await execute_profile_completion(
+            profile_code=profile_code,
+            provider_configs=context.provider_configs,
+            model_profiles=context.model_profiles,
+            system_prompt=self._build_system_prompt(),
+            user_prompt=self._build_user_prompt(message, context),
+            response_format={"type": "json_object"} if self.structured_output.get("enabled") else None,
+        )
+        extracted = self._parse_output(completion)
         self._validate_output(extracted)
         if extracted:
             context.add_execution_variables(extracted)
@@ -64,7 +83,7 @@ class LLMNode(BaseNode):
         output_tokens = estimate_tokens(json.dumps(extracted, ensure_ascii=False))
         input_tokens = estimate_tokens(message)
         cost_metrics = cost_tracker.build_cost_payload(
-            model=self.model,
+            model=self._resolve_model_code(profile_code, context),
             workflow_code=context.workflow_code,
             workflow_version=context.workflow_version,
             execution_id=context.execution_id,
@@ -82,58 +101,49 @@ class LLMNode(BaseNode):
             "metrics": cost_metrics,
         })
 
-    def _extract_slots(self, message: str, hotel_mode: bool = False) -> Dict[str, Any]:
-        if not message:
-            return {}
+    def _resolve_profile_code(self, context) -> str:
+        workflow_defaults = context.workflow_config.get("llm_defaults", {}) if isinstance(context.workflow_config, dict) else {}
+        profile_code = self.model_profile_ref or workflow_defaults.get("model_profile_ref") or self.fallback_model_profile_ref
+        if not profile_code:
+            raise ValueError(f"Model profile ref is required for node {self.node_id}")
+        return str(profile_code)
 
-        slots: Dict[str, Any] = {}
-        zh_match = re.search(r"从(?P<departure>[^到，,。\s]+)到(?P<arrival>[^，,。\s]+)", message)
-        if zh_match:
-            slots["departure_city"] = zh_match.group("departure")
-            slots["arrival_city"] = zh_match.group("arrival")
+    def _resolve_model_code(self, profile_code: str, context) -> str:
+        profile = context.model_profiles.get(profile_code, {})
+        return str(profile.get("model_code", profile_code))
 
-        route_match = re.search(
-            r"from\s+(?P<departure>[A-Za-z\u4e00-\u9fa5]+)\s+to\s+(?P<arrival>[A-Za-z\u4e00-\u9fa5]+)",
-            message,
-            re.IGNORECASE,
+    def _build_system_prompt(self) -> str:
+        if self.system_prompt:
+            return self.system_prompt
+        if self.prompt == "hotel_slot_extraction":
+            return "你是酒店预订助手，请从用户输入中提取城市、入住日期、入住晚数，并返回 JSON。"
+        return "你是服务机器人结构化提取助手，请从用户输入中提取信息，并返回 JSON。"
+
+    def _build_user_prompt(self, message: str, context) -> str:
+        if self.user_prompt:
+            return self.user_prompt.format(user_message=message, **context.execution_variables)
+        if self.prompt == "hotel_slot_extraction":
+            return f"用户输入：{message}\n请提取：arrival_city, departure_date, nights。"
+        return f"用户输入：{message}\n请提取结构化字段。"
+
+    def _knowledge_prompt(self, message: str, documents: List[Dict[str, Any]]) -> str:
+        return json.dumps(
+            {
+                "question": message,
+                "documents": documents,
+            },
+            ensure_ascii=False,
         )
-        if route_match:
-            slots["departure_city"] = route_match.group("departure")
-            slots["arrival_city"] = route_match.group("arrival")
 
-        if hotel_mode and "arrival_city" not in slots:
-            city_match = re.search(r"(北京|上海|广州|深圳|杭州|成都)", message)
-            if city_match:
-                slots["arrival_city"] = city_match.group(1)
-
-        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", message)
-        if date_match:
-            slots["departure_date"] = date_match.group(1)
-        elif "tomorrow" in message.lower() or "\u660e\u5929" in message:
-            slots["departure_date"] = (date.today() + timedelta(days=1)).isoformat()
-        elif "today" in message.lower() or "\u4eca\u5929" in message:
-            slots["departure_date"] = date.today().isoformat()
-
-        passengers_match = re.search(r"(\d+)\s*passengers?", message, re.IGNORECASE)
-        if passengers_match:
-            slots["passengers"] = int(passengers_match.group(1))
-        else:
-            passengers_match = re.search(r"(\d+)\s*(?:人|位)", message)
-            if passengers_match:
-                slots["passengers"] = int(passengers_match.group(1))
-
-        nights_match = re.search(r"(\d+)\s*(?:晚|night)", message, re.IGNORECASE)
-        if nights_match:
-            slots["nights"] = int(nights_match.group(1))
-
-        return slots
-
-    def _answer_with_knowledge(self, context) -> str:
-        documents: List[Dict[str, Any]] = context.get_variable("retrieved_docs", []) or []
-        if not documents:
-            return "暂时没有检索到相关知识，请稍后再试。"
-        summary = "；".join(document["content"] for document in documents[:2])
-        return f"根据知识库检索结果：{summary}"
+    def _parse_output(self, completion: str) -> Dict[str, Any]:
+        if not completion:
+            return {}
+        if self.structured_output.get("enabled"):
+            try:
+                return json.loads(completion)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Structured LLM output is not valid JSON: {completion}") from exc
+        return {"text": completion}
 
     def _validate_output(self, extracted: Dict[str, Any]) -> None:
         if not self.structured_output.get("enabled"):

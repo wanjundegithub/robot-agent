@@ -28,6 +28,9 @@ public class WorkflowVersion {
     @Column(name = "entry_rule", columnDefinition = "JSON")
     private String entryRule;
 
+    @Column(name = "editor_meta", columnDefinition = "JSON")
+    private String editorMeta;
+
     @Column(name = "config", columnDefinition = "JSON")
     private String config;
 
@@ -58,6 +61,9 @@ public class WorkflowVersion {
 
     public String getEntryRule() { return entryRule; }
     public void setEntryRule(String entryRule) { this.entryRule = entryRule; }
+
+    public String getEditorMeta() { return editorMeta; }
+    public void setEditorMeta(String editorMeta) { this.editorMeta = editorMeta; }
 
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }

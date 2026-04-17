@@ -25,6 +25,11 @@ class ExecutionContext:
     threshold_source: Optional[str] = None
     requested_tool_code: Optional[str] = None
     confirmed_tool_codes: List[str] = field(default_factory=list)
+    workflow_config: Dict[str, Any] = field(default_factory=dict)
+    workflow_catalog: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    provider_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    model_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    intent_profile_code: Optional[str] = None
 
     current_node_id: Optional[str] = None
     status: str = "pending"

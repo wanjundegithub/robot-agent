@@ -39,12 +39,25 @@ const WorkflowPanel: React.FC = () => {
     await load()
   }
 
+  const displayVersionStatus = (value: string) => {
+    switch ((value || '').toLowerCase()) {
+      case 'draft':
+        return '草稿'
+      case 'published':
+        return '已发布'
+      case 'archived':
+        return '已归档'
+      default:
+        return value
+    }
+  }
+
   return (
     <div className="panel-card h-full flex flex-col">
       <div className="panel-header">
         <div>
-          <div className="panel-title">Workflow Versions</div>
-          <div className="text-xs text-slate-500">Phase 3 publish / rollback / route candidates</div>
+          <div className="panel-title">流程版本</div>
+          <div className="text-xs text-slate-500">第三阶段 发布 / 回滚 / 路由候选</div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
           刷新
@@ -60,27 +73,27 @@ const WorkflowPanel: React.FC = () => {
                 <div className="font-medium text-slate-800">{workflow.name}</div>
                 <div className="text-xs text-slate-500">{workflow.workflowCode}</div>
               </div>
-              <div className="text-xs text-slate-500">Current: {workflow.currentVersion || '-'}</div>
+              <div className="text-xs text-slate-500">当前版本：{workflow.currentVersion || '-'}</div>
             </div>
             <div className="mt-2 space-y-2">
               {(versions[workflow.workflowCode] || []).map((version) => (
                 <div key={version.version} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
                   <div className="text-sm text-slate-700">
                     {version.version}
-                    <span className="ml-2 text-xs uppercase text-slate-400">{version.status}</span>
+                    <span className="ml-2 text-xs uppercase text-slate-400">{displayVersionStatus(version.status)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
                       onClick={() => void handlePublish(workflow.workflowCode, version.version)}
                     >
-                      Publish
+                      发布
                     </button>
                     <button
                       className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
                       onClick={() => void handleRollback(workflow.workflowCode, version.version)}
                     >
-                      Rollback
+                      回滚
                     </button>
                   </div>
                 </div>

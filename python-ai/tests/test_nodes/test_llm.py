@@ -1,45 +1,113 @@
-from datetime import date, timedelta
-
 import pytest
 
 from src.core.context import ExecutionContext
 from src.nodes.llm import LLMNode
 
 
+def async_result(value: str):
+    async def _runner(**_kwargs):
+        return value
+    return _runner
+
+
 @pytest.mark.asyncio
-async def test_llm_node_extracts_chinese_flight_slots():
+async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
     context = ExecutionContext(
         execution_id="exec_test",
         session_id="sess_test",
         workflow_code="flight_booking",
-        workflow_version="1.0.0"
+        workflow_version="1.0.0",
+        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        provider_configs={
+            "openai-compatible-prod": {
+                "provider_code": "openai-compatible-prod",
+                "provider_type": "openai_compatible",
+                "base_url": "https://llm.example.com/v1",
+            }
+        },
+        model_profiles={
+            "structured-extraction-v1": {
+                "profile_code": "structured-extraction-v1",
+                "provider_code": "openai-compatible-prod",
+                "model_code": "qwen-plus",
+            }
+        },
     )
     context.add_execution_variable("user_message", "我要从北京到上海，明天出发，2人同行")
 
-    node = LLMNode("extract_slots", {"config": {"prompt": "extract slots"}})
+    node = LLMNode("extract_slots", {
+        "config": {
+            "prompt": "extract slots",
+            "structured_output": {
+                "enabled": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "departure_city": {"type": "string"},
+                        "arrival_city": {"type": "string"},
+                        "departure_date": {"type": "string"},
+                        "passengers": {"type": "integer"},
+                    },
+                },
+            },
+        },
+    })
+    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"北京","arrival_city":"上海","departure_date":"2026-04-12","passengers":2}'))
 
     result = await node.execute(context)
 
     assert result["output"]["departure_city"] == "北京"
     assert result["output"]["arrival_city"] == "上海"
-    assert result["output"]["departure_date"] == (date.today() + timedelta(days=1)).isoformat()
+    assert result["output"]["departure_date"] == "2026-04-12"
     assert result["output"]["passengers"] == 2
 
 
 @pytest.mark.asyncio
-async def test_llm_node_extracts_english_route_and_date():
+async def test_llm_node_extracts_english_route_and_date(monkeypatch):
     context = ExecutionContext(
         execution_id="exec_test",
         session_id="sess_test",
         workflow_code="flight_booking",
-        workflow_version="1.0.0"
+        workflow_version="1.0.0",
+        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        provider_configs={
+            "openai-compatible-prod": {
+                "provider_code": "openai-compatible-prod",
+                "provider_type": "openai_compatible",
+                "base_url": "https://llm.example.com/v1",
+            }
+        },
+        model_profiles={
+            "structured-extraction-v1": {
+                "profile_code": "structured-extraction-v1",
+                "provider_code": "openai-compatible-prod",
+                "model_code": "qwen-plus",
+            }
+        },
     )
     context.add_execution_variable(
         "user_message",
         "from Beijing to Shanghai 2026-04-08 with 3 passengers"
     )
 
-    node = LLMNode("extract_slots", {"config": {"prompt": "extract slots"}})
+    node = LLMNode("extract_slots", {
+        "config": {
+            "prompt": "extract slots",
+            "structured_output": {
+                "enabled": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "departure_city": {"type": "string"},
+                        "arrival_city": {"type": "string"},
+                        "departure_date": {"type": "string"},
+                        "passengers": {"type": "integer"},
+                    },
+                },
+            },
+        },
+    })
+    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08","passengers":3}'))
 
     result = await node.execute(context)
 
@@ -50,12 +118,27 @@ async def test_llm_node_extracts_english_route_and_date():
 
 
 @pytest.mark.asyncio
-async def test_llm_node_sanitizes_injection_like_prompt_input():
+async def test_llm_node_sanitizes_injection_like_prompt_input(monkeypatch):
     context = ExecutionContext(
         execution_id="exec_test",
         session_id="sess_test",
         workflow_code="flight_booking",
-        workflow_version="2.0.0"
+        workflow_version="2.0.0",
+        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        provider_configs={
+            "openai-compatible-prod": {
+                "provider_code": "openai-compatible-prod",
+                "provider_type": "openai_compatible",
+                "base_url": "https://llm.example.com/v1",
+            }
+        },
+        model_profiles={
+            "structured-extraction-v1": {
+                "profile_code": "structured-extraction-v1",
+                "provider_code": "openai-compatible-prod",
+                "model_code": "qwen-plus",
+            }
+        },
     )
     context.add_execution_variable(
         "user_message",
@@ -78,6 +161,7 @@ async def test_llm_node_sanitizes_injection_like_prompt_input():
             },
         },
     })
+    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08"}'))
 
     result = await node.execute(context)
 

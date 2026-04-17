@@ -13,11 +13,15 @@ import robot.agent.model.WorkflowStatus;
 import robot.agent.model.WorkflowVersion;
 import robot.agent.model.WorkflowVersionStatus;
 import robot.agent.repository.AuditLogRepository;
+import robot.agent.repository.LlmModelProfileRepository;
+import robot.agent.repository.LlmProviderConfigRepository;
 import robot.agent.repository.UserRoleRepository;
 import robot.agent.repository.WorkflowRepository;
 import robot.agent.repository.WorkflowVersionRepository;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,6 +42,12 @@ class WorkflowServiceTest {
     @Mock
     private AuditLogRepository auditLogRepository;
 
+    @Mock
+    private LlmProviderConfigRepository llmProviderConfigRepository;
+
+    @Mock
+    private LlmModelProfileRepository llmModelProfileRepository;
+
     private WorkflowService workflowService;
 
     @BeforeEach
@@ -47,7 +57,9 @@ class WorkflowServiceTest {
                 workflowVersionRepository,
                 new ObjectMapper(),
                 new AccessControlService(userRoleRepository),
-                new AuditService(auditLogRepository, new ObjectMapper())
+                new AuditService(auditLogRepository, new ObjectMapper()),
+                new StubPythonClient(),
+                new ModelConfigService(llmProviderConfigRepository, llmModelProfileRepository, new ObjectMapper())
         );
     }
 
@@ -57,9 +69,11 @@ class WorkflowServiceTest {
         Workflow generalWorkflow = publishedWorkflow("general_query", "1.0.0");
 
         WorkflowVersion flightVersion = workflowVersion("flight_booking", "2.0.0",
-                "{\"keywords\":[\"机票\",\"航班\"],\"priority\":120}");
+                "{\"keywords\":[\"机票\",\"航班\"],\"priority\":120}",
+                "{\"intent_profile_ref\":\"intent-router-v1\"}");
         WorkflowVersion generalVersion = workflowVersion("general_query", "1.0.0",
-                "{\"keywords\":[\"政策\",\"规则\"],\"priority\":90}");
+                "{\"keywords\":[\"政策\",\"规则\"],\"priority\":90}",
+                "{\"intent_profile_ref\":\"intent-router-v1\"}");
 
         when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
                 .thenReturn(List.of(flightWorkflow, generalWorkflow));
@@ -82,9 +96,11 @@ class WorkflowServiceTest {
         Workflow flightWorkflow = publishedWorkflow("flight_booking", "2.0.0");
 
         WorkflowVersion hotelVersion = workflowVersion("hotel_booking", "1.0.0",
-                "{\"keywords\":[\"酒店\",\"住宿\"],\"priority\":110}");
+                "{\"keywords\":[\"酒店\",\"住宿\"],\"priority\":110}",
+                "{\"intent_profile_ref\":\"intent-router-v1\"}");
         WorkflowVersion flightVersion = workflowVersion("flight_booking", "2.0.0",
-                "{\"keywords\":[\"机票\",\"航班\"],\"priority\":120}");
+                "{\"keywords\":[\"机票\",\"航班\"],\"priority\":120}",
+                "{\"intent_profile_ref\":\"intent-router-v1\"}");
 
         when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
                 .thenReturn(List.of(hotelWorkflow, flightWorkflow));
@@ -104,6 +120,20 @@ class WorkflowServiceTest {
         assertThat(decision.confidence()).isGreaterThanOrEqualTo(decision.threshold());
     }
 
+    @Test
+    void validateWorkflowDefinitionRequiresIntentProfileAndModelProfiles() {
+        List<Map<String, Object>> issues = workflowService.validateWorkflowDefinition(
+                """
+                {"entry":"start","nodes":{"start":{"id":"start","type":"start"},"answer":{"id":"answer","type":"llm","config":{}},"end":{"id":"end","type":"end"}},"transitions":{"start":"answer","answer":"end","end":null}}
+                """,
+                "{}"
+        );
+
+        assertThat(issues).isNotEmpty();
+        assertThat(issues).anyMatch(issue -> "config.intent_profile_ref".equals(issue.get("field")));
+        assertThat(issues).anyMatch(issue -> "config.model_profile_ref".equals(issue.get("field")));
+    }
+
     private Workflow publishedWorkflow(String workflowCode, String currentVersion) {
         Workflow workflow = new Workflow();
         workflow.setWorkflowCode(workflowCode);
@@ -113,13 +143,47 @@ class WorkflowServiceTest {
         return workflow;
     }
 
-    private WorkflowVersion workflowVersion(String workflowCode, String version, String entryRule) {
+    private WorkflowVersion workflowVersion(String workflowCode, String version, String entryRule, String config) {
         WorkflowVersion workflowVersion = new WorkflowVersion();
         workflowVersion.setWorkflowCode(workflowCode);
         workflowVersion.setVersion(version);
         workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
         workflowVersion.setEntryRule(entryRule);
-        workflowVersion.setDefinition("{\"nodes\":{}}");
+        workflowVersion.setDefinition("{\"nodes\":{},\"config\":{\"intent_profile_ref\":\"intent-router-v1\"}}");
+        workflowVersion.setConfig(config);
         return workflowVersion;
+    }
+
+    private static class StubPythonClient extends PythonClient {
+        StubPythonClient() {
+            super("http://localhost:8000");
+        }
+
+        @Override
+        public Mono<Map<String, Object>> classifyIntent(Map<String, Object> request) {
+            String message = String.valueOf(request.getOrDefault("message", ""));
+            if (message.length() <= 4) {
+                return Mono.just(Map.of(
+                        "intent_code", "general_query",
+                        "workflow_code", "general_query",
+                        "confidence", 0.40d,
+                        "reason", "short_query_low_confidence"
+                ));
+            }
+            if (message.contains("酒店")) {
+                return Mono.just(Map.of(
+                        "intent_code", "book_hotel",
+                        "workflow_code", "hotel_booking",
+                        "confidence", 0.90d,
+                        "reason", "profile_classifier"
+                ));
+            }
+            return Mono.just(Map.of(
+                    "intent_code", "book_flight",
+                    "workflow_code", "flight_booking",
+                    "confidence", 0.93d,
+                    "reason", "profile_classifier"
+            ));
+        }
     }
 }

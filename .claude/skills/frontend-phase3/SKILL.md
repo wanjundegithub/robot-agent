@@ -1,6 +1,6 @@
 ---
 name: frontend-phase3
-description: Implement the Phase 3 frontend: switch-confirmation UI, resume prompts, concurrent execution visibility, and correct rendering of routing and safety feedback.
+description: Implement the Phase 3 frontend: switch-confirmation UI, resume prompts, concurrent execution visibility, editable-canvas continuity, and correct rendering of routing and safety feedback.
 ---
 
 # Frontend Phase 3
@@ -19,7 +19,7 @@ description: Implement the Phase 3 frontend: switch-confirmation UI, resume prom
 
 ## 实现约束
 
-- 前端只调用 Java 接口，只订阅 Java 推送的 WebSocket。
+- 前端主业务链路通过 Java 的 Netty + WebSocket；HTTP 仅保留管理、上传和健康检查等非主交互场景。
 - 不在浏览器实现路由模型、状态机、调度器或脱敏策略。
 - UI 必须清晰区分“当前运行中”“待恢复”“已放弃恢复”“需要确认切换”等状态。
 - 不提前做 Phase 4 的路由优化后台、复杂运维控制台或成本看板。

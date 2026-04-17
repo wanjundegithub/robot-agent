@@ -25,7 +25,7 @@ description: Implement the Java Phase 2 gateway and platform layer: workflow ver
 - 发布 / 回滚只能影响后续 execution，不能改写运行中 execution 的 `workflow_version`。
 - 权限优先做基础 RBAC；复杂 ABAC / SpEL 不得阻塞 Phase 2 主线。
 - 审计日志要围绕发布、回滚、权限拒绝、知识库操作等关键动作落点。
-- 允许引入 Redis、Telemetry、知识库表，但不能破坏 Phase 1 的 HTTP / WebSocket 合同。
+- 允许引入 Redis、Telemetry、知识库表，但不能破坏 Phase 1 的 Netty + WebSocket / HTTP 管理接口合同。
 
 ## 重点检查
 

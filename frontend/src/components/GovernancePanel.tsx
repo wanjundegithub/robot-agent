@@ -28,12 +28,40 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
   const rateLimits = readiness?.protection.rate_limits ?? []
   const recentCandidates = readiness?.archive.recent_candidates ?? []
 
+  const displayScope = (value: unknown) => {
+    switch (String(value || '')) {
+      case 'user':
+        return '用户'
+      case 'session':
+        return '会话'
+      case 'workflow':
+        return '流程'
+      case 'tool':
+        return '工具'
+      default:
+        return String(value || '')
+    }
+  }
+
+  const displayTier = (value: unknown) => {
+    switch (String(value || '')) {
+      case 'hot':
+        return '热'
+      case 'warm':
+        return '温'
+      case 'cold':
+        return '冷'
+      default:
+        return String(value || '')
+    }
+  }
+
   return (
     <div className="panel-card h-full flex flex-col">
       <div className="panel-header">
         <div>
-          <div className="panel-title">Governance</div>
-          <div className="text-xs text-slate-500">Phase 5 ABAC / Protection / Archive</div>
+          <div className="panel-title">治理视图</div>
+          <div className="text-xs text-slate-500">第五阶段 权限 / 保护 / 归档</div>
         </div>
       </div>
       <div className="panel-body space-y-4 overflow-y-auto">
@@ -45,11 +73,11 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
         </div>
 
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Rate Limits</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">限流规则</div>
           <ul className="space-y-2">
             {rateLimits.map((rule) => (
               <li key={`${String(rule.scope)}_${String(rule.limit)}`} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2">
-                <div className="text-sm font-medium text-slate-800">{String(rule.scope)}</div>
+                <div className="text-sm font-medium text-slate-800">{displayScope(rule.scope)}</div>
                 <div className="text-xs text-slate-500">
                   {String(rule.limit)} / {String(rule.window_seconds)}s · {String(rule.redis_key_pattern)}
                 </div>
@@ -59,7 +87,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
         </div>
 
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Archive Summary</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">归档概览</div>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2">
               热数据: {String(archiveSummary.hot_executions ?? 0)}
@@ -77,7 +105,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
         </div>
 
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Lifecycle Preview</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">生命周期预览</div>
           {recentCandidates.length === 0 && (
             <div className="text-sm text-slate-500">暂无归档候选。</div>
           )}
@@ -86,7 +114,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
               <li key={String(item.execution_id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                 <div className="text-sm font-medium text-slate-800">{String(item.workflow_code)}</div>
                 <div className="text-xs text-slate-500">
-                  {String(item.tier)} · {String(item.cleanup_action)} · {String(item.archive_target)}
+                  {displayTier(item.tier)} · {String(item.cleanup_action)} · {String(item.archive_target)}
                 </div>
               </li>
             ))}

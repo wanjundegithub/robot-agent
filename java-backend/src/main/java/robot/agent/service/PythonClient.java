@@ -87,4 +87,14 @@ public class PythonClient {
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
     }
+
+    public Mono<Map<String, Object>> classifyIntent(Map<String, Object> request) {
+        return webClient.post()
+                .uri("/api/phase5/intents/classify")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
+    }
 }

@@ -9,12 +9,14 @@ import MessageList from './components/MessageList'
 import Orchestrator from './components/Orchestrator'
 import ReplayPanel from './components/ReplayPanel'
 import WorkflowPanel from './components/WorkflowPanel'
-import { getSessionExecutions, resumeExecution, sendMessage, submitForm } from './services/api'
+import { getSessionExecutions } from './services/api'
 import type {
   ExecutionDetail,
   ExecutionEventEnvelope,
   ExecutionEventView,
   FormDefinition,
+  GatewayAckEnvelope,
+  GatewayErrorEnvelope,
   GovernanceNotice,
   Message,
   MessageDeltaEnvelope,
@@ -57,6 +59,9 @@ const App: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
   const reconnectAttemptsRef = useRef(0)
+  const pendingRequestsRef = useRef(
+    new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  )
 
   useEffect(() => {
     const existing = window.localStorage.getItem('robot-session-id')
@@ -72,7 +77,7 @@ const App: React.FC = () => {
       {
         id: 'welcome',
         type: 'system',
-        content: '欢迎使用服务机器人。Phase 5 已启用 ABAC、二次确认、限流/降级和日志归档可见性。输入“取消订单”或“更新权限”可触发高风险确认。',
+        content: '欢迎使用服务机器人。第五阶段已启用 ABAC、二次确认、限流/降级和日志归档可见性。输入“取消订单”或“更新权限”可触发高风险确认。',
         timestamp: new Date().toISOString(),
       },
     ])
@@ -103,6 +108,10 @@ const App: React.FC = () => {
             handleMessageDelta(payload)
           } else if (payload.type === 'event') {
             handleExecutionEvent(payload)
+          } else if (payload.type === 'ack') {
+            handleGatewayAck(payload)
+          } else if (payload.type === 'error') {
+            handleGatewayError(payload)
           }
         } catch (error) {
           console.error('Invalid WebSocket payload:', error)
@@ -115,6 +124,8 @@ const App: React.FC = () => {
 
       socket.onclose = () => {
         wsRef.current = null
+        pendingRequestsRef.current.forEach(({ reject }) => reject(new Error('WebSocket disconnected')))
+        pendingRequestsRef.current.clear()
         if (isCancelled) {
           setSocketState('idle')
           return
@@ -142,11 +153,11 @@ const App: React.FC = () => {
   }, [sessionId])
 
   const buildWsUrl = (activeSessionId: string) => {
-    const base = import.meta.env.VITE_WS_BASE_URL
+    const base = import.meta.env.VITE_NETTY_WS_BASE_URL || import.meta.env.VITE_WS_BASE_URL
     const origin =
       base ||
-      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
-    const url = new URL(`${origin}/ws/executions`)
+      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8091`
+    const url = new URL(`${origin}/ws/robot`)
     url.searchParams.set('session_id', activeSessionId)
     return url.toString()
   }
@@ -159,6 +170,61 @@ const App: React.FC = () => {
   }
 
   const normalizeStatus = (value: string) => value.toLowerCase()
+
+  const displaySocketState = (value: SocketState) => {
+    switch (value) {
+      case 'connecting':
+        return '连接中'
+      case 'connected':
+        return '已连接'
+      case 'reconnecting':
+        return '重连中'
+      case 'disconnected':
+        return '已断开'
+      default:
+        return '空闲'
+    }
+  }
+
+  const displayExecutionStatus = (value: string) => {
+    switch ((value || '').toLowerCase()) {
+      case 'running':
+        return '运行中'
+      case 'completed':
+        return '已完成'
+      case 'failed':
+        return '执行失败'
+      case 'waiting_user':
+        return '等待用户'
+      case 'waiting_tool':
+        return '等待工具'
+      case 'suspended':
+        return '已挂起'
+      case 'switch_required':
+        return '需要切换'
+      case 'confirmation_required':
+        return '等待确认'
+      case 'permission_denied':
+        return '权限拒绝'
+      case 'rate_limited':
+        return '已限流'
+      case 'degraded':
+        return '已降级'
+      default:
+        return '空闲'
+    }
+  }
+
+  const displayUserLabel = (value: string) => {
+    switch (value) {
+      case 'demo-admin':
+        return '演示管理员'
+      case 'anonymous':
+        return '匿名用户'
+      default:
+        return '演示用户'
+    }
+  }
 
   const refreshExecutions = async (activeSessionId: string) => {
     try {
@@ -243,6 +309,25 @@ const App: React.FC = () => {
     }
   }
 
+  const handleGatewayAck = (payload: GatewayAckEnvelope) => {
+    const pending = pendingRequestsRef.current.get(payload.request_id)
+    if (!pending) return
+    pendingRequestsRef.current.delete(payload.request_id)
+    pending.resolve((payload.data as Record<string, unknown> | undefined) ?? undefined)
+  }
+
+  const handleGatewayError = (payload: GatewayErrorEnvelope) => {
+    if (payload.request_id) {
+      const pending = pendingRequestsRef.current.get(payload.request_id)
+      if (pending) {
+        pendingRequestsRef.current.delete(payload.request_id)
+        pending.reject(new Error(payload.message))
+        return
+      }
+    }
+    appendSystemMessage(`网关错误：${payload.message}`)
+  }
+
   const handleExecutionEvent = (payload: ExecutionEventEnvelope) => {
     if (payload.session_id && payload.session_id !== sessionId) return
 
@@ -325,6 +410,10 @@ const App: React.FC = () => {
       pushGovernanceNotice('运行时限流触发', detail, 'warning')
     }
 
+    if (payload.event_type === 'workflow.validation_failed') {
+      pushGovernanceNotice('流程草稿校验失败', '请先修复画布中的配置问题。', 'warning')
+    }
+
     if (payload.event_type === 'execution.completed') {
       finalizeStreamingMessage(payload.execution_id)
       setExecutionStatus('completed')
@@ -336,6 +425,32 @@ const App: React.FC = () => {
       setExecutionStatus('failed')
       setIsLoading(false)
     }
+  }
+
+  const sendGatewayAction = (
+    action: string,
+    payload: Record<string, unknown>,
+    targetSessionId = sessionId
+  ): Promise<unknown> => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('WebSocket not connected'))
+    }
+
+    const requestId = createId('req')
+    socket.send(
+      JSON.stringify({
+        type: 'action',
+        request_id: requestId,
+        action,
+        session_id: targetSessionId,
+        payload,
+      })
+    )
+
+    return new Promise((resolve, reject) => {
+      pendingRequestsRef.current.set(requestId, { resolve, reject })
+    })
   }
 
   const handleSendMessage = async (
@@ -387,13 +502,16 @@ const App: React.FC = () => {
         setSessionId(activeSessionId)
       }
 
-      const response = await sendMessage(activeSessionId, messageId, content, [], {
-        confirmSwitch: options?.confirmSwitch,
-        userId: currentUserId,
-        requestedToolCode: options?.requestedToolCode,
-        confirmationId: options?.confirmationId,
-        cancelConfirmation: options?.cancelConfirmation,
-      })
+      const response = (await sendGatewayAction('send_message', {
+        message_id: messageId,
+        content,
+        attachments: [],
+        user_id: currentUserId,
+        confirm_switch: options?.confirmSwitch ?? false,
+        requested_tool_code: options?.requestedToolCode ?? null,
+        confirmation_id: options?.confirmationId ?? null,
+        cancel_confirmation: options?.cancelConfirmation ?? false,
+      }, activeSessionId)) as unknown as SendMessageResponse
 
       if (response.status === 'permission_denied') {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
@@ -490,7 +608,13 @@ const App: React.FC = () => {
   const handleResume = async () => {
     if (!resumeOffer) return
     try {
-      const response = await resumeExecution(resumeOffer.executionId)
+      const response = (await sendGatewayAction('resume_execution', {
+        execution_id: resumeOffer.executionId,
+      })) as unknown as {
+        execution_id: string
+        status: string
+        form_definition?: string | null
+      }
       setExecutionId(response.execution_id)
       setExecutionStatus(normalizeStatus(response.status))
       setResumeOffer(null)
@@ -512,11 +636,11 @@ const App: React.FC = () => {
       <header className="app-header">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">服务机器人</h1>
-          <div className="text-sm text-slate-500">Phase 5 生产优化与治理</div>
+          <div className="text-sm text-slate-500">第五阶段 生产优化与治理</div>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-400">
           <label className="flex items-center gap-2">
-            <span>User</span>
+            <span>用户</span>
             <select
               value={currentUserId}
               onChange={(event) => {
@@ -526,12 +650,12 @@ const App: React.FC = () => {
               }}
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
             >
-              <option value="demo-user">demo-user</option>
-              <option value="demo-admin">demo-admin</option>
-              <option value="anonymous">anonymous</option>
+              <option value="demo-user">演示用户</option>
+              <option value="demo-admin">演示管理员</option>
+              <option value="anonymous">匿名用户</option>
             </select>
           </label>
-          <span>Session: {sessionId || 'loading'} · Socket: {socketState}</span>
+          <span>会话：{sessionId || '加载中'} · 连接：{displaySocketState(socketState)}</span>
         </div>
       </header>
 
@@ -539,13 +663,13 @@ const App: React.FC = () => {
         <section className="app-chat">
           <div className="panel-card flex-1 flex flex-col">
             <div className="panel-header">
-              <div className="panel-title">Conversation</div>
-              <div className="text-xs text-slate-500">Execution: {executionStatus}</div>
+              <div className="panel-title">对话窗口</div>
+              <div className="text-xs text-slate-500">执行状态：{displayExecutionStatus(executionStatus)}</div>
             </div>
             <MessageList messages={messages} isLoading={isLoading} />
             <div className="panel-footer">
               <div className="mb-2 text-xs text-slate-400">
-                当前用户: {currentUserId} · 高风险短语示例: 取消订单 / 更新权限
+                当前用户：{displayUserLabel(currentUserId)} · 高风险短语示例：取消订单 / 更新权限
               </div>
               <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
             </div>
@@ -556,13 +680,13 @@ const App: React.FC = () => {
           <div className="side-stack">
             {pendingSwitch && (
               <div className="panel-card prompt-card">
-                <div className="panel-title mb-2">Switch Required</div>
+                <div className="panel-title mb-2">需要切换流程</div>
                 <div className="text-sm text-slate-700">
                   当前运行流程与新意图冲突，目标流程是 <strong>{pendingSwitch.response.workflow_code}</strong>。
                 </div>
                 <div className="text-xs text-slate-500 mt-2">
-                  decision: {pendingSwitch.response.route_decision} · confidence:{' '}
-                  {pendingSwitch.response.route_confidence?.toFixed(2) ?? 'n/a'}
+                  决策：{pendingSwitch.response.route_decision} · 置信度：{' '}
+                  {pendingSwitch.response.route_confidence?.toFixed(2) ?? '未知'}
                 </div>
                 <div className="prompt-actions">
                   <button
@@ -589,12 +713,12 @@ const App: React.FC = () => {
 
             {resumeOffer && (
               <div className="panel-card prompt-card">
-                <div className="panel-title mb-2">Resume Offer</div>
+                <div className="panel-title mb-2">恢复提示</div>
                 <div className="text-sm text-slate-700">
                   已有挂起流程 <strong>{resumeOffer.workflowCode}</strong> 待恢复。
                 </div>
                 <div className="text-xs text-slate-500 mt-2">
-                  version: {resumeOffer.workflowVersion} · node: {resumeOffer.currentNodeId || 'pending'}
+                  版本：{resumeOffer.workflowVersion} · 节点：{resumeOffer.currentNodeId || '待定'}
                 </div>
                 <div className="prompt-actions">
                   <button
@@ -612,12 +736,12 @@ const App: React.FC = () => {
 
             {pendingConfirmation && (
               <div className="panel-card prompt-card">
-                <div className="panel-title mb-2">High Risk Confirmation</div>
+                <div className="panel-title mb-2">高风险二次确认</div>
                 <div className="text-sm text-slate-700">
                   操作 <strong>{pendingConfirmation.response.requested_tool_code}</strong> 需要二次确认后才能继续。
                 </div>
                 <div className="text-xs text-slate-500 mt-2">
-                  expires: {pendingConfirmation.response.confirmation_expires_at || '5 minutes'}
+                  失效时间：{pendingConfirmation.response.confirmation_expires_at || '5 分钟内'}
                 </div>
                 <div className="prompt-actions">
                   <button
@@ -655,7 +779,7 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <Orchestrator />
+            <Orchestrator currentUserId={currentUserId} sendGatewayAction={sendGatewayAction} />
             <GovernancePanel sessionId={sessionId} notice={governanceNotice} />
             <WorkflowPanel />
             <InsightsPanel workflowCode={executions[0]?.workflow_code} />
@@ -678,7 +802,11 @@ const App: React.FC = () => {
           onClose={() => setPendingForm(null)}
           onSubmit={async (data) => {
             try {
-              await submitForm(pendingForm.executionId, createId('submit'), data)
+              await sendGatewayAction('submit_form', {
+                execution_id: pendingForm.executionId,
+                submit_id: createId('submit'),
+                form_data: data,
+              })
               setPendingForm(null)
               setExecutionStatus('running')
               setIsLoading(true)

@@ -36,6 +36,20 @@ public class ExecuteRequest {
     private String requestedToolCode;
     @JsonProperty("confirmed_tool_codes")
     private List<String> confirmedToolCodes;
+    @JsonProperty("workflow_definition")
+    private Map<String, Object> workflowDefinition;
+    @JsonProperty("entry_rule")
+    private Map<String, Object> entryRule;
+    @JsonProperty("workflow_config")
+    private Map<String, Object> workflowConfig;
+    @JsonProperty("workflow_catalog")
+    private Map<String, Map<String, Object>> workflowCatalog;
+    @JsonProperty("provider_configs")
+    private List<Map<String, Object>> providerConfigs;
+    @JsonProperty("model_profiles")
+    private List<Map<String, Object>> modelProfiles;
+    @JsonProperty("intent_profile_code")
+    private String intentProfileCode;
     @JsonProperty("input_variables")
     private Map<String, Object> inputVariables;
 
@@ -86,6 +100,27 @@ public class ExecuteRequest {
 
     public List<String> getConfirmedToolCodes() { return confirmedToolCodes; }
     public void setConfirmedToolCodes(List<String> confirmedToolCodes) { this.confirmedToolCodes = confirmedToolCodes; }
+
+    public Map<String, Object> getWorkflowDefinition() { return workflowDefinition; }
+    public void setWorkflowDefinition(Map<String, Object> workflowDefinition) { this.workflowDefinition = workflowDefinition; }
+
+    public Map<String, Object> getEntryRule() { return entryRule; }
+    public void setEntryRule(Map<String, Object> entryRule) { this.entryRule = entryRule; }
+
+    public Map<String, Object> getWorkflowConfig() { return workflowConfig; }
+    public void setWorkflowConfig(Map<String, Object> workflowConfig) { this.workflowConfig = workflowConfig; }
+
+    public Map<String, Map<String, Object>> getWorkflowCatalog() { return workflowCatalog; }
+    public void setWorkflowCatalog(Map<String, Map<String, Object>> workflowCatalog) { this.workflowCatalog = workflowCatalog; }
+
+    public List<Map<String, Object>> getProviderConfigs() { return providerConfigs; }
+    public void setProviderConfigs(List<Map<String, Object>> providerConfigs) { this.providerConfigs = providerConfigs; }
+
+    public List<Map<String, Object>> getModelProfiles() { return modelProfiles; }
+    public void setModelProfiles(List<Map<String, Object>> modelProfiles) { this.modelProfiles = modelProfiles; }
+
+    public String getIntentProfileCode() { return intentProfileCode; }
+    public void setIntentProfileCode(String intentProfileCode) { this.intentProfileCode = intentProfileCode; }
 
     public Map<String, Object> getInputVariables() { return inputVariables; }
     public void setInputVariables(Map<String, Object> inputVariables) { this.inputVariables = inputVariables; }

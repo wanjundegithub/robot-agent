@@ -30,8 +30,8 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ workflowCode }) => {
     <div className="panel-card h-full flex flex-col">
       <div className="panel-header">
         <div>
-          <div className="panel-title">Insights</div>
-          <div className="text-xs text-slate-500">Phase 4 recommendation / RAG evaluation</div>
+          <div className="panel-title">洞察面板</div>
+          <div className="text-xs text-slate-500">第四阶段 推荐 / RAG 评测</div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void handleRunEvaluation()}>
           运行评测
@@ -39,7 +39,7 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ workflowCode }) => {
       </div>
       <div className="panel-body space-y-3 overflow-y-auto">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Subflow Recommendations</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">子流程推荐</div>
           <ul className="space-y-2">
             {(recommendations?.recommendations || []).map((item, index) => (
               <li key={`${String(item.subflow_code)}_${index}`} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm text-slate-700">
@@ -50,11 +50,11 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ workflowCode }) => {
           </ul>
         </div>
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">RAG Evaluation</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">RAG 评测</div>
           {!evaluation && <div className="text-sm text-slate-500">点击“运行评测”获取评测结果。</div>}
           {evaluation && (
             <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-700">
-              dataset: {evaluation.dataset_size} · hit rate: {evaluation.hit_rate} · avg relevance: {evaluation.avg_relevance}
+              数据集：{evaluation.dataset_size} · 命中率：{evaluation.hit_rate} · 平均相关性：{evaluation.avg_relevance}
             </div>
           )}
         </div>

@@ -12,7 +12,7 @@ description: Implement the Java Phase 3 gateway layer: hybrid intent routing, sw
 
 - `java-backend/**` 下与 Phase 3 相关的 Spring Boot 实现
 - 规则 + 模型混合路由入口
-- 切换确认、恢复确认、恢复放弃等 HTTP / WebSocket 合同
+- 切换确认、恢复确认、恢复放弃等 Netty + WebSocket / HTTP 管理接口合同
 - Session / Execution / `suspended_stack` 聚合与持久化协同
 - 路由、切换、恢复、安全相关审计写入点
 - Java -> Python 契约的 Phase 3 增量封装
@@ -25,7 +25,7 @@ description: Implement the Java Phase 3 gateway layer: hybrid intent routing, sw
 - 切换必须先确认，再把当前 execution 置为挂起。
 - 恢复必须显式触发，不能在后台静默续跑。
 - 审计日志要围绕路由决策、切换确认、恢复、输出校验失败、安全触发等关键动作落点。
-- 允许新增 DTO、表字段、Redis 依赖和事件，但不能破坏 Phase 1 / Phase 2 的 HTTP / WebSocket 主合同。
+- 允许新增 DTO、表字段、Redis 依赖和事件，但不能破坏 Phase 1 / Phase 2 的 Netty + WebSocket 主合同。
 
 ## 重点检查
 

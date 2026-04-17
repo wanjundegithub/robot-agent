@@ -179,6 +179,10 @@ public class ExecutionService {
         }
 
         ExperimentAssignment experimentAssignment = assignExperiment(session.getId(), routingDecision.workflowCode());
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = workflowService.buildRuntimeExecutionBundle(
+                routingDecision.workflowCode(),
+                routingDecision.workflowVersion()
+        );
 
         Execution execution = new Execution();
         execution.setId(UUID.randomUUID().toString());
@@ -221,12 +225,20 @@ public class ExecutionService {
         executeRequest.setConfirmedToolCodes(
                 confirmationEvaluation.toolCode() == null ? List.of() : List.of(confirmationEvaluation.toolCode())
         );
+        executeRequest.setWorkflowDefinition(runtimeBundle.workflowDefinition());
+        executeRequest.setEntryRule(runtimeBundle.entryRule());
+        executeRequest.setWorkflowConfig(runtimeBundle.workflowConfig());
+        executeRequest.setWorkflowCatalog(runtimeBundle.workflowCatalog());
+        executeRequest.setProviderConfigs(runtimeBundle.providerConfigs());
+        executeRequest.setModelProfiles(runtimeBundle.modelProfiles());
+        executeRequest.setIntentProfileCode(runtimeBundle.routingProfileCode());
         Map<String, Object> executeInput = new LinkedHashMap<>();
         executeInput.put("user_message", request.getContent());
         executeInput.put("experiment_id", experimentAssignment.experimentId());
         executeInput.put("experiment_group", experimentAssignment.experimentGroup());
         executeInput.put("requested_tool_code", confirmationEvaluation.toolCode());
         executeInput.put("confirmed_tool_codes", executeRequest.getConfirmedToolCodes());
+        executeInput.put("intent_profile_code", runtimeBundle.routingProfileCode());
         executeRequest.setInputVariables(executeInput);
 
         Flux<ServerSentEvent<String>> stream = pythonClient.execute(executeRequest);

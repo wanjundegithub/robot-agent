@@ -1,6 +1,6 @@
 ---
 name: frontend-phase4
-description: Implement the Phase 4 frontend: evaluation views, replay UI, A/B comparison, business KPI dashboards, and cost visibility.
+description: Implement the Phase 4 frontend: evaluation views, replay UI, A/B comparison, business KPI dashboards, cost visibility, and editable-canvas analytics continuity.
 ---
 
 # Frontend Phase 4
@@ -19,7 +19,7 @@ description: Implement the Phase 4 frontend: evaluation views, replay UI, A/B co
 
 ## 实现约束
 
-- 前端只调用 Java 接口，只订阅 Java 推送的 WebSocket。
+- 前端主业务链路通过 Java 的 Netty + WebSocket；HTTP 仅保留管理、上传和健康检查等非主交互场景。
 - 不在浏览器实现阈值学习、评测打分、成本计算、实验分流或回放重算。
 - 仪表盘和回放视图必须清晰区分基线版本、实验版本和历史执行。
 - 不提前做 Phase 5 的复杂运维平台、权限平台或容量控制台。

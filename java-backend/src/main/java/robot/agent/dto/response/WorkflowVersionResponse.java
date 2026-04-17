@@ -11,6 +11,7 @@ public class WorkflowVersionResponse {
     private WorkflowVersionStatus status;
     private String definition;
     private String entryRule;
+    private String editorMeta;
     private String config;
     private LocalDateTime createdAt;
     private LocalDateTime publishedAt;
@@ -23,6 +24,7 @@ public class WorkflowVersionResponse {
         response.setStatus(version.getStatus());
         response.setDefinition(version.getDefinition());
         response.setEntryRule(version.getEntryRule());
+        response.setEditorMeta(version.getEditorMeta());
         response.setConfig(version.getConfig());
         response.setCreatedAt(version.getCreatedAt());
         response.setPublishedAt(version.getPublishedAt());
@@ -47,6 +49,9 @@ public class WorkflowVersionResponse {
 
     public String getEntryRule() { return entryRule; }
     public void setEntryRule(String entryRule) { this.entryRule = entryRule; }
+
+    public String getEditorMeta() { return editorMeta; }
+    public void setEditorMeta(String editorMeta) { this.editorMeta = editorMeta; }
 
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }

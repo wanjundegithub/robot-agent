@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from src.core.context import ExecutionContext
-from src.core.workflow_registry import get_workflow
 
 
 def _build_node(node_def: Dict[str, Any]):
@@ -33,7 +32,7 @@ async def run_subflow(
     subflow_version: str,
     input_variables: Dict[str, Any],
 ) -> Dict[str, Any]:
-    workflow = get_workflow(subflow_code, subflow_version)
+    workflow = parent_context.workflow_catalog.get(f"{subflow_code}@{subflow_version}")
     if workflow is None:
         raise ValueError(f"Subflow not found: {subflow_code}@{subflow_version}")
 
@@ -43,6 +42,11 @@ async def run_subflow(
         workflow_code=subflow_code,
         workflow_version=subflow_version,
         trace_id=parent_context.trace_id,
+        workflow_catalog=parent_context.workflow_catalog,
+        workflow_config={},
+        provider_configs=parent_context.provider_configs,
+        model_profiles=parent_context.model_profiles,
+        intent_profile_code=parent_context.intent_profile_code,
     )
     context.add_execution_variables(input_variables)
 

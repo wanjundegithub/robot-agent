@@ -8,10 +8,10 @@ import java.util.Map;
 @Service
 public class WebSocketPublisher {
 
-    private final ExecutionWebSocketHandler webSocketHandler;
+    private final NettyGatewayHub gatewayHub;
 
-    public WebSocketPublisher(ExecutionWebSocketHandler webSocketHandler) {
-        this.webSocketHandler = webSocketHandler;
+    public WebSocketPublisher(NettyGatewayHub gatewayHub) {
+        this.gatewayHub = gatewayHub;
     }
 
     public void publishEvent(String eventType, String executionId, String sessionId, Map<String, Object> data) {
@@ -21,7 +21,7 @@ public class WebSocketPublisher {
         payload.put("execution_id", executionId);
         payload.put("session_id", sessionId);
         payload.put("data", data == null ? Map.of() : data);
-        webSocketHandler.broadcast(payload);
+        gatewayHub.publish(payload);
     }
 
     public void publishEvent(String eventType, String executionId, Map<String, Object> data) {
@@ -35,7 +35,7 @@ public class WebSocketPublisher {
         payload.put("session_id", sessionId);
         payload.put("content", content);
         payload.put("is_complete", isComplete != null && isComplete);
-        webSocketHandler.broadcast(payload);
+        gatewayHub.publish(payload);
     }
 
     public void publishMessageDelta(String executionId, String content, Boolean isComplete) {

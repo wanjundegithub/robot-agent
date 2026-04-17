@@ -82,14 +82,30 @@ async def test_tool_node_retry_and_idempotency():
     node = ToolNode("search_flights", {
         "config": {
             "tool_code": "flight_search_api",
+            "url": "https://tools.example.com/flights/search",
+            "method": "POST",
             "retry_policy": "network_timeout",
-            "simulate_failures": 1,
             "idempotent": True
         }
     })
 
-    first_result = await node.execute(context)
-    second_result = await node.execute(context)
+    with patch('src.core.tool_registry.httpx.AsyncClient') as mock_client:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "flight_options": [{"flight_id": "MU5101", "price": 860}],
+            "summary": "找到 1 个航班选项。",
+        }
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.request.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        first_result = await node.execute(context)
+        second_result = await node.execute(context)
 
     assert first_result["output"]["flight_options"]
     assert first_result["metrics"]["cached"] is False

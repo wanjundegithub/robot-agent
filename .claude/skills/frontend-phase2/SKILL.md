@@ -1,6 +1,6 @@
 ---
 name: frontend-phase2
-description: Implement the Phase 2 frontend: orchestrator validation, WebSocket auto-reconnect, version operations, new node configuration, and stable execution visibility.
+description: Implement the Phase 2 frontend: editable orchestrator validation, Netty/WebSocket auto-reconnect, version operations, new node configuration, and stable execution visibility.
 ---
 
 # Frontend Phase 2
@@ -19,7 +19,7 @@ description: Implement the Phase 2 frontend: orchestrator validation, WebSocket 
 
 ## 实现约束
 
-- 前端只调用 Java 接口，只订阅 Java 推送的 WebSocket。
+- 前端主业务链路通过 Java 的 Netty + WebSocket；HTTP 仅保留管理、上传和健康检查等非主交互场景。
 - 重连只作用于 Java WebSocket，不把浏览器改成直连 Python。
 - 校验规则必须基于冻结后的后端合同，不自行发明 DSL。
 - 不在浏览器实现权限引擎、重试策略、幂等逻辑或向量检索逻辑。

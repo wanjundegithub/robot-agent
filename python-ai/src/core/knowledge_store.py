@@ -20,28 +20,7 @@ class KnowledgeDocument:
     keywords: List[str]
 
 
-SEED_KNOWLEDGE_BASES: Dict[str, Dict[str, List[KnowledgeDocument]]] = {
-    "flight_policy_kb": {
-        "1.0.0": [
-            KnowledgeDocument(
-                doc_id="flight_policy_001",
-                kb_code="flight_policy_kb",
-                kb_version="1.0.0",
-                title="退改签政策",
-                content="国内航班起飞前两小时可免费改签一次，退票按舱位收取手续费。",
-                keywords=["refund", "reschedule", "policy", "flight", "退票", "改签", "政策", "航班"],
-            ),
-            KnowledgeDocument(
-                doc_id="flight_policy_002",
-                kb_code="flight_policy_kb",
-                kb_version="1.0.0",
-                title="行李规则",
-                content="经济舱默认托运行李额为20公斤，超重部分按航空公司规定收费。",
-                keywords=["luggage", "baggage", "economy", "行李", "托运", "经济舱"],
-            ),
-        ]
-    }
-}
+DEFAULT_KNOWLEDGE_BASES: Dict[str, Dict[str, List[KnowledgeDocument]]] = {}
 
 
 class KnowledgeStore(Protocol):
@@ -58,6 +37,9 @@ class KnowledgeStore(Protocol):
 
 
 class InMemoryKnowledgeStore:
+    def __init__(self, documents: Dict[str, Dict[str, List[KnowledgeDocument]]] | None = None) -> None:
+        self._documents = documents or DEFAULT_KNOWLEDGE_BASES
+
     def search(
         self,
         kb_code: str,
@@ -67,7 +49,7 @@ class InMemoryKnowledgeStore:
         top_k: int = 5,
         score_threshold: float = 0.0,
     ) -> List[Dict[str, Any]]:
-        versions = SEED_KNOWLEDGE_BASES.get(kb_code, {})
+        versions = self._documents.get(kb_code, {})
         if not versions:
             return []
 
@@ -132,35 +114,9 @@ class PgVectorKnowledgeStore:
                         """
                     )
                 connection.commit()
-            self.seed_defaults()
             return True
         except Exception:
             return False
-
-    def seed_defaults(self) -> None:
-        with self._connect() as connection:
-            with connection.cursor() as cursor:
-                for versions in SEED_KNOWLEDGE_BASES.values():
-                    for documents in versions.values():
-                        for index, document in enumerate(documents):
-                            cursor.execute(
-                                f"""
-                                INSERT INTO {self._table_name} (doc_id, chunk_id, kb_code, kb_version, title, content, embedding, metadata)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                                ON CONFLICT (chunk_id) DO NOTHING
-                                """,
-                                (
-                                    document.doc_id,
-                                    f"{document.doc_id}:{index}",
-                                    document.kb_code,
-                                    document.kb_version,
-                                    document.title,
-                                    document.content,
-                                    self._embed_text(document.title + " " + document.content),
-                                    '{"keywords": []}',
-                                ),
-                            )
-            connection.commit()
 
     def search(
         self,

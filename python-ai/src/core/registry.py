@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional
 from .context import ExecutionContext
 from .protection import runtime_protection_manager
 from .runtime import ExecutionRuntime
-from .workflow_registry import get_workflow
 
 
 class ExecutionRegistry:
@@ -39,9 +38,23 @@ class ExecutionRegistry:
 
             workflow_code = payload["workflow_code"]
             workflow_version = payload["workflow_version"]
-            workflow = get_workflow(workflow_code, workflow_version)
+            workflow = payload.get("workflow_definition") or {}
             if not workflow:
-                raise ValueError(f"Workflow not found: {workflow_code}@{workflow_version}")
+                catalog = payload.get("workflow_catalog", {}) or {}
+                workflow = catalog.get(f"{workflow_code}@{workflow_version}") or {}
+            if not workflow:
+                raise ValueError(f"Workflow definition missing: {workflow_code}@{workflow_version}")
+
+            provider_configs = {
+                str(item.get("provider_code")): item
+                for item in payload.get("provider_configs", [])
+                if item.get("provider_code")
+            }
+            model_profiles = {
+                str(item.get("profile_code")): item
+                for item in payload.get("model_profiles", [])
+                if item.get("profile_code")
+            }
 
             context = ExecutionContext(
                 execution_id=payload["execution_id"],
@@ -60,6 +73,11 @@ class ExecutionRegistry:
                 threshold_source=payload.get("threshold_source"),
                 requested_tool_code=payload.get("requested_tool_code"),
                 confirmed_tool_codes=list(payload.get("confirmed_tool_codes", []) or []),
+                workflow_config=dict(payload.get("workflow_config", {}) or {}),
+                workflow_catalog=dict(payload.get("workflow_catalog", {}) or {}),
+                provider_configs=provider_configs,
+                model_profiles=model_profiles,
+                intent_profile_code=payload.get("intent_profile_code"),
             )
             context.add_execution_variables(payload.get("input_variables", {}))
             if context.confirmed_tool_codes:

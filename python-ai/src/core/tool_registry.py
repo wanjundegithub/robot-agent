@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any, Dict
 
+import httpx
+
 from .idempotency import get_idempotency_store
 from .retry import RetryableExecutionError, execute_with_retry
 
@@ -32,31 +34,30 @@ class ToolExecutorRegistry:
         return await execute_with_retry(retry_policy, _run)
 
     async def _execute_once(self, tool_code: str, params: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-        failure_limit = int(config.get("simulate_failures", 0))
-        failure_key = f"{tool_code}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
-        current_failures = self._failure_counts.get(failure_key, 0)
-        if current_failures < failure_limit:
-            self._failure_counts[failure_key] = current_failures + 1
-            raise RetryableExecutionError("timeout", f"Simulated timeout for tool {tool_code}")
+        url = config.get("url")
+        if not url:
+            raise RetryableExecutionError("validation_error", f"Tool config missing url: {tool_code}")
+        method = str(config.get("method", "POST")).upper()
+        timeout = float(config.get("timeout", 15))
+        headers = {str(key): str(value) for key, value in dict(config.get("headers", {})).items()}
 
-        if tool_code == "flight_search_api":
-            flights = [
-                {"flight_id": "MU5101", "departure_city": params.get("departure_city"), "arrival_city": params.get("arrival_city"), "departure_date": params.get("departure_date"), "price": 860},
-                {"flight_id": "CA1831", "departure_city": params.get("departure_city"), "arrival_city": params.get("arrival_city"), "departure_date": params.get("departure_date"), "price": 920},
-            ]
-            return {"flight_options": flights, "summary": f"找到 {len(flights)} 个航班选项。"}
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(
+                method=method,
+                url=str(url),
+                json=params if method in {"POST", "PUT", "PATCH"} else None,
+                params=params if method == "GET" else None,
+                headers=headers,
+            )
+        if response.status_code >= 500:
+            raise RetryableExecutionError("internal_error", f"Tool server error {response.status_code}: {response.text}")
+        if response.status_code >= 400:
+            raise RetryableExecutionError("validation_error", f"Tool call failed {response.status_code}: {response.text}")
 
-        if tool_code == "hotel_search_api":
-            hotels = [
-                {"hotel_id": "HTL1001", "city": params.get("arrival_city"), "name": "云栖酒店", "price_per_night": 480},
-                {"hotel_id": "HTL1002", "city": params.get("arrival_city"), "name": "星河酒店", "price_per_night": 560},
-            ]
-            return {"hotel_options": hotels, "summary": f"找到 {len(hotels)} 家酒店。"}
-
-        if tool_code == "seat_inventory_api":
-            return {"available": True, "count": 6, "flight_id": params.get("flight_id")}
-
-        raise RetryableExecutionError("validation_error", f"Unsupported tool: {tool_code}")
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            return response.json()
+        return {"raw_response": response.text}
 
     def _tool_key(self, tool_code: str, params: Dict[str, Any]) -> str:
         serialized = json.dumps(params, sort_keys=True, ensure_ascii=False)

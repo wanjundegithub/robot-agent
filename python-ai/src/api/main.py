@@ -9,6 +9,7 @@ from .models import (
     ExecuteRequest,
     ExecuteStatusResponse,
     FormSubmitRequest,
+    IntentClassificationRequest,
     RagEvaluationRequest,
     RecommendationRequest,
     ResumeExecutionResponse,
@@ -23,6 +24,7 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
+from src.core.model_runtime import classify_intent_with_profile
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
 from src.core.protection import ProtectionError, runtime_protection_manager
 from src.core.registry import ExecutionRegistry
@@ -151,6 +153,27 @@ async def health_check():
 @app.get("/api/phase5/runtime-status")
 async def runtime_status():
     return runtime_protection_manager.build_runtime_status()
+
+
+@app.post("/api/phase5/intents/classify")
+async def classify_intent(request: IntentClassificationRequest):
+    provider_configs = {
+        str(item.get("provider_code")): item
+        for item in request.provider_configs
+        if item.get("provider_code")
+    }
+    model_profiles = {
+        str(item.get("profile_code")): item
+        for item in request.model_profiles
+        if item.get("profile_code")
+    }
+    return await classify_intent_with_profile(
+        message=request.message,
+        candidate_workflows=request.candidate_workflows,
+        intent_profile_code=request.intent_profile_code,
+        provider_configs=provider_configs,
+        model_profiles=model_profiles,
+    )
 
 
 @app.post("/api/phase4/route-thresholds/resolve")

@@ -20,6 +20,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
+    private final LlmProviderConfigRepository llmProviderConfigRepository;
+    private final LlmModelProfileRepository llmModelProfileRepository;
     private final RoleRepository roleRepository;
     private final UserRoleRepository userRoleRepository;
     private final ObjectMapper objectMapper;
@@ -29,6 +31,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
             WorkflowVersionRepository workflowVersionRepository,
             KnowledgeBaseRepository knowledgeBaseRepository,
             KnowledgeVersionRepository knowledgeVersionRepository,
+            LlmProviderConfigRepository llmProviderConfigRepository,
+            LlmModelProfileRepository llmModelProfileRepository,
             RoleRepository roleRepository,
             UserRoleRepository userRoleRepository,
             ObjectMapper objectMapper
@@ -37,6 +41,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         this.workflowVersionRepository = workflowVersionRepository;
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeVersionRepository = knowledgeVersionRepository;
+        this.llmProviderConfigRepository = llmProviderConfigRepository;
+        this.llmModelProfileRepository = llmModelProfileRepository;
         this.roleRepository = roleRepository;
         this.userRoleRepository = userRoleRepository;
         this.objectMapper = objectMapper;
@@ -45,6 +51,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) throws Exception {
         seedRoles();
+        seedModelConfigs();
         seedKnowledgeBase();
         seedWorkflows();
     }
@@ -119,6 +126,51 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         knowledgeBaseRepository.save(knowledgeBase);
     }
 
+    private void seedModelConfigs() throws Exception {
+        if (llmProviderConfigRepository.findByProviderCode("openai-compatible-prod").isEmpty()) {
+            LlmProviderConfig provider = new LlmProviderConfig();
+            provider.setProviderCode("openai-compatible-prod");
+            provider.setProviderType("openai_compatible");
+            provider.setBaseUrl("https://llm.example.com/v1");
+            provider.setApiKeySecretRef("env:ROBOT_LLM_API_KEY");
+            provider.setExtraHeaders(objectMapper.writeValueAsString(Map.of("x-tenant-id", "workspace_001")));
+            provider.setCreatedBy("system");
+            llmProviderConfigRepository.save(provider);
+        }
+
+        seedProfile("intent-router-v1", "openai-compatible-prod", "qwen-plus", "intent_routing", 0.10d, 0.80d, 512);
+        seedProfile("knowledge-query-rewrite-v1", "openai-compatible-prod", "qwen-plus", "knowledge_query_rewrite", 0.10d, 0.90d, 512);
+        seedProfile("knowledge-answer-v1", "openai-compatible-prod", "qwen-plus", "knowledge_answer", 0.20d, 0.90d, 1024);
+        seedProfile("general-chat-v1", "openai-compatible-prod", "qwen-plus", "general_llm", 0.30d, 0.95d, 1024);
+        seedProfile("general-chat-fallback-v1", "openai-compatible-prod", "qwen-turbo", "general_llm", 0.20d, 0.90d, 1024);
+        seedProfile("structured-extraction-v1", "openai-compatible-prod", "qwen-plus", "structured_extraction", 0.10d, 0.80d, 512);
+    }
+
+    private void seedProfile(
+            String profileCode,
+            String providerCode,
+            String modelCode,
+            String purpose,
+            double temperature,
+            double topP,
+            int maxTokens
+    ) {
+        if (llmModelProfileRepository.findByProfileCode(profileCode).isPresent()) {
+            return;
+        }
+        LlmModelProfile profile = new LlmModelProfile();
+        profile.setProfileCode(profileCode);
+        profile.setProviderCode(providerCode);
+        profile.setModelCode(modelCode);
+        profile.setPurpose(purpose);
+        profile.setTemperature(java.math.BigDecimal.valueOf(temperature));
+        profile.setTopP(java.math.BigDecimal.valueOf(topP));
+        profile.setMaxTokens(maxTokens);
+        profile.setTimeoutSec(15);
+        profile.setCreatedBy("system");
+        llmModelProfileRepository.save(profile);
+    }
+
     private void seedWorkflows() throws Exception {
         seedWorkflowDefinition("flight_booking", "Flight Booking", "Phase 2 flight booking workflow.", "2.0.0");
         seedWorkflowDefinition("hotel_booking", "Hotel Booking", "Phase 2 hotel booking workflow.", "1.0.0");
@@ -160,7 +212,16 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
         workflowVersion.setDefinition(objectMapper.writeValueAsString(definition));
         workflowVersion.setEntryRule(objectMapper.writeValueAsString(entryRule));
-        workflowVersion.setConfig(objectMapper.writeValueAsString(Map.of("demo", true)));
+        workflowVersion.setEditorMeta(objectMapper.writeValueAsString(Map.of(
+                "layout_engine", "reactflow",
+                "viewport", Map.of("x", 0, "y", 0, "zoom", 0.92),
+                "readonly", false,
+                "last_saved_by", "system"
+        )));
+        workflowVersion.setConfig(objectMapper.writeValueAsString(Map.of(
+                "intent_profile_ref", "intent-router-v1",
+                "llm_defaults", Map.of("model_profile_ref", "general-chat-v1", "provider_code", "openai-compatible-prod")
+        )));
         workflowVersion.setCreatedBy("system");
         workflowVersion.setCreatedAt(LocalDateTime.now());
         workflowVersion.setPublishedAt(LocalDateTime.now());
@@ -182,7 +243,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_profile_ref", "structured-extraction-v1")),
                         "check_slots", Map.of("id", "check_slots", "type", "condition", "config", Map.of("required_fields", List.of("departure_city", "arrival_city", "departure_date"))),
                         "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("请补充出行信息", "还缺少部分订票信息，请补全后继续。")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
@@ -208,10 +269,10 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_profile_ref", "structured-extraction-v1")),
                         "check_slots", Map.of("id", "check_slots", "type", "condition", "config", Map.of("required_fields", List.of("departure_city", "arrival_city", "departure_date"))),
                         "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("请补充航班需求", "需要完整的出发地、目的地和日期。")),
-                        "search_flights", Map.of("id", "search_flights", "type", "tool", "config", Map.of("tool_code", "flight_search_api", "retry_policy", "network_timeout", "idempotent", true, "simulate_failures", 1)),
+                        "search_flights", Map.of("id", "search_flights", "type", "tool", "config", Map.of("tool_code", "flight_search_api", "url", "http://localhost:19001/api/flights/search", "method", "POST", "retry_policy", "network_timeout", "idempotent", true)),
                         "check_seat_availability", Map.of("id", "check_seat_availability", "type", "subflow", "config", Map.of("subflow_code", "seat_check", "subflow_version", "1.0.0")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "departure_city", "execution.departure_city",
@@ -240,7 +301,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "hotel_slot_extraction")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "hotel_slot_extraction", "model_profile_ref", "structured-extraction-v1")),
                         "collect_info", Map.of("id", "collect_info", "type", "form", "config", Map.of(
                                 "title", "请补充酒店需求",
                                 "description", "需要目的地和入住日期。",
@@ -250,7 +311,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                                         Map.of("name", "nights", "type", "number", "required", false, "label", "入住晚数")
                                 )
                         )),
-                        "search_hotels", Map.of("id", "search_hotels", "type", "tool", "config", Map.of("tool_code", "hotel_search_api", "retry_policy", "network_timeout", "idempotent", true)),
+                        "search_hotels", Map.of("id", "search_hotels", "type", "tool", "config", Map.of("tool_code", "hotel_search_api", "url", "http://localhost:19001/api/hotels/search", "method", "POST", "retry_policy", "network_timeout", "idempotent", true)),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "arrival_city", "execution.arrival_city",
                                 "departure_date", "execution.departure_date",
@@ -277,9 +338,11 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                                 "knowledge_base_code", "flight_policy_kb",
                                 "kb_version", "1.0.0",
                                 "retrieval_mode", "hybrid",
-                                "top_k", 3
+                                "top_k", 3,
+                                "query_rewrite", Map.of("enabled", true, "model_profile_ref", "knowledge-query-rewrite-v1"),
+                                "answer_generation", Map.of("enabled", true, "model_profile_ref", "knowledge-answer-v1")
                         )),
-                        "answer_query", Map.of("id", "answer_query", "type", "llm", "config", Map.of("prompt", "knowledge_answer")),
+                        "answer_query", Map.of("id", "answer_query", "type", "llm", "config", Map.of("prompt", "knowledge_answer", "model_profile_ref", "knowledge-answer-v1")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "answer", "execution.answer",
                                 "retrieved_docs", "execution.retrieved_docs"

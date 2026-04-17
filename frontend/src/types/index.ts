@@ -73,6 +73,7 @@ export type ExecutionEventType =
   | 'protection.degraded'
   | 'protection.circuit_open'
   | 'optimization.vector_access'
+  | 'workflow.validation_failed'
 
 export interface ExecutionEventEnvelope {
   type: 'event'
@@ -90,7 +91,34 @@ export interface MessageDeltaEnvelope {
   is_complete?: boolean
 }
 
-export type WebSocketEnvelope = ExecutionEventEnvelope | MessageDeltaEnvelope
+export interface GatewayAckEnvelope<T = Record<string, unknown>> {
+  type: 'ack'
+  request_id: string
+  action: string
+  status: string
+  data?: T
+}
+
+export interface GatewayErrorEnvelope {
+  type: 'error'
+  request_id?: string
+  error_code: string
+  message: string
+}
+
+export interface GatewayActionEnvelope {
+  type: 'action'
+  request_id: string
+  action: string
+  session_id?: string
+  payload?: Record<string, unknown>
+}
+
+export type WebSocketEnvelope =
+  | ExecutionEventEnvelope
+  | MessageDeltaEnvelope
+  | GatewayAckEnvelope
+  | GatewayErrorEnvelope
 
 export interface ExecutionEventView {
   id: string
@@ -202,6 +230,7 @@ export interface WorkflowVersionSummary {
   status: string
   definition?: string
   entryRule?: string
+  editorMeta?: string
   config?: string
 }
 
@@ -231,4 +260,10 @@ export interface OperationalReadiness {
     redis_cluster: Record<string, unknown>
     vector_sharding: Record<string, unknown>
   }
+}
+
+export interface WorkflowValidationIssue {
+  node_id?: string | null
+  field: string
+  message: string
 }

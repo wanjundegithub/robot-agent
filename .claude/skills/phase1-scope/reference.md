@@ -12,7 +12,7 @@
 - 数据库: 核心表创建
 - 前端: 基础聊天 UI
 - 前端: 拖拽节点与连线的编排器
-- Java: API 网关、会话管理、工作流管理、SSE 消费与对前端推送
+- Java: Netty 网关、会话管理、工作流管理、SSE 消费与对前端推送
 - Python: 执行引擎、路由引擎、状态机、上下文管理、P0 节点
 - 通信: Java 和 Python 通过 HTTP + SSE
 - 验收: 1 个完整流程跑通
@@ -36,8 +36,8 @@
 
 ## 通信约束
 
-- Frontend -> Java: HTTP
-- Java -> Frontend: WebSocket 推送
+- Frontend -> Java: Netty + WebSocket
+- Java -> Frontend: 同一 Netty + WebSocket 通道
 - Java -> Python: HTTP + SSE
 - 内部服务: HTTP REST
 

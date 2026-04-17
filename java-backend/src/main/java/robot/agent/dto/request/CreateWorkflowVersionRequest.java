@@ -9,6 +9,8 @@ public class CreateWorkflowVersionRequest {
     private String definition;
     @JsonProperty("entry_rule")
     private String entryRule;
+    @JsonProperty("editor_meta")
+    private String editorMeta;
     private String config;
 
     public String getWorkflowCode() { return workflowCode; }
@@ -22,6 +24,9 @@ public class CreateWorkflowVersionRequest {
 
     public String getEntryRule() { return entryRule; }
     public void setEntryRule(String entryRule) { this.entryRule = entryRule; }
+
+    public String getEditorMeta() { return editorMeta; }
+    public void setEditorMeta(String editorMeta) { this.editorMeta = editorMeta; }
 
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }

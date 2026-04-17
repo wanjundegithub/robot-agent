@@ -1,6 +1,6 @@
 ---
 name: frontend-phase1
-description: Implement the Phase 1 frontend: chat UI, React Flow orchestrator, WebSocket execution stream, form interaction, and closed-loop flow visibility.
+description: Implement the Phase 1 frontend: chat UI, editable React Flow orchestrator baseline, Netty/WebSocket execution stream, form interaction, and closed-loop flow visibility.
 ---
 
 # Frontend Phase 1
@@ -19,10 +19,10 @@ description: Implement the Phase 1 frontend: chat UI, React Flow orchestrator, W
 
 ## 实现约束
 
-- 前端只调用 Java 接口，只订阅 Java 推送的 WebSocket。
+- 前端主业务链路通过 Java 的 Netty + WebSocket；HTTP 仅保留管理、上传和健康检查等非主交互场景。
 - 编排器只覆盖 Phase 1 节点，不要提前平台化 Phase 2 节点能力。
 - UI 重点是让用户看清流程状态，不是做完整后台系统。
-- 如果后端合同未冻结，先用 mock 合同开发，不要自行发明新协议。
+- 如果后端合同未冻结，先推动冻结 action / ack / event 协议，不要用 mock 合同自创主链路。
 
 ## 重点检查
 

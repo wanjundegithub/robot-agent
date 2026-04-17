@@ -20,8 +20,8 @@ const ReplayPanel: React.FC<ReplayPanelProps> = ({ executionId }) => {
     <div className="panel-card h-full flex flex-col">
       <div className="panel-header">
         <div>
-          <div className="panel-title">Replay</div>
-          <div className="text-xs text-slate-500">Phase 4 execution replay</div>
+          <div className="panel-title">执行回放</div>
+          <div className="text-xs text-slate-500">第四阶段 执行回放</div>
         </div>
       </div>
       <div className="panel-body space-y-3 overflow-y-auto">
@@ -34,7 +34,7 @@ const ReplayPanel: React.FC<ReplayPanelProps> = ({ executionId }) => {
               <div className="text-xs text-slate-500">{replay.workflow_version} · {replay.status}</div>
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Event Stream</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">事件流</div>
               <ul className="space-y-2">
                 {replay.event_stream.slice(0, 6).map((event, index) => (
                   <li key={`${String(event.event_type)}_${index}`} className="rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-700">
@@ -44,7 +44,7 @@ const ReplayPanel: React.FC<ReplayPanelProps> = ({ executionId }) => {
               </ul>
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">Final Output</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 mb-2">最终输出</div>
               <pre className="max-h-48 overflow-auto rounded-xl bg-slate-950 px-3 py-3 text-xs text-slate-100">
                 {JSON.stringify(replay.output_variables, null, 2)}
               </pre>

@@ -20,6 +20,13 @@ class ExecuteRequest(BaseModel):
     threshold_source: Optional[str] = Field(default=None, description="Threshold source")
     requested_tool_code: Optional[str] = Field(default=None, description="High-risk tool requested by Java")
     confirmed_tool_codes: list[str] = Field(default_factory=list, description="Confirmed high-risk tools")
+    workflow_definition: Dict[str, Any] = Field(default_factory=dict)
+    entry_rule: Dict[str, Any] = Field(default_factory=dict)
+    workflow_config: Dict[str, Any] = Field(default_factory=dict)
+    workflow_catalog: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
+    model_profiles: list[Dict[str, Any]] = Field(default_factory=list)
+    intent_profile_code: Optional[str] = Field(default=None)
     input_variables: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -59,3 +66,11 @@ class RecommendationRequest(BaseModel):
 
 class RagEvaluationRequest(BaseModel):
     dataset: Optional[list[Dict[str, Any]]] = None
+
+
+class IntentClassificationRequest(BaseModel):
+    message: str
+    candidate_workflows: list[Dict[str, Any]] = Field(default_factory=list)
+    provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
+    model_profiles: list[Dict[str, Any]] = Field(default_factory=list)
+    intent_profile_code: str

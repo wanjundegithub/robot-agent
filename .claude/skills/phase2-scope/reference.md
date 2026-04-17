@@ -38,7 +38,7 @@
 - Java: Spring Boot 3.x
 - Python: Python 3.11+ + FastAPI + LangGraph
 - 数据 / 基础设施: MySQL 8.0+、Redis 7.x、pgvector、OpenTelemetry、Prometheus、Grafana
-- Frontend -> Java: HTTP + WebSocket
+- Frontend -> Java: Netty + WebSocket
 - Java -> Python: HTTP + SSE
 - 浏览器实时链路只能来自 Java；WebSocket 自动重连属于前端行为，不改变服务边界
 

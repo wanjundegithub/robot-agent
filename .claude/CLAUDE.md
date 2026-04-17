@@ -23,50 +23,53 @@ Phase 1、Phase 2、Phase 3、Phase 4 已视为完成基线。任何 Phase 5 实
 - 不允许为了做性能或稳定性优化而破坏 Phase 1/2/3/4 已有接口、事件、审计、评测、成本和仪表盘合同。
 - 不允许把 ABAC 和高风险确认做成无边界通用权限平台，脱离当前产品与工具模型。
 - 不允许为了日志归档或回放优化而保留未脱敏的原始敏感数据。
-- 不允许把浏览器实时链路改成直连 Python；前端仍然只连接 Java 的 HTTP / WebSocket。
+- 不允许把浏览器实时链路改成直连 Python；前端主业务链路仍然只连接 Java 的 Netty + WebSocket，HTTP 只保留管理和上传类场景。
 - 不允许把生产优化偷换成“推倒重构”或引入当前仓库无法承接的超大规模基础设施方案。
+- 不允许在主执行链路返回 Mock / Demo / Stub 数据；意图、知识、工具和执行结果都必须走真实配置或显式失败。
 
 ## 架构硬约束
 
 - 前端技术栈: React + Vite + React Flow。
-- Java 技术栈: Spring Boot 3.x，负责接入层、权限聚合、熔断/限流入口、日志与审计聚合、浏览器推送。
-- Python 技术栈: Python 3.11+ + FastAPI + LangGraph，负责运行时限流、降级策略、工具二次确认、高风险执行控制和向量访问优化挂点。
+- Java 技术栈: Spring Boot 3.x + Netty，负责浏览器接入层、WebSocket action/ack/event 合同、权限聚合、熔断/限流入口、日志与审计聚合、浏览器推送。
+- Python 技术栈: Python 3.11+ + FastAPI + LangGraph，负责运行时限流、降级策略、工具二次确认、高风险执行控制、向量访问优化挂点，以及真实模型 / 知识配置的执行消费。
 - 数据与基础设施: MySQL 8.0+、Redis 7.x、pgvector、OpenTelemetry、Prometheus、Grafana。
-- Frontend 到 Java: HTTP 请求 + WebSocket 推送。
+- Frontend 到 Java: Netty + WebSocket 双向主业务通信；HTTP 仅用于后台管理、文件上传和健康检查。
 - Java 到 Python: HTTP 请求 + SSE 流式事件。
 - Redis 集群、向量分片、索引优化、熔断、限流、日志归档清理都必须建立在现有数据模型和事件模型之上。
 - ABAC 必须建立在现有 RBAC / 工具模型 / 用户属性之上，不能脱离现有执行与审计模型单独设计。
 - 高风险操作二次确认必须有明确的确认对象、确认时效、审计写点和前端反馈。
 - 日志归档和清理自动化必须与回放、评测、审计和脱敏口径保持一致。
+- 前端编排器必须是可编辑 React Flow 画布，支持节点/连线编辑、属性面板、校验和保存草稿。
+- 意图命中、知识库查询改写、知识回答和通用 LLM 节点都必须走 Provider + Model Profile 配置，不能写死模型名。
 
 ## 默认团队编组
 
 遇到需要实施、重构、联调、或验收的工作时，Claude Code 必须默认组建以下 team 并分工推进:
 
 - `tech-leader`: 负责 Phase 5 拆解、接口冻结、范围控制、跨角色评审与最终验收。
-- `backend-java`: 负责 `java-backend/**` 的 ABAC、二次确认、熔断/限流入口、审计聚合和生产接口优化。
-- `frontend`: 负责 `frontend/**` 的高风险确认 UI、权限反馈、降级提示和运维可见性。
-- `python-dev`: 负责 `python-ai/**` 的运行时降级、限流、二次确认、工具执行保护和向量访问优化挂点。
+- `backend-java`: 负责 `java-backend/**` 的 Netty + WebSocket 网关合同、ABAC、二次确认、熔断/限流入口、审计聚合、模型配置接入和生产接口优化。
+- `frontend`: 负责 `frontend/**` 的高风险确认 UI、权限反馈、降级提示、可编辑画布和运维可见性。
+- `python-dev`: 负责 `python-ai/**` 的运行时降级、限流、二次确认、工具执行保护、向量访问优化挂点，以及意图/知识链路的大模型配置消费。
 - `platform-reliability`: 负责 Redis 集群、向量分片、索引优化、日志归档/清理、容量与故障恢复策略。
-- `qa`: 负责稳定性、回归、限流、熔断、ABAC、二次确认和归档清理验证。
-- `security`: 负责 ABAC、二次确认、日志与归档链路中的安全边界和残余风险。
+- `qa`: 负责稳定性、回归、限流、熔断、ABAC、二次确认、无 Mock 主链、WebSocket 契约和归档清理验证。
+- `security`: 负责 ABAC、二次确认、日志与归档链路中的安全边界、WebSocket 鉴权和模型配置密钥边界。
 
 ## 协作顺序
 
-1. 先让 `tech-leader` 冻结 ABAC 模型、高风险操作清单、二次确认合同、熔断 / 限流 / 降级策略、索引优化目标、Redis/向量分片边界和日志分层清理策略。
+1. 先让 `tech-leader` 冻结 ABAC 模型、高风险操作清单、二次确认合同、Netty + WebSocket action/ack/event 合同、可编辑画布 schema、模型 Provider/Profile 合同、熔断 / 限流 / 降级策略、索引优化目标、Redis/向量分片边界和日志分层清理策略。
 2. `platform-reliability` 与 `backend-java`、`python-dev` 先对齐容量、集群、分片、归档、清理和故障恢复策略，再并行开发。
-3. `backend-java` 与 `python-dev` 对齐熔断、限流、降级、二次确认、ABAC 决策输入输出和审计字段。
+3. `backend-java` 与 `python-dev` 对齐熔断、限流、降级、二次确认、ABAC 决策、模型 Profile 解析、知识检索输入输出和审计字段。
 4. `security` 先评审权限细化、确认流程、日志归档清理中的最小暴露和审计要求。
-5. `frontend` 基于冻结后的 HTTP / WebSocket 合同开发确认弹层、权限拒绝提示、降级提示和可观测反馈。
-6. `qa` 依据 Phase 5 目标补齐性能、稳定性、权限、安全、清理自动化与回归验证。
+5. `frontend` 基于冻结后的 Netty + WebSocket 合同开发确认弹层、权限拒绝提示、降级提示、可编辑画布和可观测反馈。
+6. `qa` 依据 Phase 5 目标补齐性能、稳定性、权限、安全、清理自动化、无 Mock 主链和回归验证。
 7. 最后由 `tech-leader` 做集成评审，确认实现既没有越过 Phase 5 边界，也没有回归 Phase 1/2/3/4。
 
 ## 角色边界
 
 - `tech-leader` 主要产出设计决策、任务拆解、评审结论，不直接吞并所有实现任务。
 - `backend-java` 不负责 Python 内部限流/降级细节或基础设施集群运维实现。
-- `frontend` 不直连 Python，也不在浏览器里实现权限引擎、熔断判定、成本统计或集群逻辑。
-- `python-dev` 不负责 Java 侧权限聚合、日志归档编排或前端确认交互文案。
+- `frontend` 不直连 Python，也不在浏览器里实现权限引擎、熔断判定、成本统计或集群逻辑，但要负责可编辑画布体验与 WebSocket 协议消费。
+- `python-dev` 不负责 Java 侧权限聚合、日志归档编排或前端确认交互文案，但要保证意图/知识运行时不返回 Mock 结果。
 - `platform-reliability` 负责性能、稳定性、归档和容量口径，不替代业务开发角色实现主业务功能。
 - `security` 负责守住 ABAC、确认流程、日志归档清理中的安全边界，不扩成无边界安全平台。
 - `qa` 可以补压测脚本、故障样例和归档清理验证，但不替代开发角色实现主功能。
@@ -80,5 +83,7 @@ Phase 1、Phase 2、Phase 3、Phase 4 已视为完成基线。任何 Phase 5 实
 - 日志归档与清理自动化可验证。
 - 权限细化 (ABAC) 可执行。
 - 高风险操作二次确认可执行。
+- 前端主业务链路基于 Netty + WebSocket 可验证。
+- 主执行链路无 Mock / Demo / Stub 返回。
 
 此外，Redis 集群、向量库分片、熔断器、限流细化、日志分层治理都属于 Phase 5 完成项，不得遗漏。
