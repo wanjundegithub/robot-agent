@@ -6,7 +6,7 @@ import {
   publishWorkflow,
   rollbackWorkflow,
 } from '../services/api'
-import type { WorkflowSummary, WorkflowVersionSummary } from '../types'
+import type { WorkflowEditorSelection, WorkflowSummary, WorkflowVersionSummary } from '../types'
 import type { WorkflowVersionMutation } from './Orchestrator'
 
 interface WorkflowPanelProps {
@@ -14,6 +14,7 @@ interface WorkflowPanelProps {
   workflowCode?: string
   refreshSignal?: WorkflowVersionMutation | null
   onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
+  onEditVersion?: (selection: WorkflowEditorSelection) => void
 }
 
 interface WorkflowVersionGroup {
@@ -26,6 +27,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
   workflowCode,
   refreshSignal,
   onWorkflowVersionMutation,
+  onEditVersion,
 }) => {
   const [groups, setGroups] = useState<WorkflowVersionGroup[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -36,7 +38,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     setError(null)
 
     try {
-      const workflows = await getWorkflows()
+      const workflows = (await getWorkflows()).filter((item) => item.createdBy !== 'system')
       const orderedWorkflows = [...workflows].sort((left, right) => {
         const leftIsCurrent = left.workflowCode === workflowCode
         const rightIsCurrent = right.workflowCode === workflowCode
@@ -195,6 +197,19 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            <button
+                              className="rounded-md border border-sky-200 px-2 py-1 text-xs text-sky-700 hover:border-sky-300"
+                              onClick={() =>
+                                onEditVersion?.({
+                                  workflowCode: group.workflow.workflowCode,
+                                  workflowName: group.workflow.name,
+                                  publishedVersion: group.workflow.currentVersion,
+                                  version: { ...version },
+                                })
+                              }
+                            >
+                              编辑
+                            </button>
                             <button
                               className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
                               onClick={() => void handlePublish(group.workflow.workflowCode, version.version)}

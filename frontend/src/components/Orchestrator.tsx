@@ -12,7 +12,7 @@ import ReactFlow, {
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { publishWorkflow, saveWorkflowDraft, validateWorkflowDraft } from '../services/api'
-import type { WorkflowValidationIssue } from '../types'
+import type { WorkflowEditorSelection, WorkflowValidationIssue } from '../types'
 
 type DesignerNodeType = 'start' | 'coordinate' | 'sub_agent' | 'tool' | 'message' | 'end'
 type VariableScope = 'global' | 'temp'
@@ -97,6 +97,7 @@ export interface OrchestratorHandle {
 
 interface OrchestratorProps {
   currentUserId: string
+  editorSelection?: WorkflowEditorSelection | null
   onWorkflowDraftChange?: (draft: WorkflowDraftPayload) => void
   onWorkflowSidebarStateChange?: (state: WorkflowSidebarState) => void
   onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
@@ -226,7 +227,7 @@ const emptyVariableForm = {
 }
 
 const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function Orchestrator(
-  { currentUserId, onWorkflowDraftChange, onWorkflowSidebarStateChange, onWorkflowVersionMutation },
+  { currentUserId, editorSelection, onWorkflowDraftChange, onWorkflowSidebarStateChange, onWorkflowVersionMutation },
   ref
 ) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
@@ -355,6 +356,27 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     workflowMeta,
     workflowName,
   ])
+
+  useEffect(() => {
+    if (!editorSelection) return
+
+    const hydrated = hydrateWorkflowSelection(editorSelection)
+    setNodes(hydrated.nodes)
+    setEdges(hydrated.edges)
+    setSelectedNodeId(null)
+    setWorkflowName(hydrated.workflowName)
+    setWorkflowMeta({
+      workflowId: hydrated.workflowId,
+      workflowCode: hydrated.workflowCode,
+      draftVersion: hydrated.draftVersion,
+      publishedVersion: hydrated.publishedVersion,
+    })
+    setGlobalVariables(hydrated.globalVariables)
+    setTempVariables(hydrated.tempVariables)
+    setVariableForm(emptyVariableForm)
+    setValidationIssues([])
+    setSaveStatus(`已载入版本 ${editorSelection.version.version}`)
+  }, [editorSelection, setEdges, setNodes])
 
   const ensureWorkflowBasics = () => {
     const trimmedName = workflowName.trim()
@@ -1082,6 +1104,245 @@ function createPublishVersion() {
     String(now.getSeconds()).padStart(2, '0'),
   ]
   return `v${parts.join('')}`
+}
+
+function hydrateWorkflowSelection(selection: WorkflowEditorSelection) {
+  const definition = parseJsonObject(selection.version.definition)
+  const versionConfig = parseJsonObject(selection.version.config)
+  const definitionConfig = asRecord(definition.config)
+  const variableRegistry =
+    asRecord(versionConfig.variable_registry).global || asRecord(versionConfig.variable_registry).temporary
+      ? asRecord(versionConfig.variable_registry)
+      : asRecord(definitionConfig.variable_registry)
+
+  const globalVariables = toVariableDefinitions(variableRegistry.global, 'global')
+  const tempVariables = toVariableDefinitions(variableRegistry.temporary, 'temp')
+  const variableNameToId = new Map(
+    [...globalVariables, ...tempVariables].map((variable) => [variable.name, variable.id])
+  )
+  const nodes = buildCanvasNodes(asRecord(definition.nodes), variableNameToId)
+  const edges = buildCanvasEdges(asRecord(definition.transitions))
+
+  return {
+    workflowId: selection.version.workflowId ?? null,
+    workflowCode: selection.workflowCode,
+    workflowName:
+      stringValue(definition.workflow_name) ||
+      selection.workflowName ||
+      selection.version.workflowName ||
+      selection.workflowCode,
+    draftVersion:
+      String(selection.version.status || '').toLowerCase() === 'draft' ? selection.version.version : DRAFT_VERSION,
+    publishedVersion:
+      selection.publishedVersion ||
+      (String(selection.version.status || '').toLowerCase() === 'published' ? selection.version.version : null),
+    globalVariables,
+    tempVariables,
+    nodes: nodes.length > 0 ? nodes : structuredClone(initialNodes),
+    edges,
+  }
+}
+
+function buildCanvasNodes(
+  source: Record<string, unknown>,
+  variableNameToId: Map<string, string>
+): Node<CanvasNodeData>[] {
+  const entries = Object.values(source)
+  if (entries.length === 0) {
+    return structuredClone(initialNodes)
+  }
+
+  return entries.map((item, index) => {
+    const node = asRecord(item)
+    const nodeId = stringValue(node.id) || `node_${index + 1}`
+    const nodeType = normalizeDesignerNodeType(stringValue(node.type))
+    const config = denormalizeNodeConfig(nodeType, asRecord(node.config), variableNameToId)
+    return {
+      id: nodeId,
+      type: toFlowType(nodeType),
+      position: { x: 120 + (index % 3) * 280, y: 120 + Math.floor(index / 3) * 180 },
+      data: {
+        label: stringValue(node.name) || resolveNodeLabel(nodeType),
+        nodeType,
+        config,
+      },
+    }
+  })
+}
+
+function buildCanvasEdges(source: Record<string, unknown>): Edge[] {
+  const seen = new Set<string>()
+  const edges: Edge[] = []
+
+  Object.entries(source).forEach(([fromNodeId, target]) => {
+    const targets = typeof target === 'string'
+      ? [target]
+      : Object.values(asRecord(target)).filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+    targets.forEach((toNodeId, index) => {
+      const edgeKey = `${fromNodeId}->${toNodeId}`
+      if (!fromNodeId || !toNodeId || seen.has(edgeKey)) return
+      seen.add(edgeKey)
+      edges.push({
+        id: `edge_${fromNodeId}_${toNodeId}_${index}`,
+        source: fromNodeId,
+        target: toNodeId,
+      })
+    })
+  })
+
+  return edges
+}
+
+function denormalizeNodeConfig(
+  nodeType: DesignerNodeType,
+  config: Record<string, unknown>,
+  variableNameToId: Map<string, string>
+) {
+  switch (nodeType) {
+    case 'start':
+      return {
+        prompt: String(config.prompt || ''),
+        input_variable_ids: mapObjectKeysToVariableIds(config.initial_variables, variableNameToId),
+      }
+    case 'coordinate':
+    case 'sub_agent':
+      return {
+        prompt: String(config.prompt || config.user_prompt || ''),
+      }
+    case 'message':
+      return {
+        message_text: String(config.message_text || ''),
+      }
+    case 'tool': {
+      const invokeType = String(config.invoke_type || 'api')
+      const restored: Record<string, unknown> = {
+        invoke_type: invokeType,
+        payload_mapping: ensureObject(config.payload_mapping),
+      }
+      if (invokeType === 'function') {
+        restored.function_name = String(config.function_name || config.tool_code || '')
+      } else if (invokeType === 'api') {
+        restored.url = String(config.url || '')
+        restored.method = String(config.method || 'POST')
+      } else if (invokeType === 'mcp') {
+        restored.mcp_endpoint = String(config.mcp_endpoint || '')
+        restored.tool_name = String(config.tool_name || config.tool_code || '')
+      } else if (invokeType === 'skill') {
+        restored.skill_endpoint = String(config.skill_endpoint || '')
+        restored.skill_name = String(config.skill_name || config.tool_code || '')
+      }
+      return restored
+    }
+    case 'end':
+      return {
+        prompt: String(config.prompt || ''),
+        output_variable_ids: mapObjectKeysToVariableIds(config.output_format, variableNameToId),
+      }
+    default:
+      return config
+  }
+}
+
+function mapObjectKeysToVariableIds(source: unknown, variableNameToId: Map<string, string>) {
+  return Object.keys(asRecord(source))
+    .map((name) => variableNameToId.get(name))
+    .filter((item): item is string => Boolean(item))
+}
+
+function toVariableDefinitions(source: unknown, scope: VariableScope): VariableDefinition[] {
+  if (!Array.isArray(source)) {
+    return []
+  }
+
+  return source.map((item, index) => {
+    const value = asRecord(item)
+    return {
+      id: stringValue(value.id) || `${scope}_${index + 1}`,
+      name: stringValue(value.name) || `${scope}_var_${index + 1}`,
+      type: normalizeVariableType(stringValue(value.type)),
+      scope,
+      description: stringValue(value.description) || '',
+    }
+  })
+}
+
+function normalizeVariableType(value: string | null): VariableType {
+  if (!value) return 'string'
+  const allowedTypes: VariableType[] = [
+    'string',
+    'text',
+    'integer',
+    'number',
+    'boolean',
+    'date',
+    'datetime',
+    'time',
+    'enum',
+    'array',
+    'object',
+    'json',
+    'markdown',
+    'file',
+    'image',
+    'any',
+  ]
+  return allowedTypes.includes(value as VariableType) ? (value as VariableType) : 'string'
+}
+
+function normalizeDesignerNodeType(value: string | null): DesignerNodeType {
+  switch (value) {
+    case 'start':
+    case 'coordinate':
+    case 'sub_agent':
+    case 'tool':
+    case 'message':
+    case 'end':
+      return value
+    default:
+      return 'message'
+  }
+}
+
+function resolveNodeLabel(nodeType: DesignerNodeType) {
+  return nodeTemplates.find((template) => template.nodeType === nodeType)?.label || nodeType
+}
+
+function parseJsonObject(source?: string | null): Record<string, unknown> {
+  if (!source || !source.trim()) {
+    return {}
+  }
+
+  let candidate = source
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown
+      if (typeof parsed === 'string') {
+        candidate = parsed
+        continue
+      }
+      return asRecord(parsed)
+    } catch {
+      candidate = candidate.trim()
+      if (candidate.startsWith('"') && candidate.endsWith('"') && candidate.length >= 2) {
+        candidate = candidate.slice(1, -1)
+      }
+      candidate = candidate.replace(/\\"/g, '"').replace(/""/g, '"')
+    }
+  }
+
+  return {}
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function stringValue(value: unknown) {
+  if (typeof value !== 'string') {
+    return value == null ? null : String(value)
+  }
+  return value.trim() ? value : null
 }
 
 export default Orchestrator

@@ -8,7 +8,7 @@ import ModelConfigPanel from './components/ModelConfigPanel'
 import Orchestrator from './components/Orchestrator'
 import ReplayPanel from './components/ReplayPanel'
 import WorkflowPanel from './components/WorkflowPanel'
-import { getPublishedWorkflows, getSessionExecutions } from './services/api'
+import { createSession, getPublishedWorkflows, getSession, getSessionExecutions, getSessionMessages, getSessionsByUserId } from './services/api'
 import type {
   ExecutionDetail,
   ExecutionEventEnvelope,
@@ -18,9 +18,11 @@ import type {
   GatewayErrorEnvelope,
   Message,
   MessageDeltaEnvelope,
+  SessionSummary,
   SendMessageResponse,
   SocketState,
   WebSocketEnvelope,
+  WorkflowEditorSelection,
   WorkflowSummary,
 } from './types'
 import type { OrchestratorHandle, WorkflowSidebarState, WorkflowVersionMutation } from './components/Orchestrator'
@@ -43,10 +45,19 @@ const gatewayLog = (event: string, details?: Record<string, unknown>) => {
   console.info(`[gateway] ${event}`)
 }
 
+const createWelcomeMessage = (): Message => ({
+  id: 'welcome',
+  type: 'system',
+  content: '欢迎使用服务机器人。你可以直接发起对话，或先选择一个已发布流程进行定向测试。',
+  timestamp: new Date().toISOString(),
+})
+
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<Message[]>([createWelcomeMessage()])
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [currentSession, setCurrentSession] = useState<SessionSummary | null>(null)
   const [currentUserId, setCurrentUserId] = useState('demo-user')
   const [executionId, setExecutionId] = useState<string | null>(null)
   const [executions, setExecutions] = useState<ExecutionDetail[]>([])
@@ -80,6 +91,7 @@ const App: React.FC = () => {
   const [workflowSidebarState, setWorkflowSidebarState] = useState<WorkflowSidebarState | null>(null)
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
   const [workflowNameInput, setWorkflowNameInput] = useState('')
+  const [workflowEditorSelection, setWorkflowEditorSelection] = useState<WorkflowEditorSelection | null>(null)
   const orchestratorRef = useRef<OrchestratorHandle | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -101,23 +113,70 @@ const App: React.FC = () => {
     }
   }, [])
 
-  useEffect(() => {
-    setSessionId(createId('sess'))
-
-    setMessages([
-      {
-        id: 'welcome',
-        type: 'system',
-        content:
-          '欢迎使用服务机器人。\n你可以直接发起对话，或先选择一个已发布流程做定向测试；未选择时，系统会按路由规则自动匹配流程。',
-        timestamp: new Date().toISOString(),
-      },
-    ])
+  const resetSessionView = useCallback(() => {
+    setMessages([createWelcomeMessage()])
+    setEvents([])
+    setExecutions([])
+    setExecutionId(null)
+    setExecutionStatus('idle')
+    setPendingSwitch(null)
+    setPendingConfirmation(null)
+    setResumeOffer(null)
+    setPendingForm(null)
+    setIsLoading(false)
   }, [])
+
+  const refreshSessionDetail = useCallback(async (activeSessionId: string) => {
+    try {
+      const detail = await getSession(activeSessionId)
+      setCurrentSession(detail)
+      setSessions((prev) => [detail, ...prev.filter((item) => item.id !== detail.id)])
+    } catch (error) {
+      console.error('获取会话详情失败:', error)
+    }
+  }, [])
+
+  const loadSessionMessages = useCallback(async (activeSessionId: string) => {
+    try {
+      const history = await getSessionMessages(activeSessionId)
+      setMessages(history.length > 0 ? history : [createWelcomeMessage()])
+    } catch (error) {
+      console.error('获取会话消息失败:', error)
+      setMessages([createWelcomeMessage()])
+    }
+  }, [])
+
+  const createAndSelectSession = useCallback(async (userId: string) => {
+    const created = await createSession({ userId })
+    setSessions((prev) => [created, ...prev.filter((item) => item.id !== created.id)])
+    setCurrentSession(created)
+    setSessionId(created.id)
+    return created
+  }, [])
+
+  const loadUserSessions = useCallback(async (userId: string) => {
+    try {
+      const items = await getSessionsByUserId(userId)
+      if (items.length === 0) {
+        await createAndSelectSession(userId)
+        return
+      }
+      setSessions(items)
+      setCurrentSession(items[0])
+      setSessionId(items[0]?.id ?? '')
+    } catch (error) {
+      console.error('获取会话列表失败:', error)
+    }
+  }, [createAndSelectSession])
 
   useEffect(() => {
     void loadPublishedWorkflowOptions()
   }, [loadPublishedWorkflowOptions])
+
+  useEffect(() => {
+    void loadUserSessions(currentUserId)
+  }, [currentUserId, loadUserSessions])
+
   useEffect(() => {
     setWorkflowNameInput(workflowSidebarState?.workflowName ?? '')
   }, [workflowSidebarState?.workflowName])
@@ -126,6 +185,13 @@ const App: React.FC = () => {
     if (!workflowVersionMutation) return
     void loadPublishedWorkflowOptions()
   }, [loadPublishedWorkflowOptions, workflowVersionMutation])
+
+  useEffect(() => {
+    if (!sessionId) return
+    resetSessionView()
+    void loadSessionMessages(sessionId)
+    void refreshSessionDetail(sessionId)
+  }, [loadSessionMessages, refreshSessionDetail, resetSessionView, sessionId])
 
   useEffect(() => {
     const syncPageFromHash = () => {
@@ -286,6 +352,17 @@ const App: React.FC = () => {
     }
   }
 
+  const displaySessionStatus = (value?: string | null) => {
+    switch ((value || '').toLowerCase()) {
+      case 'active':
+        return '活跃'
+      case 'closed':
+        return '已关闭'
+      default:
+        return value || '未知'
+    }
+  }
+
   const displayUserLabel = (value: string) => {
     switch (value) {
       case 'demo-admin':
@@ -304,6 +381,9 @@ const App: React.FC = () => {
       if (latest[0]) {
         setExecutionStatus(normalizeStatus(latest[0].status))
         setExecutionId(latest[0].execution_id)
+      } else {
+        setExecutionStatus('idle')
+        setExecutionId(null)
       }
     } catch (error) {
       console.error('获取 execution 列表失败:', error)
@@ -429,6 +509,7 @@ const App: React.FC = () => {
     ) {
       setExecutionId(payload.execution_id)
       void refreshExecutions(sessionId)
+      void refreshSessionDetail(sessionId)
     }
 
     if (payload.event_type === 'form.requested') {
@@ -575,16 +656,15 @@ const App: React.FC = () => {
     try {
       let activeSessionId = sessionId
       if (!activeSessionId) {
-        activeSessionId = createId('sess')
-        setSessionId(activeSessionId)
+        const createdSession = await createAndSelectSession(currentUserId)
+        activeSessionId = createdSession.id
       }
 
       const selectedPublishedWorkflow = publishedWorkflowOptions.find(
         (item) => item.workflowCode === selectedPublishedWorkflowCode
       )
-      const boundWorkflowCode = selectedPublishedWorkflow?.workflowCode || workflowDraft?.workflowCode
-      const boundWorkflowVersion = selectedPublishedWorkflow?.currentVersion || workflowDraft?.workflowVersion
-      const useDraftBinding = !selectedPublishedWorkflow && !!workflowDraft?.workflowCode && !!workflowDraft?.workflowVersion
+      const boundWorkflowCode = selectedPublishedWorkflow?.workflowCode
+      const boundWorkflowVersion = selectedPublishedWorkflow?.currentVersion
 
       const response = (await sendGatewayAction('send_message', {
         message_id: messageId,
@@ -597,9 +677,6 @@ const App: React.FC = () => {
         cancel_confirmation: options?.cancelConfirmation ?? false,
         workflow_code: boundWorkflowCode,
         workflow_version: boundWorkflowVersion,
-        workflow_definition: useDraftBinding ? workflowDraft?.definition : null,
-        entry_rule: useDraftBinding ? workflowDraft?.entryRule : null,
-        workflow_config: useDraftBinding ? workflowDraft?.workflowConfig : null,
       }, activeSessionId)) as unknown as SendMessageResponse
       gatewayLog('send_message.response', {
         session_id: activeSessionId,
@@ -678,6 +755,7 @@ const App: React.FC = () => {
         )
       )
       await refreshExecutions(activeSessionId)
+      await refreshSessionDetail(activeSessionId)
     } catch (error) {
       console.error('发送消息失败:', error)
       setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
@@ -716,6 +794,7 @@ const App: React.FC = () => {
         })
       }
       await refreshExecutions(sessionId)
+      await refreshSessionDetail(sessionId)
     } catch (error) {
       console.error('恢复 execution 失败:', error)
       setExecutionStatus('failed')
@@ -834,6 +913,7 @@ const App: React.FC = () => {
             <Orchestrator
               ref={orchestratorRef}
               currentUserId={currentUserId}
+              editorSelection={workflowEditorSelection}
               onWorkflowDraftChange={setWorkflowDraft}
               onWorkflowSidebarStateChange={setWorkflowSidebarState}
               onWorkflowVersionMutation={setWorkflowVersionMutation}
@@ -917,6 +997,9 @@ const App: React.FC = () => {
               workflowCode={workflowSidebarState?.workflowCode || workflowDraft?.workflowCode}
               refreshSignal={workflowVersionMutation}
               onWorkflowVersionMutation={setWorkflowVersionMutation}
+              onEditVersion={(selection) => {
+                setWorkflowEditorSelection({ ...selection, version: { ...selection.version } })
+              }}
             />
           </div>
         </section>
@@ -1040,7 +1123,33 @@ const App: React.FC = () => {
               <option value="anonymous">匿名用户</option>
             </select>
           </label>
-          <span>会话：{sessionId || '加载中'} · 连接：{displaySocketState(socketState)}</span>
+          <label className="flex items-center gap-2">
+            <span>会话</span>
+            <select
+              value={sessionId}
+              onChange={(event) => {
+                setSessionId(event.target.value)
+              }}
+              className="max-w-[220px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+            >
+              {sessions.map((session) => (
+                <option key={session.id} value={session.id}>
+                  {session.id.slice(0, 8)} · {displaySessionStatus(session.status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+            onClick={() => void createAndSelectSession(currentUserId)}
+            type="button"
+          >
+            新建会话
+          </button>
+          <span>
+            会话ID：{sessionId || '加载中'} · 会话状态：{displaySessionStatus(currentSession?.status)} · 连接：
+            {displaySocketState(socketState)}
+          </span>
         </div>
       </header>
 
@@ -1063,6 +1172,7 @@ const App: React.FC = () => {
               setExecutionStatus('running')
               setIsLoading(true)
               await refreshExecutions(sessionId)
+              await refreshSessionDetail(sessionId)
             } catch (error) {
               console.error('表单提交失败:', error)
               setExecutionStatus('failed')

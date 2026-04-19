@@ -6,7 +6,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 import robot.agent.dto.request.SendMessageRequest;
 import robot.agent.dto.response.SendMessageResponse;
+import robot.agent.dto.response.SessionMessageResponse;
 import robot.agent.service.ExecutionService;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/sessions")
@@ -18,6 +21,11 @@ public class ChatController {
 
     public ChatController(ExecutionService executionService) {
         this.executionService = executionService;
+    }
+
+    @GetMapping("/{sessionId}/messages")
+    public ResponseEntity<List<SessionMessageResponse>> getMessageHistory(@PathVariable String sessionId) {
+        return ResponseEntity.ok(executionService.getSessionMessageHistory(sessionId));
     }
 
     @PostMapping("/{sessionId}/messages")

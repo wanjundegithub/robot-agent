@@ -6,6 +6,7 @@ export interface Message {
   content: string
   timestamp: string
   streaming?: boolean
+  executionId?: string
 }
 
 export interface SendMessageResponse {
@@ -235,6 +236,26 @@ export interface WorkflowVersionSummary {
   entryRule?: string
   editorMeta?: string
   config?: string
+  createdAt?: string
+  publishedAt?: string | null
+}
+
+export interface WorkflowEditorSelection {
+  workflowCode: string
+  workflowName?: string | null
+  publishedVersion?: string
+  version: WorkflowVersionSummary
+}
+
+export interface SessionSummary {
+  id: string
+  workspaceId: number
+  userId: string
+  status: string
+  currentExecutionId?: string | null
+  variables?: string | null
+  createdAt?: string
+  lastActivityAt?: string
 }
 
 export interface WorkflowDraftValidationResponse {

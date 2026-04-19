@@ -249,6 +249,20 @@ public class WorkflowService {
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
     }
 
+    public WorkflowVersion requirePublishedWorkflowVersion(String workflowCode, String version) {
+        Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
+                .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
+        if (workflow.getStatus() != WorkflowStatus.PUBLISHED) {
+            throw new RuntimeException("Workflow is not published: " + workflowCode);
+        }
+
+        WorkflowVersion workflowVersion = getWorkflowVersionEntity(workflowCode, version);
+        if (workflowVersion.getStatus() != WorkflowVersionStatus.PUBLISHED) {
+            throw new RuntimeException("Workflow version is not published: " + workflowCode + "@" + version);
+        }
+        return workflowVersion;
+    }
+
     public List<Map<String, Object>> validateWorkflowDefinition(String definitionJson, String configJson) {
         Map<String, Object> definition = parseJsonObject(definitionJson);
         List<Map<String, Object>> issues = new ArrayList<>();

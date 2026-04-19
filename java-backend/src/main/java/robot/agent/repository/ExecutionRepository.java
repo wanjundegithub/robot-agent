@@ -9,5 +9,6 @@ import java.util.Optional;
 public interface ExecutionRepository extends JpaRepository<Execution, String> {
     Optional<Execution> findBySessionIdAndStatus(String sessionId, ExecutionStatus status);
     Optional<Execution> findBySessionIdAndClientMessageId(String sessionId, String clientMessageId);
+    List<Execution> findBySessionIdOrderByCreatedAtAsc(String sessionId);
     List<Execution> findBySessionIdOrderByCreatedAtDesc(String sessionId);
 }

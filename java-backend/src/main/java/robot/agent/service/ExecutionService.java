@@ -16,6 +16,7 @@ import robot.agent.dto.response.ExecutionResponse;
 import robot.agent.dto.response.FormSubmitResponse;
 import robot.agent.dto.response.ResumeExecutionResponse;
 import robot.agent.dto.response.SendMessageResponse;
+import robot.agent.dto.response.SessionMessageResponse;
 import robot.agent.model.Execution;
 import robot.agent.model.ExecutionNodeLog;
 import robot.agent.model.ExecutionStatus;
@@ -25,6 +26,7 @@ import robot.agent.repository.ExecutionRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -351,6 +353,43 @@ public class ExecutionService {
         return response;
     }
 
+    @Transactional(readOnly = true)
+    public List<SessionMessageResponse> getSessionMessageHistory(String sessionId) {
+        sessionService.getSessionEntity(sessionId);
+        List<Execution> executions = executionRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<SessionMessageResponse> messages = new ArrayList<>();
+
+        for (Execution execution : executions) {
+            String userMessage = readPreferredText(
+                    parseJson(execution.getInputVariables()),
+                    "user_message", "message", "content", "question"
+            );
+            if (userMessage != null && !userMessage.isBlank()) {
+                messages.add(buildSessionMessage(
+                        execution.getId() + "_user",
+                        "user",
+                        userMessage,
+                        execution.getCreatedAt(),
+                        execution.getId()
+                ));
+            }
+
+            String assistantMessage = extractAssistantMessage(execution);
+            if (assistantMessage != null && !assistantMessage.isBlank()) {
+                LocalDateTime assistantTime = execution.getCompletedAt() != null ? execution.getCompletedAt() : execution.getCreatedAt();
+                messages.add(buildSessionMessage(
+                        execution.getId() + "_ai",
+                        execution.getStatus() == ExecutionStatus.FAILED ? "error" : "ai",
+                        assistantMessage,
+                        assistantTime,
+                        execution.getId()
+                ));
+            }
+        }
+
+        return messages;
+    }
+
     @Transactional
     public ResumeExecutionResponse resumeExecution(String executionId) {
         log.info("execution.resume.request executionId={}", executionId);
@@ -556,30 +595,15 @@ public class ExecutionService {
             RoutingDecision routingDecision,
             SendMessageRequest request
     ) {
-        if (request.getWorkflowDefinition() == null || request.getWorkflowDefinition().isEmpty()) {
-            log.info(
-                    "execution.explicit.binding.use_published workflowCode={} workflowVersion={}",
-                    routingDecision.workflowCode(),
-                    routingDecision.workflowVersion()
-            );
-            return workflowService.buildRuntimeExecutionBundle(
-                    routingDecision.workflowCode(),
-                    routingDecision.workflowVersion()
-            );
-        }
         log.info(
-                "execution.explicit.binding.use_inline workflowCode={} workflowVersion={} entryRuleKeys={} workflowConfigKeys={}",
+                "execution.explicit.binding.use_published workflowCode={} workflowVersion={} inlineDefinitionIgnored={}",
                 routingDecision.workflowCode(),
                 routingDecision.workflowVersion(),
-                request.getEntryRule() == null ? 0 : request.getEntryRule().size(),
-                request.getWorkflowConfig() == null ? 0 : request.getWorkflowConfig().size()
+                request.getWorkflowDefinition() != null && !request.getWorkflowDefinition().isEmpty()
         );
         return workflowService.buildRuntimeExecutionBundle(
                 routingDecision.workflowCode(),
-                routingDecision.workflowVersion(),
-                new LinkedHashMap<>(request.getWorkflowDefinition()),
-                request.getEntryRule() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.getEntryRule()),
-                request.getWorkflowConfig() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.getWorkflowConfig())
+                routingDecision.workflowVersion()
         );
     }
 
@@ -769,6 +793,7 @@ public class ExecutionService {
     private RoutingDecision buildExplicitRoutingDecision(SendMessageRequest request, Execution activeExecution) {
         String workflowCode = request.getWorkflowCode();
         String workflowVersion = request.getWorkflowVersion();
+        workflowService.requirePublishedWorkflowVersion(workflowCode, workflowVersion);
         String decision = "start";
         String reason = "canvas_selected_workflow";
         if (activeExecution != null
@@ -864,5 +889,77 @@ public class ExecutionService {
     }
 
     private record ExperimentAssignment(String experimentId, String experimentGroup) {
+    }
+
+    private SessionMessageResponse buildSessionMessage(
+            String id,
+            String type,
+            String content,
+            LocalDateTime timestamp,
+            String executionId
+    ) {
+        SessionMessageResponse response = new SessionMessageResponse();
+        response.setId(id);
+        response.setType(type);
+        response.setContent(content);
+        response.setTimestamp((timestamp == null ? LocalDateTime.now() : timestamp).toString());
+        response.setExecutionId(executionId);
+        return response;
+    }
+
+    private String extractAssistantMessage(Execution execution) {
+        if (execution.getStatus() == ExecutionStatus.FAILED && execution.getError() != null && !execution.getError().isBlank()) {
+            return execution.getError();
+        }
+
+        Map<String, Object> output = parseJson(execution.getOutputVariables());
+        String direct = readPreferredText(output, "answer", "text", "message", "content", "result", "reply");
+        if (direct != null) {
+            return direct;
+        }
+
+        Map<String, Object> variables = parseJson(execution.getVariables());
+        String fallback = readPreferredText(variables, "answer", "text", "message", "content", "result", "reply");
+        if (fallback != null) {
+            return fallback;
+        }
+
+        if (!output.isEmpty()) {
+            return writeJson(output);
+        }
+        if (!variables.isEmpty()) {
+            return writeJson(variables);
+        }
+        return null;
+    }
+
+    private String readPreferredText(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            String text = flattenValue(value);
+            if (text != null && !text.isBlank()) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private String flattenValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return text.isBlank() ? null : text;
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        if (value instanceof Map<?, ?> map && !map.isEmpty()) {
+            return writeJson(map);
+        }
+        if (value instanceof List<?> list && !list.isEmpty()) {
+            return writeJson(list);
+        }
+        return null;
     }
 }

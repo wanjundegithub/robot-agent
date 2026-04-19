@@ -3,6 +3,7 @@ import type {
   CostAlert,
   ExecutionDetail,
   FormSubmitResponse,
+  Message,
   RagEvaluationResponse,
   ReplayResponse,
   ResumeExecutionResponse,
@@ -13,6 +14,7 @@ import type {
   ModelProfileConfig,
   ModelProviderConfig,
   ProviderValidationResult,
+  SessionSummary,
   WorkflowDraftValidationResponse,
   WorkflowSummary,
   WorkflowVersionSummary,
@@ -78,6 +80,14 @@ export async function sendMessage(
   return await response.json()
 }
 
+export async function getSessionMessages(sessionId: string): Promise<Message[]> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
 export async function submitForm(
   executionId: string,
   submitId: string,
@@ -119,6 +129,42 @@ export async function getExecution(executionId: string): Promise<ExecutionDetail
 
 export async function getSessionExecutions(sessionId: string): Promise<ExecutionDetail[]> {
   const response = await fetch(`${API_BASE_URL}/executions?sessionId=${encodeURIComponent(sessionId)}`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function createSession(payload: {
+  userId: string
+  workspaceId?: number
+  variables?: string
+}): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE_URL}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: payload.userId,
+      workspaceId: payload.workspaceId ?? 1,
+      variables: payload.variables ?? null,
+    }),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getSession(sessionId: string): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getSessionsByUserId(userId: string): Promise<SessionSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/sessions?userId=${encodeURIComponent(userId)}`)
   if (!response.ok) {
     await parseApiError(response)
   }
