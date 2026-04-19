@@ -11,10 +11,10 @@ This is an objective gap list against:
   - Current `ChatController` is `/api/chat/*` and returns a stub response.
   - Contract requires `/api/sessions/{sessionId}/messages` and `/api/executions/{executionId}/form-submit`.
 - DTO request classes referenced in code (e.g. `CreateSessionRequest`) are missing in `java-backend/src/main/java/.../dto/request`.
-- DB migration exists but does not include `execution_node_log` table (required by architecture Phase 1).
-- Status casing mismatch in DB enums:
+- Current repo uses Hibernate schema auto-update instead of Flyway-managed migrations; schema completeness still needs explicit verification against Phase 1 requirements.
+- Status casing mismatch in persisted values:
   - Target per `docs/phase1-contract.md`: lower-case (`pending|running|suspended|completed|failed|cancelled`).
-  - Current `java-backend/src/main/resources/db/migration/V1__create_tables.sql` uses upper-case enums and must be updated.
+  - Current implementation must still be checked to ensure stored status values match the target lower-case set.
 
 ## Python (python-ai/**)
 

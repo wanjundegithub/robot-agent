@@ -3,6 +3,8 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +33,8 @@ import java.util.UUID;
 
 @Service
 public class ExecutionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ExecutionService.class);
 
     private final SessionService sessionService;
     private final WorkflowService workflowService;
@@ -72,6 +76,16 @@ public class ExecutionService {
 
     @Transactional
     public SendMessageResponse startExecution(String sessionId, SendMessageRequest request) {
+        log.info(
+                "execution.start.request sessionId={} messageId={} userId={} workflowCode={} workflowVersion={} hasWorkflowDefinition={} contentPreview={}",
+                sessionId,
+                request == null ? null : request.getMessageId(),
+                request == null ? null : request.getUserId(),
+                request == null ? null : request.getWorkflowCode(),
+                request == null ? null : request.getWorkflowVersion(),
+                request != null && request.getWorkflowDefinition() != null && !request.getWorkflowDefinition().isEmpty(),
+                preview(request == null ? null : request.getContent())
+        );
         Session session = sessionService.getOrCreateSession(sessionId, request.getUserId());
         String effectiveUserId = request.getUserId() == null || request.getUserId().isBlank()
                 ? session.getUserId()
@@ -85,7 +99,22 @@ public class ExecutionService {
         }
 
         Execution activeExecution = resolveActiveExecution(session);
-        RoutingDecision routingDecision = workflowService.routeMessage(request.getContent(), activeExecution);
+        boolean explicitWorkflowExecution = request.getWorkflowCode() != null
+                && !request.getWorkflowCode().isBlank()
+                && request.getWorkflowVersion() != null
+                && !request.getWorkflowVersion().isBlank();
+        RoutingDecision routingDecision = explicitWorkflowExecution
+                ? buildExplicitRoutingDecision(request, activeExecution)
+                : workflowService.routeMessage(request.getContent(), activeExecution);
+        log.info(
+                "execution.route sessionId={} workflowCode={} workflowVersion={} decision={} reason={} confidence={}",
+                session.getId(),
+                routingDecision.workflowCode(),
+                routingDecision.workflowVersion(),
+                routingDecision.decision(),
+                routingDecision.reason(),
+                routingDecision.confidence()
+        );
         String requestedToolCode = confirmationService.resolveRequestedToolCode(
                 request.getRequestedToolCode(),
                 request.getContent()
@@ -103,6 +132,13 @@ public class ExecutionService {
                 session.getUserId()
         );
         if (!authorizationDecision.allowed()) {
+            log.warn(
+                    "execution.permission.denied sessionId={} workflowCode={} toolCode={} reason={}",
+                    session.getId(),
+                    routingDecision.workflowCode(),
+                    requestedToolCode,
+                    authorizationDecision.reason()
+            );
             auditService.logAction(
                     session.getWorkspaceId(),
                     effectiveUserId,
@@ -128,6 +164,11 @@ public class ExecutionService {
                 Boolean.TRUE.equals(request.getCancelConfirmation())
         );
         if (confirmationEvaluation.cancelled()) {
+            log.info(
+                    "execution.confirmation.cancelled sessionId={} toolCode={}",
+                    session.getId(),
+                    confirmationEvaluation.toolCode()
+            );
             auditService.logAction(
                     session.getWorkspaceId(),
                     effectiveUserId,
@@ -140,6 +181,12 @@ public class ExecutionService {
             return buildConfirmationCancelledResponse(session, routingDecision, confirmationEvaluation);
         }
         if (confirmationEvaluation.requiresConfirmation()) {
+            log.info(
+                    "execution.confirmation.required sessionId={} toolCode={} confirmationId={}",
+                    session.getId(),
+                    confirmationEvaluation.toolCode(),
+                    confirmationEvaluation.confirmationId()
+            );
             auditService.logAction(
                     session.getWorkspaceId(),
                     effectiveUserId,
@@ -159,6 +206,13 @@ public class ExecutionService {
                 confirmationEvaluation.toolCode()
         );
         if (!protectionDecision.allowed()) {
+            log.warn(
+                    "execution.protected sessionId={} workflowCode={} status={} reason={}",
+                    session.getId(),
+                    routingDecision.workflowCode(),
+                    protectionDecision.status(),
+                    protectionDecision.reason()
+            );
             auditService.logAction(
                     session.getWorkspaceId(),
                     effectiveUserId,
@@ -179,10 +233,12 @@ public class ExecutionService {
         }
 
         ExperimentAssignment experimentAssignment = assignExperiment(session.getId(), routingDecision.workflowCode());
-        WorkflowService.RuntimeExecutionBundle runtimeBundle = workflowService.buildRuntimeExecutionBundle(
-                routingDecision.workflowCode(),
-                routingDecision.workflowVersion()
-        );
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = explicitWorkflowExecution
+                ? buildExplicitRuntimeExecutionBundle(routingDecision, request)
+                : workflowService.buildRuntimeExecutionBundle(
+                        routingDecision.workflowCode(),
+                        routingDecision.workflowVersion()
+                );
 
         Execution execution = new Execution();
         execution.setId(UUID.randomUUID().toString());
@@ -240,9 +296,20 @@ public class ExecutionService {
         executeInput.put("confirmed_tool_codes", executeRequest.getConfirmedToolCodes());
         executeInput.put("intent_profile_code", runtimeBundle.routingProfileCode());
         executeRequest.setInputVariables(executeInput);
+        log.info(
+                "execution.dispatch executionId={} sessionId={} workflowCode={} workflowVersion={} providerCount={} profileCount={} intentProfileCode={}",
+                saved.getId(),
+                session.getId(),
+                saved.getWorkflowCode(),
+                saved.getWorkflowVersion(),
+                runtimeBundle.providerConfigs().size(),
+                runtimeBundle.modelProfiles().size(),
+                runtimeBundle.routingProfileCode()
+        );
 
         Flux<ServerSentEvent<String>> stream = pythonClient.execute(executeRequest);
         stream.subscribe(event -> handleEvent(saved.getId(), event), error -> {
+            log.error("execution.python.error executionId={} sessionId={} message={}", saved.getId(), session.getId(), error.getMessage(), error);
             entryProtectionService.recordPythonFailure(error.getMessage());
             Execution failure = executionRepository.findById(saved.getId()).orElse(saved);
             failure.setStatus(ExecutionStatus.FAILED);
@@ -251,12 +318,14 @@ public class ExecutionService {
             maybeOfferResume(session.getId(), saved.getId());
         });
 
+        log.info("execution.started executionId={} sessionId={} workflowCode={} workflowVersion={}", saved.getId(), session.getId(), saved.getWorkflowCode(), saved.getWorkflowVersion());
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, 200);
         return buildSendMessageResponse(saved, routingDecision, activeExecution, experimentAssignment);
     }
 
     @Transactional
     public FormSubmitResponse submitForm(String executionId, FormSubmitRequest request) {
+        log.info("execution.form.submit executionId={} submitId={}", executionId, request == null ? null : request.getSubmitId());
         try {
             pythonClient.submitForm(executionId, request).block(Duration.ofSeconds(5));
             Execution execution = executionRepository.findById(executionId).orElse(null);
@@ -266,6 +335,7 @@ public class ExecutionService {
                 executionRepository.save(execution);
             }
         } catch (RuntimeException error) {
+            log.error("execution.form.submit.failed executionId={} message={}", executionId, error.getMessage(), error);
             Execution failure = executionRepository.findById(executionId).orElse(null);
             if (failure != null) {
                 failure.setStatus(ExecutionStatus.FAILED);
@@ -283,6 +353,7 @@ public class ExecutionService {
 
     @Transactional
     public ResumeExecutionResponse resumeExecution(String executionId) {
+        log.info("execution.resume.request executionId={}", executionId);
         Execution execution = executionRepository.findById(executionId)
                 .orElseThrow(() -> new RuntimeException("Execution not found: " + executionId));
         Session session = sessionService.getSessionEntity(execution.getSessionId());
@@ -341,6 +412,8 @@ public class ExecutionService {
         if (eventType == null) {
             return;
         }
+
+        log.debug("execution.event executionId={} sessionId={} eventType={} payloadKeys={}", executionId, sessionId, eventType, payload.keySet());
 
         switch (eventType) {
             case "routing.decided":
@@ -477,6 +550,37 @@ public class ExecutionService {
                 .filter(execution -> !execution.getStatus().isTerminal() && execution.getStatus() != ExecutionStatus.SUSPENDED)
                 .findFirst()
                 .orElse(null);
+    }
+
+    private WorkflowService.RuntimeExecutionBundle buildExplicitRuntimeExecutionBundle(
+            RoutingDecision routingDecision,
+            SendMessageRequest request
+    ) {
+        if (request.getWorkflowDefinition() == null || request.getWorkflowDefinition().isEmpty()) {
+            log.info(
+                    "execution.explicit.binding.use_published workflowCode={} workflowVersion={}",
+                    routingDecision.workflowCode(),
+                    routingDecision.workflowVersion()
+            );
+            return workflowService.buildRuntimeExecutionBundle(
+                    routingDecision.workflowCode(),
+                    routingDecision.workflowVersion()
+            );
+        }
+        log.info(
+                "execution.explicit.binding.use_inline workflowCode={} workflowVersion={} entryRuleKeys={} workflowConfigKeys={}",
+                routingDecision.workflowCode(),
+                routingDecision.workflowVersion(),
+                request.getEntryRule() == null ? 0 : request.getEntryRule().size(),
+                request.getWorkflowConfig() == null ? 0 : request.getWorkflowConfig().size()
+        );
+        return workflowService.buildRuntimeExecutionBundle(
+                routingDecision.workflowCode(),
+                routingDecision.workflowVersion(),
+                new LinkedHashMap<>(request.getWorkflowDefinition()),
+                request.getEntryRule() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.getEntryRule()),
+                request.getWorkflowConfig() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.getWorkflowConfig())
+        );
     }
 
     private void suspendForSwitch(Session session, Execution activeExecution, RoutingDecision routingDecision) {
@@ -662,6 +766,31 @@ public class ExecutionService {
         return response;
     }
 
+    private RoutingDecision buildExplicitRoutingDecision(SendMessageRequest request, Execution activeExecution) {
+        String workflowCode = request.getWorkflowCode();
+        String workflowVersion = request.getWorkflowVersion();
+        String decision = "start";
+        String reason = "canvas_selected_workflow";
+        if (activeExecution != null
+                && !activeExecution.getStatus().isTerminal()
+                && activeExecution.getStatus() != ExecutionStatus.SUSPENDED
+                && !workflowCode.equals(activeExecution.getWorkflowCode())) {
+            decision = "switch_required";
+            reason = "active_execution_conflict";
+        }
+        return new RoutingDecision(
+                decision,
+                workflowCode,
+                workflowVersion,
+                1.0d,
+                0.0d,
+                "manual_canvas",
+                reason,
+                List.of(workflowCode),
+                100
+        );
+    }
+
     private ExecutionStatus toExecutionStatus(String statusValue) {
         for (ExecutionStatus status : ExecutionStatus.values()) {
             if (status.getValue().equalsIgnoreCase(statusValue)) {
@@ -717,6 +846,14 @@ public class ExecutionService {
 
     private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private String preview(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 80 ? normalized : normalized.substring(0, 80) + "...";
     }
 
     private ExperimentAssignment assignExperiment(String sessionId, String workflowCode) {

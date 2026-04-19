@@ -34,6 +34,21 @@ class ToolExecutorRegistry:
         return await execute_with_retry(retry_policy, _run)
 
     async def _execute_once(self, tool_code: str, params: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        invoke_type = str(config.get("invoke_type", "")).lower()
+        if invoke_type == "function":
+            function_name = str(config.get("function_name", "")).strip()
+            return await self._execute_function(function_name, params)
+        if invoke_type == "mcp":
+            return await self._execute_json_endpoint(
+                url=str(config.get("mcp_endpoint", "")),
+                body={"tool_name": config.get("tool_name"), "arguments": params},
+            )
+        if invoke_type == "skill":
+            return await self._execute_json_endpoint(
+                url=str(config.get("skill_endpoint", "")),
+                body={"skill_name": config.get("skill_name"), "inputs": params},
+            )
+
         url = config.get("url")
         if not url:
             raise RetryableExecutionError("validation_error", f"Tool config missing url: {tool_code}")
@@ -58,6 +73,33 @@ class ToolExecutorRegistry:
         if "application/json" in content_type:
             return response.json()
         return {"raw_response": response.text}
+
+    async def _execute_json_endpoint(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        if not url:
+            raise RetryableExecutionError("validation_error", "Tool endpoint is required")
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(url, json=body)
+        if response.status_code >= 500:
+            raise RetryableExecutionError("internal_error", f"Tool server error {response.status_code}: {response.text}")
+        if response.status_code >= 400:
+            raise RetryableExecutionError("validation_error", f"Tool call failed {response.status_code}: {response.text}")
+        if "application/json" in response.headers.get("content-type", ""):
+            return response.json()
+        return {"raw_response": response.text}
+
+    async def _execute_function(self, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        if function_name == "merge_variables":
+            return {
+                "result": params,
+                "summary": "已合并变量。",
+            }
+        if function_name == "extract_slots_summary":
+            filtered = {key: value for key, value in params.items() if value not in (None, "", [])}
+            return {
+                "result": filtered,
+                "summary": f"已提取 {len(filtered)} 个变量。",
+            }
+        raise RetryableExecutionError("validation_error", f"Unsupported function tool: {function_name}")
 
     def _tool_key(self, tool_code: str, params: Dict[str, Any]) -> str:
         serialized = json.dumps(params, sort_keys=True, ensure_ascii=False)

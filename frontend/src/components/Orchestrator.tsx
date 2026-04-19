@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react'
 import ReactFlow, {
   addEdge,
   Background,
@@ -11,82 +11,499 @@ import ReactFlow, {
   type Node,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
+import { publishWorkflow, saveWorkflowDraft, validateWorkflowDraft } from '../services/api'
 import type { WorkflowValidationIssue } from '../types'
+
+type DesignerNodeType = 'start' | 'coordinate' | 'sub_agent' | 'tool' | 'message' | 'end'
+type VariableScope = 'global' | 'temp'
+type VariableType =
+  | 'string'
+  | 'text'
+  | 'integer'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'datetime'
+  | 'time'
+  | 'enum'
+  | 'array'
+  | 'object'
+  | 'json'
+  | 'markdown'
+  | 'file'
+  | 'image'
+  | 'any'
+
+interface VariableDefinition {
+  id: string
+  name: string
+  type: VariableType
+  scope: VariableScope
+  description: string
+}
+
+interface CanvasNodeData {
+  label: string
+  nodeType: DesignerNodeType
+  config: Record<string, unknown>
+}
+
+interface WorkflowDraftPayload {
+  workflowCode: string
+  workflowVersion: string
+  definition: Record<string, unknown>
+  entryRule: Record<string, unknown>
+  workflowConfig: Record<string, unknown>
+}
+
+interface WorkflowMetaState {
+  workflowId: number | null
+  workflowCode: string
+  draftVersion: string
+  publishedVersion: string | null
+}
+
+export interface WorkflowSummaryRule {
+  label: string
+  valid: boolean
+}
+
+export interface WorkflowSidebarState {
+  workflowId: number | null
+  workflowCode: string
+  draftVersion: string
+  publishedVersion: string | null
+  workflowName: string
+  saveStatus: string
+  isSaving: boolean
+  isPublishing: boolean
+  validationIssues: WorkflowValidationIssue[]
+  summaryRules: WorkflowSummaryRule[]
+}
+
+export interface WorkflowVersionMutation {
+  workflowCode: string
+  version: string
+  action: 'save_draft' | 'publish' | 'rollback' | 'archive'
+  refreshAt: number
+}
+
+export interface OrchestratorHandle {
+  setWorkflowName: (name: string) => void
+  validateDraft: () => Promise<void>
+  saveDraft: () => Promise<void>
+  publish: () => Promise<void>
+}
 
 interface OrchestratorProps {
   currentUserId: string
-  sendGatewayAction: (action: string, payload: Record<string, unknown>) => Promise<unknown>
+  onWorkflowDraftChange?: (draft: WorkflowDraftPayload) => void
+  onWorkflowSidebarStateChange?: (state: WorkflowSidebarState) => void
+  onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
 }
 
-const initialNodes: Node[] = [
-  { id: 'start', type: 'input', position: { x: 60, y: 40 }, data: { label: '开始', config: {} } },
-  { id: 'extract_slots', position: { x: 60, y: 150 }, data: { label: '提取槽位', config: { prompt: 'slot_extraction', model_profile_ref: 'structured-extraction-v1' } } },
-  { id: 'check_slots', position: { x: 60, y: 280 }, data: { label: '检查槽位', config: { required_fields: ['departure_city', 'arrival_city', 'departure_date'] } } },
-  { id: 'collect_info', position: { x: 280, y: 280 }, data: { label: '补充信息', config: { title: '补充信息' } } },
-  { id: 'retrieve_policy', position: { x: 60, y: 420 }, data: { label: '检索知识', config: { knowledge_base_code: 'flight_policy_kb', query_rewrite: { enabled: true, model_profile_ref: 'knowledge-query-rewrite-v1' }, answer_generation: { enabled: true, model_profile_ref: 'knowledge-answer-v1' } } } },
-  { id: 'end', type: 'output', position: { x: 280, y: 420 }, data: { label: '结束', config: {} } },
+const DRAFT_VERSION = 'draft'
+
+const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
+  { value: 'string', label: 'string' },
+  { value: 'text', label: 'text' },
+  { value: 'integer', label: 'integer' },
+  { value: 'number', label: 'number' },
+  { value: 'boolean', label: 'boolean' },
+  { value: 'date', label: 'date' },
+  { value: 'datetime', label: 'datetime' },
+  { value: 'time', label: 'time' },
+  { value: 'enum', label: 'enum' },
+  { value: 'array', label: 'array' },
+  { value: 'object', label: 'object' },
+  { value: 'json', label: 'json' },
+  { value: 'markdown', label: 'markdown' },
+  { value: 'file', label: 'file' },
+  { value: 'image', label: 'image' },
+  { value: 'any', label: 'any' },
+]
+
+const initialNodes: Node<CanvasNodeData>[] = [
+  {
+    id: 'start',
+    type: 'input',
+    position: { x: 80, y: 120 },
+    data: {
+      label: '开始节点',
+      nodeType: 'start',
+      config: {
+        prompt: '接收用户输入并初始化流程变量。',
+        input_variable_ids: [],
+      },
+    },
+  },
+  {
+    id: 'message_1',
+    position: { x: 360, y: 120 },
+    data: {
+      label: '消息节点',
+      nodeType: 'message',
+      config: {
+        message_text: '好的，我正在处理，请稍候。',
+      },
+    },
+  },
+  {
+    id: 'end',
+    type: 'output',
+    position: { x: 640, y: 120 },
+    data: {
+      label: '结束节点',
+      nodeType: 'end',
+      config: {
+        prompt: '输出流程最终结果。',
+        output_variable_ids: [],
+      },
+    },
+  },
 ]
 
 const initialEdges: Edge[] = [
-  { id: 'e_start_extract', source: 'start', target: 'extract_slots' },
-  { id: 'e_extract_check', source: 'extract_slots', target: 'check_slots' },
-  { id: 'e_check_collect', source: 'check_slots', target: 'collect_info', label: '缺失' },
-  { id: 'e_check_retrieve', source: 'check_slots', target: 'retrieve_policy', label: '完整' },
-  { id: 'e_collect_retrieve', source: 'collect_info', target: 'retrieve_policy' },
-  { id: 'e_retrieve_end', source: 'retrieve_policy', target: 'end' },
+  { id: 'e_start_message', source: 'start', target: 'message_1' },
+  { id: 'e_message_end', source: 'message_1', target: 'end' },
 ]
 
-const nodeTemplates: Array<{ type: string; label: string; config: Record<string, unknown> }> = [
-  { type: 'llm', label: '大模型节点', config: { prompt: 'slot_extraction', model_profile_ref: 'general-chat-v1' } },
-  { type: 'knowledge', label: '知识节点', config: { knowledge_base_code: 'flight_policy_kb', query_rewrite: { enabled: true, model_profile_ref: 'knowledge-query-rewrite-v1' }, answer_generation: { enabled: true, model_profile_ref: 'knowledge-answer-v1' } } },
-  { type: 'tool', label: '工具节点', config: { tool_code: '', url: '', method: 'POST' } },
-  { type: 'form', label: '表单节点', config: { title: '请补充信息' } },
-  { type: 'condition', label: '条件节点', config: { required_fields: [] } },
+const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: Record<string, unknown> }> = [
+  {
+    nodeType: 'start',
+    label: '开始节点',
+    config: {
+      prompt: '定义流程启动时的输入变量。',
+      input_variable_ids: [],
+    },
+  },
+  {
+    nodeType: 'coordinate',
+    label: '协调节点',
+    config: {
+      prompt: '协调多个子步骤，决定后续处理路径。',
+    },
+  },
+  {
+    nodeType: 'sub_agent',
+    label: '子代理节点',
+    config: {
+      prompt: '让子代理处理子任务，并返回后续节点需要的变量。',
+    },
+  },
+  {
+    nodeType: 'tool',
+    label: '工具节点',
+    config: {
+      invoke_type: 'api',
+      url: '',
+      method: 'POST',
+      payload_mapping: {},
+    },
+  },
+  {
+    nodeType: 'message',
+    label: '消息节点',
+    config: {
+      message_text: '这里填写固定输出内容。',
+    },
+  },
+  {
+    nodeType: 'end',
+    label: '结束节点',
+    config: {
+      prompt: '定义结束节点返回的输出变量。',
+      output_variable_ids: [],
+    },
+  },
 ]
 
-const Orchestrator: React.FC<OrchestratorProps> = ({ currentUserId, sendGatewayAction }) => {
+const emptyVariableForm = {
+  name: '',
+  type: 'string' as VariableType,
+  scope: 'global' as VariableScope,
+  description: '',
+}
+
+const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function Orchestrator(
+  { currentUserId, onWorkflowDraftChange, onWorkflowSidebarStateChange, onWorkflowVersionMutation },
+  ref
+) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  const [workflowCode, setWorkflowCode] = useState('flight_booking')
-  const [workflowVersion, setWorkflowVersion] = useState('3.0.0-draft')
-  const [workflowConfig, setWorkflowConfig] = useState<Record<string, unknown>>({
-    intent_profile_ref: 'intent-router-v1',
-    llm_defaults: {
-      model_profile_ref: 'general-chat-v1',
-      provider_code: 'openai-compatible-prod',
-    },
+  const [workflowName, setWorkflowName] = useState('')
+  const [workflowMeta, setWorkflowMeta] = useState<WorkflowMetaState>({
+    workflowId: null,
+    workflowCode: '',
+    draftVersion: DRAFT_VERSION,
+    publishedVersion: null,
   })
   const [validationIssues, setValidationIssues] = useState<WorkflowValidationIssue[]>([])
-  const [saveStatus, setSaveStatus] = useState('未保存')
+  const [saveStatus, setSaveStatus] = useState('尚未保存')
+  const [isSaving, setIsSaving] = useState(false)
+  const [isPublishing, setIsPublishing] = useState(false)
+  const [globalVariables, setGlobalVariables] = useState<VariableDefinition[]>([])
+  const [tempVariables, setTempVariables] = useState<VariableDefinition[]>([])
+  const [variableForm, setVariableForm] = useState(emptyVariableForm)
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
+  const selectedNodeData = (selectedNode?.data || null) as CanvasNodeData | null
 
-  const validationRules = useMemo(() => {
-    const hasStart = nodes.some((node) => node.id === 'start' || node.type === 'input')
-    const hasEnd = nodes.some((node) => node.id === 'end' || node.type === 'output')
-    const hasIntentProfile = Boolean(workflowConfig.intent_profile_ref)
-    const hasKnowledgeNode = nodes.some((node) => String(node.data?.label).includes('retrieve') || node.data?.config?.knowledge_base_code)
+  const allVariables = useMemo(() => [...globalVariables, ...tempVariables], [globalVariables, tempVariables])
+
+  const variableNameMap = useMemo(() => new Map(allVariables.map((item) => [item.id, item])), [allVariables])
+
+  const summaryRules = useMemo<WorkflowSummaryRule[]>(() => {
+    const startCount = nodes.filter((node) => (node.data as CanvasNodeData).nodeType === 'start').length
+    const endCount = nodes.filter((node) => (node.data as CanvasNodeData).nodeType === 'end').length
+
     return [
-      { label: '包含开始 / 结束节点', valid: hasStart && hasEnd },
-      { label: '已配置意图模型编码', valid: hasIntentProfile },
-      { label: '知识节点绑定知识库', valid: hasKnowledgeNode },
-      { label: '节点/连线支持编辑与保存', valid: true },
-      { label: '主交互基于 Netty + WebSocket', valid: true },
+      { label: '仅保留一个开始节点', valid: startCount === 1 },
+      { label: '仅保留一个结束节点', valid: endCount === 1 },
+      { label: '已维护变量设置', valid: allVariables.length > 0 },
     ]
-  }, [nodes, workflowConfig])
+  }, [allVariables.length, nodes])
 
-  const addNode = (templateType: string) => {
-    const template = nodeTemplates.find((item) => item.type === templateType)
+  const buildDefinition = () => {
+    const nodeMap = Object.fromEntries(
+      nodes.map((node) => {
+        const data = node.data as CanvasNodeData
+        return [
+          node.id,
+          {
+            id: node.id,
+            type: data.nodeType,
+            name: data.label,
+            config: normalizeNodeConfig(data.nodeType, data.config, variableNameMap),
+          },
+        ]
+      })
+    )
+
+    const transitions: Record<string, unknown> = {}
+    nodes.forEach((node) => {
+      const outgoing = edges.filter((edge) => edge.source === node.id)
+      transitions[node.id] = outgoing[0]?.target ?? null
+    })
+
+    return {
+      workflow_code: workflowMeta.workflowCode,
+      workflow_name: workflowName.trim(),
+      workflow_version: workflowMeta.draftVersion,
+      entry: nodes.find((node) => (node.data as CanvasNodeData).nodeType === 'start')?.id || 'start',
+      nodes: nodeMap,
+      transitions,
+      config: {
+        intent_profile_ref: 'intent-router-v1',
+        llm_defaults: {
+          model_profile_ref: 'general-chat-v1',
+          provider_code: 'openai-compatible-prod',
+        },
+        variable_registry: {
+          global: globalVariables,
+          temporary: tempVariables,
+        },
+      },
+    }
+  }
+
+  const currentDefinition = useMemo(
+    () => buildDefinition(),
+    [nodes, edges, workflowMeta.workflowCode, workflowMeta.draftVersion, workflowName, globalVariables, tempVariables]
+  )
+
+  const currentEntryRule = useMemo(
+    () => ({
+      intent_codes: ['general_agent_request'],
+      keywords: workflowName.trim() ? [workflowName.trim()] : ['流程'],
+      priority: 100,
+    }),
+    [workflowName]
+  )
+
+  useEffect(() => {
+    onWorkflowDraftChange?.({
+      workflowCode: workflowMeta.workflowCode,
+      workflowVersion: workflowMeta.draftVersion,
+      definition: currentDefinition,
+      entryRule: currentEntryRule,
+      workflowConfig: currentDefinition.config as Record<string, unknown>,
+    })
+  }, [onWorkflowDraftChange, workflowMeta, currentDefinition, currentEntryRule])
+
+  useEffect(() => {
+    onWorkflowSidebarStateChange?.({
+      workflowId: workflowMeta.workflowId,
+      workflowCode: workflowMeta.workflowCode,
+      draftVersion: workflowMeta.draftVersion,
+      publishedVersion: workflowMeta.publishedVersion,
+      workflowName,
+      saveStatus,
+      isSaving,
+      isPublishing,
+      validationIssues,
+      summaryRules,
+    })
+  }, [
+    isPublishing,
+    isSaving,
+    onWorkflowSidebarStateChange,
+    saveStatus,
+    summaryRules,
+    validationIssues,
+    workflowMeta,
+    workflowName,
+  ])
+
+  const ensureWorkflowBasics = () => {
+    const trimmedName = workflowName.trim()
+    if (!trimmedName) {
+      setSaveStatus('请先填写流程名')
+      return null
+    }
+
+    const workflowCode = workflowMeta.workflowCode || createWorkflowCode()
+    if (workflowCode !== workflowMeta.workflowCode) {
+      setWorkflowMeta((prev) => ({ ...prev, workflowCode }))
+    }
+    return {
+      workflowCode,
+      workflowName: trimmedName,
+    }
+  }
+
+  const persistDraft = async (version: string) => {
+    const basics = ensureWorkflowBasics()
+    if (!basics) return null
+
+    const definition = {
+      ...currentDefinition,
+      workflow_code: basics.workflowCode,
+      workflow_name: basics.workflowName,
+      workflow_version: version,
+    }
+
+    const response = await saveWorkflowDraft(basics.workflowCode, {
+      workflowName: basics.workflowName,
+      version,
+      definition,
+      entryRule: currentEntryRule,
+      workflowConfig: definition.config as Record<string, unknown>,
+      currentUserId,
+    })
+
+    setWorkflowMeta((prev) => ({
+      workflowId: response.workflowId ?? prev.workflowId,
+      workflowCode: response.workflowCode || basics.workflowCode,
+      draftVersion: DRAFT_VERSION,
+      publishedVersion: version === DRAFT_VERSION ? prev.publishedVersion : version,
+    }))
+    if (response.workflowName) {
+      setWorkflowName(response.workflowName)
+    }
+    return {
+      ...response,
+      workflowCode: response.workflowCode || basics.workflowCode,
+      version,
+    }
+  }
+
+  const handleSaveDraft = async () => {
+    setIsSaving(true)
+    try {
+      const response = await persistDraft(DRAFT_VERSION)
+      if (!response) return
+      setSaveStatus(response.workflowId ? `草稿已保存，流程 ID: ${response.workflowId}` : '草稿已保存')
+      onWorkflowVersionMutation?.({
+        workflowCode: response.workflowCode,
+        version: response.version,
+        action: 'save_draft',
+        refreshAt: Date.now(),
+      })
+    } catch (error) {
+      setSaveStatus(error instanceof Error ? `保存失败: ${error.message}` : '保存失败')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleValidateDraft = async () => {
+    const basics = ensureWorkflowBasics()
+    if (!basics) return
+
+    try {
+      const response = await validateWorkflowDraft(basics.workflowCode, {
+        definition: {
+          ...currentDefinition,
+          workflow_code: basics.workflowCode,
+          workflow_name: basics.workflowName,
+        },
+        workflowConfig: currentDefinition.config as Record<string, unknown>,
+      })
+      const issues = response.issues ?? []
+      setValidationIssues(issues)
+      setSaveStatus(issues.length === 0 ? '校验通过' : `发现 ${issues.length} 个问题`)
+    } catch (error) {
+      setValidationIssues([])
+      setSaveStatus(error instanceof Error ? `校验失败: ${error.message}` : '校验失败')
+    }
+  }
+
+  const handlePublish = async () => {
+    const basics = ensureWorkflowBasics()
+    if (!basics) return
+
+    setIsPublishing(true)
+    try {
+      const validation = await validateWorkflowDraft(basics.workflowCode, {
+        definition: {
+          ...currentDefinition,
+          workflow_code: basics.workflowCode,
+          workflow_name: basics.workflowName,
+        },
+        workflowConfig: currentDefinition.config as Record<string, unknown>,
+      })
+      const issues = validation.issues ?? []
+      setValidationIssues(issues)
+      if (issues.length > 0) {
+        setSaveStatus(`发布前校验失败，共 ${issues.length} 个问题`)
+        return
+      }
+
+      const publishVersion = createPublishVersion()
+      const saved = await persistDraft(publishVersion)
+      if (!saved) return
+
+      await publishWorkflow(saved.workflowCode, publishVersion, currentUserId)
+      setWorkflowMeta((prev) => ({ ...prev, publishedVersion: publishVersion }))
+      setSaveStatus(`已发布版本 ${publishVersion}`)
+      onWorkflowVersionMutation?.({
+        workflowCode: saved.workflowCode,
+        version: publishVersion,
+        action: 'publish',
+        refreshAt: Date.now(),
+      })
+    } catch (error) {
+      setSaveStatus(error instanceof Error ? `发布失败: ${error.message}` : '发布失败')
+    } finally {
+      setIsPublishing(false)
+    }
+  }
+
+  const addNode = (nodeType: DesignerNodeType) => {
+    const template = nodeTemplates.find((item) => item.nodeType === nodeType)
     if (!template) return
-    const id = `${template.type}_${Date.now()}`
+    const id = `${nodeType}_${Date.now()}`
     setNodes((prev) => [
       ...prev,
       {
         id,
-        position: { x: 120 + prev.length * 20, y: 120 + prev.length * 20 },
+        type: toFlowType(nodeType),
+        position: { x: 140 + prev.length * 60, y: 180 + (prev.length % 3) * 110 },
         data: {
           label: template.label,
+          nodeType: template.nodeType,
           config: structuredClone(template.config),
         },
       },
@@ -95,307 +512,576 @@ const Orchestrator: React.FC<OrchestratorProps> = ({ currentUserId, sendGatewayA
   }
 
   const onConnect = (connection: Connection) => {
-    setEdges((prev) => addEdge({ ...connection, id: `e_${Date.now()}` }, prev))
-  }
-
-  const updateSelectedNode = (path: string, value: unknown) => {
-    if (!selectedNode) return
-    setNodes((prev) =>
-      prev.map((node) => {
-        if (node.id !== selectedNode.id) return node
-        const data = { ...(node.data as Record<string, any>) }
-        const config = { ...(data.config || {}) }
-        assignPath(config, path, value)
-        return {
-          ...node,
-          data: {
-            ...data,
-            config,
-          },
-        }
-      })
-    )
+    setEdges((prev) => addEdge({ ...connection, id: `edge_${Date.now()}` }, prev))
   }
 
   const updateSelectedNodeLabel = (label: string) => {
-    if (!selectedNode) return
+    if (!selectedNodeId) return
     setNodes((prev) =>
       prev.map((node) =>
-        node.id === selectedNode.id
-          ? { ...node, data: { ...(node.data as Record<string, unknown>), label } }
+        node.id === selectedNodeId
+          ? { ...node, data: { ...(node.data as CanvasNodeData), label } }
           : node
       )
     )
   }
 
+  const replaceSelectedConfig = (nextConfig: Record<string, unknown>) => {
+    if (!selectedNodeId) return
+    setNodes((prev) =>
+      prev.map((node) =>
+        node.id === selectedNodeId
+          ? { ...node, data: { ...(node.data as CanvasNodeData), config: nextConfig } }
+          : node
+      )
+    )
+  }
+
+  const updateSelectedConfigField = (field: string, value: unknown) => {
+    if (!selectedNodeData) return
+    const nextConfig = structuredClone(selectedNodeData.config || {})
+    assignPath(nextConfig, field, value)
+    replaceSelectedConfig(nextConfig)
+  }
+
+  const toggleSelectedVariable = (field: 'input_variable_ids' | 'output_variable_ids', variableId: string) => {
+    if (!selectedNodeData) return
+    const current = Array.isArray(selectedNodeData.config[field]) ? [...(selectedNodeData.config[field] as string[])] : []
+    const next = current.includes(variableId)
+      ? current.filter((item) => item !== variableId)
+      : [...current, variableId]
+    updateSelectedConfigField(field, next)
+  }
+
   const removeSelectedNode = () => {
-    if (!selectedNode) return
-    setNodes((prev) => prev.filter((node) => node.id !== selectedNode.id))
-    setEdges((prev) => prev.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id))
+    if (!selectedNodeId) return
+    setNodes((prev) => prev.filter((node) => node.id !== selectedNodeId))
+    setEdges((prev) => prev.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId))
     setSelectedNodeId(null)
   }
 
-  const buildDefinition = () => {
-    const nodeMap = Object.fromEntries(
-      nodes.map((node) => [
-        node.id,
-        {
-          id: node.id,
-          type: node.type === 'input' ? 'start' : node.type === 'output' ? 'end' : inferNodeType(node.id),
-          name: String((node.data as Record<string, unknown>)?.label || node.id),
-          config: structuredClone(((node.data as Record<string, any>)?.config || {}) as Record<string, unknown>),
-        },
-      ])
-    )
-    const transitions: Record<string, unknown> = {}
-    nodes.forEach((node) => {
-      const outgoing = edges.filter((edge) => edge.source === node.id)
-      if (outgoing.length === 0) {
-        transitions[node.id] = null
-        return
-      }
-      const isCondition = inferNodeType(node.id) === 'condition'
-      if (isCondition) {
-        transitions[node.id] = Object.fromEntries(
-          outgoing.map((edge, index) => [String(edge.label || `branch_${index + 1}`), edge.target])
-        )
-        return
-      }
-      transitions[node.id] = outgoing[0].target
-    })
-    return {
-      workflow_code: workflowCode,
-      workflow_version: workflowVersion,
-      entry: nodes.find((node) => node.type === 'input')?.id || nodes[0]?.id || 'start',
-      nodes: nodeMap,
-      transitions,
-      config: workflowConfig,
+  const addVariable = () => {
+    const name = variableForm.name.trim()
+    if (!name) return
+    const nextVariable: VariableDefinition = {
+      id: `${variableForm.scope}_${Date.now()}`,
+      name,
+      type: variableForm.type,
+      scope: variableForm.scope,
+      description: variableForm.description.trim(),
     }
+
+    if (variableForm.scope === 'global') {
+      setGlobalVariables((prev) => [...prev, nextVariable])
+    } else {
+      setTempVariables((prev) => [...prev, nextVariable])
+    }
+    setVariableForm(emptyVariableForm)
   }
 
-  const saveDraft = async () => {
-    const definition = buildDefinition()
-    const response = await sendGatewayAction('save_workflow_draft', {
-      user_id: currentUserId,
-      workflow_code: workflowCode,
-      version: workflowVersion,
-      definition,
-      entry_rule: {
-        intent_codes: ['book_flight'],
-        keywords: ['航班', '机票'],
-        priority: 120,
-      },
-      editor_meta: {
-        layout_engine: 'reactflow',
-        viewport: { x: 0, y: 0, zoom: 0.92 },
-        readonly: false,
-        last_saved_by: currentUserId,
-      },
-      config: workflowConfig,
-    })
-    setSaveStatus(response ? '已通过网关保存' : '保存完成')
+  const updateVariable = (
+    scope: VariableScope,
+    variableId: string,
+    field: 'name' | 'type' | 'description',
+    value: string
+  ) => {
+    const setter = scope === 'global' ? setGlobalVariables : setTempVariables
+    setter((prev) =>
+      prev.map((item) =>
+        item.id === variableId
+          ? { ...item, [field]: field === 'type' ? (value as VariableType) : value }
+          : item
+      )
+    )
   }
 
-  const validateDraft = async () => {
-    const definition = buildDefinition()
-    const response = (await sendGatewayAction('validate_workflow_draft', {
-      definition,
-      config: workflowConfig,
-    })) as { issues?: WorkflowValidationIssue[] } | undefined
-    const issues = response?.issues ?? []
-    setValidationIssues(issues)
-    setSaveStatus(issues.length === 0 ? '校验通过' : `发现 ${issues.length} 个问题`)
+  const removeVariable = (scope: VariableScope, variableId: string) => {
+    const setter = scope === 'global' ? setGlobalVariables : setTempVariables
+    setter((prev) => prev.filter((item) => item.id !== variableId))
+    setNodes((prev) =>
+      prev.map((node) => {
+        const data = node.data as CanvasNodeData
+        const nextConfig = structuredClone(data.config || {})
+        for (const key of ['input_variable_ids', 'output_variable_ids']) {
+          if (Array.isArray(nextConfig[key])) {
+            nextConfig[key] = (nextConfig[key] as string[]).filter((item) => item !== variableId)
+          }
+        }
+        return { ...node, data: { ...data, config: nextConfig } }
+      })
+    )
   }
+
+  const renderVariableListSelector = (field: 'input_variable_ids' | 'output_variable_ids') => {
+    const selectedIds = Array.isArray(selectedNodeData?.config[field]) ? (selectedNodeData?.config[field] as string[]) : []
+
+    return (
+      <div className="space-y-2">
+        {allVariables.length === 0 && <div className="text-xs text-slate-500">请先在右下角维护变量设置。</div>}
+        {allVariables.map((variable) => (
+          <label key={variable.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+            <span className="min-w-0">
+              <span className="block font-medium text-slate-700">{variable.name}</span>
+              <span className="block text-xs text-slate-400">
+                {variable.scope === 'global' ? '全局' : '临时'} · {variable.type}
+              </span>
+              {variable.description && <span className="mt-1 block text-xs text-slate-500">{variable.description}</span>}
+            </span>
+            <input
+              type="checkbox"
+              checked={selectedIds.includes(variable.id)}
+              onChange={() => toggleSelectedVariable(field, variable.id)}
+            />
+          </label>
+        ))}
+      </div>
+    )
+  }
+
+  const renderNodeEditor = () => {
+    if (!selectedNodeData) {
+      return <div className="text-sm text-slate-500">选择一个节点后，在这里编辑节点配置。</div>
+    }
+
+    const config = selectedNodeData.config || {}
+    const nodeType = selectedNodeData.nodeType
+
+    return (
+      <div className="space-y-3">
+        <input
+          value={selectedNodeData.label}
+          onChange={(event) => updateSelectedNodeLabel(event.target.value)}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          placeholder="节点名称"
+        />
+        <div className="text-xs text-slate-400">节点类型: {displayNodeType(nodeType)}</div>
+
+        {(nodeType === 'start' || nodeType === 'coordinate' || nodeType === 'sub_agent' || nodeType === 'end') && (
+          <textarea
+            value={String(config.prompt || '')}
+            onChange={(event) => updateSelectedConfigField('prompt', event.target.value)}
+            className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            placeholder="请输入提示词"
+          />
+        )}
+
+        {nodeType === 'start' && (
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输入变量</div>
+            {renderVariableListSelector('input_variable_ids')}
+          </div>
+        )}
+
+        {nodeType === 'message' && (
+          <textarea
+            value={String(config.message_text || '')}
+            onChange={(event) => updateSelectedConfigField('message_text', event.target.value)}
+            className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            placeholder="请输入固定输出话术"
+          />
+        )}
+
+        {nodeType === 'tool' && (
+          <>
+            <select
+              value={String(config.invoke_type || 'api')}
+              onChange={(event) => updateSelectedConfigField('invoke_type', event.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="function">函数调用</option>
+              <option value="api">API 调用</option>
+              <option value="mcp">MCP 调用</option>
+              <option value="skill">Skill 调用</option>
+            </select>
+
+            {String(config.invoke_type || 'api') === 'function' && (
+              <input
+                value={String(config.function_name || '')}
+                onChange={(event) => updateSelectedConfigField('function_name', event.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                placeholder="函数名称"
+              />
+            )}
+
+            {String(config.invoke_type || 'api') === 'api' && (
+              <>
+                <input
+                  value={String(config.url || '')}
+                  onChange={(event) => updateSelectedConfigField('url', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="API 地址"
+                />
+                <select
+                  value={String(config.method || 'POST')}
+                  onChange={(event) => updateSelectedConfigField('method', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                </select>
+              </>
+            )}
+
+            {String(config.invoke_type || 'api') === 'mcp' && (
+              <>
+                <input
+                  value={String(config.mcp_endpoint || '')}
+                  onChange={(event) => updateSelectedConfigField('mcp_endpoint', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="MCP 服务地址"
+                />
+                <input
+                  value={String(config.tool_name || '')}
+                  onChange={(event) => updateSelectedConfigField('tool_name', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="MCP 工具名"
+                />
+              </>
+            )}
+
+            {String(config.invoke_type || 'api') === 'skill' && (
+              <>
+                <input
+                  value={String(config.skill_endpoint || '')}
+                  onChange={(event) => updateSelectedConfigField('skill_endpoint', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="Skill 地址"
+                />
+                <input
+                  value={String(config.skill_name || '')}
+                  onChange={(event) => updateSelectedConfigField('skill_name', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="Skill 名称"
+                />
+              </>
+            )}
+
+            <textarea
+              value={formatObject(config.payload_mapping)}
+              onChange={(event) => updateJsonConfigField('payload_mapping', event.target.value, config, replaceSelectedConfig)}
+              className="min-h-[120px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
+              placeholder='工具参数映射，例如 {"user_message":"execution.user_message"}'
+            />
+          </>
+        )}
+
+        {nodeType === 'end' && (
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输出变量</div>
+            {renderVariableListSelector('output_variable_ids')}
+          </div>
+        )}
+
+        {!['start', 'end'].includes(nodeType) && (
+          <button className="prompt-secondary w-full" type="button" onClick={removeSelectedNode}>
+            删除当前节点
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  const renderVariableManager = (scope: VariableScope, items: VariableDefinition[]) => (
+    <div className="space-y-2">
+      {items.length === 0 && <div className="text-xs text-slate-500">{scope === 'global' ? '暂无全局变量' : '暂无临时变量'}</div>}
+      {items.map((item) => (
+        <div key={item.id} className="space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-3">
+          <div className="grid gap-2 md:grid-cols-[1fr_140px_88px]">
+            <input
+              value={item.name}
+              onChange={(event) => updateVariable(scope, item.id, 'name', event.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              placeholder="变量名"
+            />
+            <select
+              value={item.type}
+              onChange={(event) => updateVariable(scope, item.id, 'type', event.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            >
+              {variableTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button
+              className="rounded-lg border border-red-200 px-3 py-2 text-xs text-red-600"
+              onClick={() => removeVariable(scope, item.id)}
+              type="button"
+            >
+              删除
+            </button>
+          </div>
+          <textarea
+            value={item.description}
+            onChange={(event) => updateVariable(scope, item.id, 'description', event.target.value)}
+            className="min-h-[72px] w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            placeholder="变量描述，供大模型理解变量含义和使用方式"
+          />
+        </div>
+      ))}
+    </div>
+  )
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      setWorkflowName,
+      validateDraft: handleValidateDraft,
+      saveDraft: handleSaveDraft,
+      publish: handlePublish,
+    }),
+    [handlePublish, handleSaveDraft, handleValidateDraft]
+  )
 
   return (
     <div className="panel-card h-full">
-      <div className="panel-header">
-        <div>
-          <div className="panel-title">流程画布</div>
-          <div className="text-xs text-slate-500">可编辑 React Flow 画布 · Netty + WebSocket 草稿同步</div>
-        </div>
-        <div className="text-xs text-slate-400">{saveStatus}</div>
-      </div>
-
-      <div className="mb-3 grid gap-2 md:grid-cols-[1fr_180px_160px]">
-        <input
-          value={workflowCode}
-          onChange={(event) => setWorkflowCode(event.target.value)}
-          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-          placeholder="流程编码"
-        />
-        <input
-          value={workflowVersion}
-          onChange={(event) => setWorkflowVersion(event.target.value)}
-          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-          placeholder="草稿版本"
-        />
-        <input
-          value={String(workflowConfig.intent_profile_ref || '')}
-          onChange={(event) =>
-            setWorkflowConfig((prev) => ({ ...prev, intent_profile_ref: event.target.value }))
-          }
-          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-          placeholder="意图模型配置"
-        />
-      </div>
-
-      <div className="mb-3 flex flex-wrap gap-2">
-        {nodeTemplates.map((template) => (
-          <button
-            key={template.type}
-            className="prompt-secondary"
-            onClick={() => addNode(template.type)}
-            type="button"
-          >
-            + {template.label}
-          </button>
-        ))}
-        <button className="prompt-secondary" type="button" onClick={() => void validateDraft()}>
-          校验草稿
-        </button>
-        <button className="prompt-primary" type="button" onClick={() => void saveDraft()}>
-          保存草稿
-        </button>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.9fr)]">
-        <div className="panel-body h-[460px] rounded-xl border border-slate-200 bg-white">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            fitView
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(null)}
-            panOnScroll
-          >
-            <Background gap={12} size={1} />
-            <MiniMap pannable zoomable />
-            <Controls />
-          </ReactFlow>
-        </div>
-
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">节点编辑器</div>
-            {!selectedNode && <div className="text-sm text-slate-500">选择一个节点后可编辑属性。</div>}
-            {selectedNode && (
-              <div className="space-y-3">
-                <input
-                  value={String((selectedNode.data as Record<string, unknown>)?.label || '')}
-                  onChange={(event) => updateSelectedNodeLabel(event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-                <div className="text-xs text-slate-400">节点类型：{displayNodeType(inferNodeType(selectedNode.id))}</div>
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.model_profile_ref || '')}
-                  onChange={(event) => updateSelectedNode('model_profile_ref', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="模型配置编码"
-                />
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.knowledge_base_code || '')}
-                  onChange={(event) => updateSelectedNode('knowledge_base_code', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="知识库编码"
-                />
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.tool_code || '')}
-                  onChange={(event) => updateSelectedNode('tool_code', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="工具编码"
-                />
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.url || '')}
-                  onChange={(event) => updateSelectedNode('url', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="工具地址"
-                />
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.query_rewrite?.model_profile_ref || '')}
-                  onChange={(event) => updateSelectedNode('query_rewrite.model_profile_ref', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="查询改写模型配置"
-                />
-                <input
-                  value={String((selectedNode.data as Record<string, any>)?.config?.answer_generation?.model_profile_ref || '')}
-                  onChange={(event) => updateSelectedNode('answer_generation.model_profile_ref', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="答案生成模型配置"
-                />
-                <button className="prompt-secondary w-full" type="button" onClick={removeSelectedNode}>
-                  删除当前节点
-                </button>
-              </div>
-            )}
+      <div className="grid h-full gap-4 lg:grid-cols-[minmax(0,2.5fr)_360px]">
+        <div className="flex min-h-0 flex-col gap-4">
+          <div className="panel-header mb-0">
+            <div>
+              <div className="panel-title">流程画布</div>
+              <div className="text-xs text-slate-500">{workflowName.trim() || '未命名流程'}</div>
+            </div>
+            <div className="text-xs text-slate-400">{saveStatus}</div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">校验结果</div>
-            <ul className="space-y-1">
-              {validationRules.map((rule) => (
-                <li key={rule.label} className={`text-sm ${rule.valid ? 'text-emerald-600' : 'text-amber-600'}`}>
-                  {rule.valid ? '通过' : '待补充'} · {rule.label}
-                </li>
-              ))}
-            </ul>
-            {validationIssues.length > 0 && (
-              <div className="mt-3 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                {validationIssues.map((issue, index) => (
-                  <div key={`${issue.field}_${index}`} className="text-xs text-amber-700">
-                    {issue.node_id ? `${issue.node_id} · ` : ''}{issue.field} · {issue.message}
-                  </div>
-                ))}
+          <div className="flex flex-wrap gap-2">
+            {nodeTemplates.map((template) => (
+              <button
+                key={template.nodeType}
+                className="prompt-secondary"
+                onClick={() => addNode(template.nodeType)}
+                type="button"
+              >
+                + {template.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="panel-body min-h-[760px] rounded-xl border border-slate-200 bg-white">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              fitView
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+              onPaneClick={() => setSelectedNodeId(null)}
+              panOnScroll
+            >
+              <Background gap={12} size={1} />
+              <MiniMap pannable zoomable />
+              <Controls />
+            </ReactFlow>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 gap-4 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="min-h-0 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">节点编辑</div>
+            <div className="max-h-full overflow-auto pr-1">{renderNodeEditor()}</div>
+          </div>
+
+          <div className="min-h-0 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">变量设置</div>
+            <div className="mb-3 grid gap-2">
+              <input
+                value={variableForm.name}
+                onChange={(event) => setVariableForm((prev) => ({ ...prev, name: event.target.value }))}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                placeholder="变量名"
+              />
+              <div className="grid gap-2 sm:grid-cols-[1fr_120px]">
+                <select
+                  value={variableForm.type}
+                  onChange={(event) => setVariableForm((prev) => ({ ...prev, type: event.target.value as VariableType }))}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  {variableTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={variableForm.scope}
+                  onChange={(event) => setVariableForm((prev) => ({ ...prev, scope: event.target.value as VariableScope }))}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="global">全局变量</option>
+                  <option value="temp">临时变量</option>
+                </select>
               </div>
-            )}
+              <textarea
+                value={variableForm.description}
+                onChange={(event) => setVariableForm((prev) => ({ ...prev, description: event.target.value }))}
+                className="min-h-[80px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                placeholder="变量描述，供大模型理解变量的语义、格式和使用限制"
+              />
+              <button className="prompt-primary" type="button" onClick={addVariable}>
+                新增变量
+              </button>
+            </div>
+
+            <div className="grid max-h-[420px] gap-4 overflow-auto xl:grid-cols-2">
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">全局变量</div>
+                {renderVariableManager('global', globalVariables)}
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">临时变量</div>
+                {renderVariableManager('temp', tempVariables)}
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
   )
+})
+
+function toFlowType(nodeType: DesignerNodeType): 'input' | 'default' | 'output' {
+  if (nodeType === 'start') return 'input'
+  if (nodeType === 'end') return 'output'
+  return 'default'
 }
 
-function inferNodeType(nodeId: string): string {
-  if (nodeId === 'start') return 'start'
-  if (nodeId === 'end') return 'end'
-  if (nodeId.includes('knowledge') || nodeId.includes('retrieve')) return 'knowledge'
-  if (nodeId.includes('tool') || nodeId.includes('search')) return 'tool'
-  if (nodeId.includes('form') || nodeId.includes('collect')) return 'form'
-  if (nodeId.includes('condition') || nodeId.includes('check')) return 'condition'
-  return 'llm'
+function normalizeNodeConfig(
+  nodeType: DesignerNodeType,
+  config: Record<string, unknown>,
+  variableNameMap: Map<string, VariableDefinition>
+) {
+  switch (nodeType) {
+    case 'start':
+      return {
+        prompt: String(config.prompt || ''),
+        initial_variables: mapVariableIdsToObject(config.input_variable_ids, variableNameMap, '', true),
+      }
+    case 'coordinate':
+    case 'sub_agent':
+      return {
+        prompt: String(config.prompt || ''),
+        user_prompt: String(config.prompt || ''),
+      }
+    case 'message':
+      return {
+        message_text: String(config.message_text || ''),
+      }
+    case 'tool': {
+      const invokeType = String(config.invoke_type || 'api')
+      const base: Record<string, unknown> = {
+        invoke_type: invokeType,
+        payload_mapping: ensureObject(config.payload_mapping),
+      }
+      if (invokeType === 'function') {
+        base.function_name = String(config.function_name || '')
+        base.tool_code = String(config.function_name || '')
+      } else if (invokeType === 'api') {
+        base.url = String(config.url || '')
+        base.method = String(config.method || 'POST')
+      } else if (invokeType === 'mcp') {
+        base.mcp_endpoint = String(config.mcp_endpoint || '')
+        base.tool_name = String(config.tool_name || '')
+        base.tool_code = String(config.tool_name || '')
+      } else if (invokeType === 'skill') {
+        base.skill_endpoint = String(config.skill_endpoint || '')
+        base.skill_name = String(config.skill_name || '')
+        base.tool_code = String(config.skill_name || '')
+      }
+      return base
+    }
+    case 'end':
+      return {
+        prompt: String(config.prompt || ''),
+        output_format: mapVariableIdsToObject(config.output_variable_ids, variableNameMap, 'execution', false),
+      }
+    default:
+      return config
+  }
 }
 
-function displayNodeType(nodeType: string): string {
+function mapVariableIdsToObject(
+  source: unknown,
+  variableNameMap: Map<string, VariableDefinition>,
+  prefix: string,
+  useEmptyDefault: boolean
+) {
+  const ids = Array.isArray(source) ? (source as string[]) : []
+  const entries = ids
+    .map((id) => variableNameMap.get(id))
+    .filter((item): item is VariableDefinition => Boolean(item))
+    .map((item) => [
+      item.name,
+      prefix ? `$${prefix}.${item.name}` : (useEmptyDefault ? '' : item.name),
+    ])
+  return Object.fromEntries(entries)
+}
+
+function ensureObject(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function formatObject(value: unknown) {
+  return JSON.stringify(ensureObject(value), null, 2)
+}
+
+function updateJsonConfigField(
+  field: string,
+  rawValue: string,
+  currentConfig: Record<string, unknown>,
+  replaceConfig: (config: Record<string, unknown>) => void
+) {
+  try {
+    const parsed = rawValue.trim() ? JSON.parse(rawValue) : {}
+    const nextConfig = structuredClone(currentConfig)
+    nextConfig[field] = parsed
+    replaceConfig(nextConfig)
+  } catch {
+  }
+}
+
+function assignPath(target: Record<string, unknown>, field: string, value: unknown) {
+  target[field] = value
+}
+
+function displayNodeType(nodeType: DesignerNodeType) {
   switch (nodeType) {
     case 'start':
       return '开始节点'
-    case 'end':
-      return '结束节点'
-    case 'knowledge':
-      return '知识节点'
+    case 'coordinate':
+      return '协调节点'
+    case 'sub_agent':
+      return '子代理节点'
     case 'tool':
       return '工具节点'
-    case 'form':
-      return '表单节点'
-    case 'condition':
-      return '条件节点'
+    case 'message':
+      return '消息节点'
+    case 'end':
+      return '结束节点'
     default:
-      return '大模型节点'
+      return nodeType
   }
 }
 
-function assignPath(source: Record<string, any>, path: string, value: unknown) {
-  const segments = path.split('.')
-  let current = source
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index]
-    current[segment] = current[segment] || {}
-    current = current[segment]
-  }
-  current[segments[segments.length - 1]] = value
+function createWorkflowCode() {
+  return `workflow_${Date.now()}`
+}
+
+function createPublishVersion() {
+  const now = new Date()
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ]
+  return `v${parts.join('')}`
 }
 
 export default Orchestrator

@@ -9,6 +9,7 @@ import robot.agent.dto.response.WorkflowResponse;
 import robot.agent.dto.response.WorkflowVersionResponse;
 import robot.agent.service.WorkflowService;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/workflows")
@@ -74,6 +75,15 @@ public class WorkflowController {
         return ResponseEntity.ok(workflowService.getWorkflowVersions(code));
     }
 
+    @PostMapping("/{code}/versions/{version}/archive")
+    public ResponseEntity<WorkflowVersionResponse> archiveVersion(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String code,
+            @PathVariable String version
+    ) {
+        return ResponseEntity.ok(workflowService.archiveWorkflowVersion(userId, code, version));
+    }
+
     @PostMapping("/{code}/versions")
     public ResponseEntity<WorkflowVersionResponse> createVersion(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -85,10 +95,43 @@ public class WorkflowController {
         );
     }
 
+    @PostMapping("/{code}/drafts")
+    public ResponseEntity<WorkflowVersionResponse> saveDraft(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String code,
+            @RequestBody CreateWorkflowVersionRequest request
+    ) {
+        return ResponseEntity.ok(workflowService.saveWorkflowDraft(userId, code, request));
+    }
+
+    @PostMapping("/{code}/validate-draft")
+    public ResponseEntity<Map<String, Object>> validateDraft(
+            @PathVariable String code,
+            @RequestBody ValidateDraftRequest request
+    ) {
+        List<Map<String, Object>> issues = workflowService.validateWorkflowDefinition(request.getDefinition(), request.getConfig());
+        return ResponseEntity.ok(Map.of(
+                "workflow_code", code,
+                "valid", issues.isEmpty(),
+                "issues", issues
+        ));
+    }
+
     static class PublishRequest {
         private String version;
 
         public String getVersion() { return version; }
         public void setVersion(String version) { this.version = version; }
+    }
+
+    static class ValidateDraftRequest {
+        private String definition;
+        private String config;
+
+        public String getDefinition() { return definition; }
+        public void setDefinition(String definition) { this.definition = definition; }
+
+        public String getConfig() { return config; }
+        public void setConfig(String config) { this.config = config; }
     }
 }

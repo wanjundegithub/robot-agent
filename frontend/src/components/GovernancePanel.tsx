@@ -14,7 +14,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
     if (!sessionId) return
     getOperationalReadiness(sessionId)
       .then(setReadiness)
-      .catch((error) => console.error('获取第5阶段运行状态失败:', error))
+      .catch((error) => console.error('获取运行状态失败:', error))
   }, [sessionId, notice?.updated_at])
 
   const noticeClass =
@@ -61,7 +61,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
       <div className="panel-header">
         <div>
           <div className="panel-title">治理视图</div>
-          <div className="text-xs text-slate-500">第五阶段 权限 / 保护 / 归档</div>
+          <div className="text-xs text-slate-500">权限、保护与归档概览</div>
         </div>
       </div>
       <div className="panel-body space-y-4 overflow-y-auto">

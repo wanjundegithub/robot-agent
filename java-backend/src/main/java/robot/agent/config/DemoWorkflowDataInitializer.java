@@ -127,23 +127,31 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     }
 
     private void seedModelConfigs() throws Exception {
-        if (llmProviderConfigRepository.findByProviderCode("openai-compatible-prod").isEmpty()) {
+        java.util.Optional<LlmProviderConfig> existingProvider = llmProviderConfigRepository.findByProviderCode("openai-compatible-prod");
+        if (existingProvider.isEmpty()) {
             LlmProviderConfig provider = new LlmProviderConfig();
+            String apiKey = System.getenv("ROBOT_LLM_API_KEY");
             provider.setProviderCode("openai-compatible-prod");
-            provider.setProviderType("openai_compatible");
-            provider.setBaseUrl("https://llm.example.com/v1");
-            provider.setApiKeySecretRef("env:ROBOT_LLM_API_KEY");
-            provider.setExtraHeaders(objectMapper.writeValueAsString(Map.of("x-tenant-id", "workspace_001")));
+            provider.setProviderName("默认 OpenAI 提供方");
+            provider.setProviderType("openai");
+            provider.setBaseUrl("https://api1.oai1.online/v1");
+            provider.setDefaultModelCode("gpt-4o-mini");
+            provider.setApiKeySecretRef(apiKey == null || apiKey.isBlank() ? null : "env:ROBOT_LLM_API_KEY");
+            provider.setEnabled(apiKey != null && !apiKey.isBlank());
             provider.setCreatedBy("system");
+            llmProviderConfigRepository.save(provider);
+        } else if (existingProvider.get().getProviderName() == null || existingProvider.get().getProviderName().isBlank()) {
+            LlmProviderConfig provider = existingProvider.get();
+            provider.setProviderName("默认 OpenAI 提供方");
             llmProviderConfigRepository.save(provider);
         }
 
-        seedProfile("intent-router-v1", "openai-compatible-prod", "qwen-plus", "intent_routing", 0.10d, 0.80d, 512);
-        seedProfile("knowledge-query-rewrite-v1", "openai-compatible-prod", "qwen-plus", "knowledge_query_rewrite", 0.10d, 0.90d, 512);
-        seedProfile("knowledge-answer-v1", "openai-compatible-prod", "qwen-plus", "knowledge_answer", 0.20d, 0.90d, 1024);
-        seedProfile("general-chat-v1", "openai-compatible-prod", "qwen-plus", "general_llm", 0.30d, 0.95d, 1024);
-        seedProfile("general-chat-fallback-v1", "openai-compatible-prod", "qwen-turbo", "general_llm", 0.20d, 0.90d, 1024);
-        seedProfile("structured-extraction-v1", "openai-compatible-prod", "qwen-plus", "structured_extraction", 0.10d, 0.80d, 512);
+        seedProfile("intent-router-v1", "openai-compatible-prod", "gpt-4o-mini", "intent_routing", 0.10d, 0.80d, 512);
+        seedProfile("knowledge-query-rewrite-v1", "openai-compatible-prod", "gpt-4o-mini", "knowledge_query_rewrite", 0.10d, 0.90d, 512);
+        seedProfile("knowledge-answer-v1", "openai-compatible-prod", "gpt-4o-mini", "knowledge_answer", 0.20d, 0.90d, 1024);
+        seedProfile("general-chat-v1", "openai-compatible-prod", "gpt-4o-mini", "general_llm", 0.30d, 0.95d, 1024);
+        seedProfile("general-chat-fallback-v1", "openai-compatible-prod", "gpt-4o-mini", "general_llm", 0.20d, 0.90d, 1024);
+        seedProfile("structured-extraction-v1", "openai-compatible-prod", "gpt-4o-mini", "structured_extraction", 0.10d, 0.80d, 512);
     }
 
     private void seedProfile(

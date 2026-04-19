@@ -1,6 +1,7 @@
 package robot.agent.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Map;
 import java.util.List;
 
 public class SendMessageRequest {
@@ -18,6 +19,16 @@ public class SendMessageRequest {
     private String confirmationId;
     @JsonProperty("cancel_confirmation")
     private Boolean cancelConfirmation;
+    @JsonProperty("workflow_code")
+    private String workflowCode;
+    @JsonProperty("workflow_version")
+    private String workflowVersion;
+    @JsonProperty("workflow_definition")
+    private Map<String, Object> workflowDefinition;
+    @JsonProperty("entry_rule")
+    private Map<String, Object> entryRule;
+    @JsonProperty("workflow_config")
+    private Map<String, Object> workflowConfig;
 
     public String getMessageId() { return messageId; }
     public void setMessageId(String messageId) { this.messageId = messageId; }
@@ -42,4 +53,19 @@ public class SendMessageRequest {
 
     public Boolean getCancelConfirmation() { return cancelConfirmation; }
     public void setCancelConfirmation(Boolean cancelConfirmation) { this.cancelConfirmation = cancelConfirmation; }
+
+    public String getWorkflowCode() { return workflowCode; }
+    public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public String getWorkflowVersion() { return workflowVersion; }
+    public void setWorkflowVersion(String workflowVersion) { this.workflowVersion = workflowVersion; }
+
+    public Map<String, Object> getWorkflowDefinition() { return workflowDefinition; }
+    public void setWorkflowDefinition(Map<String, Object> workflowDefinition) { this.workflowDefinition = workflowDefinition; }
+
+    public Map<String, Object> getEntryRule() { return entryRule; }
+    public void setEntryRule(Map<String, Object> entryRule) { this.entryRule = entryRule; }
+
+    public Map<String, Object> getWorkflowConfig() { return workflowConfig; }
+    public void setWorkflowConfig(Map<String, Object> workflowConfig) { this.workflowConfig = workflowConfig; }
 }

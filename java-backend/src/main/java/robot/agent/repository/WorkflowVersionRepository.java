@@ -8,6 +8,7 @@ import java.util.Optional;
 
 public interface WorkflowVersionRepository extends JpaRepository<WorkflowVersion, Long> {
     List<WorkflowVersion> findByWorkflowCodeOrderByCreatedAtDesc(String workflowCode);
+    List<WorkflowVersion> findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(String workflowCode, WorkflowVersionStatus status);
     Optional<WorkflowVersion> findByWorkflowCodeAndVersion(String workflowCode, String version);
     List<WorkflowVersion> findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus status);
 }

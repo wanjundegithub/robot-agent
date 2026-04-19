@@ -137,6 +137,38 @@ async def test_tool_node_degrades_when_registry_execute_fails():
 
 
 @pytest.mark.asyncio
+async def test_tool_node_function_invoke_type_returns_variables():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_function_tool",
+        session_id="sess_function_tool",
+        workflow_code="agent_workflow",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variables({
+        "departure_city": "北京",
+        "arrival_city": "上海",
+    })
+
+    node = ToolNode("function_tool", {
+        "config": {
+            "invoke_type": "function",
+            "function_name": "extract_slots_summary",
+            "payload_mapping": {
+                "departure_city": "execution.departure_city",
+                "arrival_city": "execution.arrival_city",
+            },
+            "idempotent": False,
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["output"]["departure_city"] == "北京"
+    assert result["output"]["arrival_city"] == "上海"
+
+
+@pytest.mark.asyncio
 async def test_tool_node_blocks_unconfirmed_high_risk_tool():
     runtime_protection_manager.reset()
     context = ExecutionContext(

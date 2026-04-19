@@ -121,7 +121,9 @@ class LLMNode(BaseNode):
 
     def _build_user_prompt(self, message: str, context) -> str:
         if self.user_prompt:
-            return self.user_prompt.format(user_message=message, **context.execution_variables)
+            variables = dict(context.execution_variables)
+            variables.pop("user_message", None)
+            return self.user_prompt.format(user_message=message, **variables)
         if self.prompt == "hotel_slot_extraction":
             return f"用户输入：{message}\n请提取：arrival_city, departure_date, nights。"
         return f"用户输入：{message}\n请提取结构化字段。"

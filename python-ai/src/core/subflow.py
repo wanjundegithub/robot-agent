@@ -6,19 +6,21 @@ from src.core.context import ExecutionContext
 
 
 def _build_node(node_def: Dict[str, Any]):
-    from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, StartNode, ToolNode
+    from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, MessageNode, StartNode, ToolNode
 
     node_type = node_def["type"]
     if node_type == "start":
         return StartNode(node_def["id"], node_def)
     if node_type == "end":
         return EndNode(node_def["id"], node_def)
-    if node_type == "llm":
+    if node_type in {"llm", "coordinate", "sub_agent"}:
         return LLMNode(node_def["id"], node_def)
     if node_type == "condition":
         return ConditionNode(node_def["id"], node_def)
     if node_type == "form":
         return FormNode(node_def["id"], node_def)
+    if node_type == "message":
+        return MessageNode(node_def["id"], node_def)
     if node_type == "knowledge":
         return KnowledgeNode(node_def["id"], node_def)
     if node_type == "subflow":

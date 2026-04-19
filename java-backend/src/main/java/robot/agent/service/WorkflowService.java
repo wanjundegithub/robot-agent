@@ -137,7 +137,24 @@ public class WorkflowService {
 
     public WorkflowVersionResponse saveWorkflowDraft(String userId, String workflowCode, CreateWorkflowVersionRequest request) {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
-                .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
+                .orElseGet(() -> {
+                    Workflow created = new Workflow();
+                    created.setWorkflowCode(workflowCode);
+                    created.setName(resolveWorkflowName(request, workflowCode));
+                    created.setDescription("Auto-created draft workflow");
+                    created.setWorkspaceId(1L);
+                    created.setStatus(WorkflowStatus.DRAFT);
+                    created.setCreatedBy(userId);
+                    created.setCreatedAt(LocalDateTime.now());
+                    created.setUpdatedAt(LocalDateTime.now());
+                    return workflowRepository.save(created);
+                });
+        if (request.getWorkflowName() != null && !request.getWorkflowName().isBlank()
+                && !request.getWorkflowName().equals(workflow.getName())) {
+            workflow.setName(request.getWorkflowName().trim());
+            workflow.setUpdatedAt(LocalDateTime.now());
+            workflow = workflowRepository.save(workflow);
+        }
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.create");
 
         WorkflowVersion version = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, request.getVersion())
@@ -155,20 +172,76 @@ public class WorkflowService {
         }
         WorkflowVersion saved = workflowVersionRepository.save(version);
         auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.version.save_draft", "workflow_version", workflowCode + ":" + request.getVersion(), request, 200);
-        return WorkflowVersionResponse.fromEntity(saved);
+        return WorkflowVersionResponse.fromEntity(saved, workflow);
     }
 
     public WorkflowVersionResponse getWorkflowVersion(String workflowCode, String version) {
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found"));
-        return WorkflowVersionResponse.fromEntity(workflowVersion);
+        Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
+                .orElse(null);
+        return WorkflowVersionResponse.fromEntity(workflowVersion, workflow);
     }
 
     public List<WorkflowVersionResponse> getWorkflowVersions(String workflowCode) {
-        List<WorkflowVersion> versions = workflowVersionRepository.findByWorkflowCodeOrderByCreatedAtDesc(workflowCode);
+        List<WorkflowVersion> versions = workflowVersionRepository.findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(
+                workflowCode,
+                WorkflowVersionStatus.ARCHIVED
+        );
         return versions.stream()
-                .map(WorkflowVersionResponse::fromEntity)
+                .map(version -> WorkflowVersionResponse.fromEntity(
+                        version,
+                        workflowRepository.findByWorkflowCode(version.getWorkflowCode()).orElse(null)
+                ))
                 .collect(Collectors.toList());
+    }
+
+    public WorkflowVersionResponse archiveWorkflowVersion(String userId, String workflowCode, String version) {
+        Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
+                .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.archive");
+
+        WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
+                .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
+        workflowVersion.setStatus(WorkflowVersionStatus.ARCHIVED);
+        WorkflowVersion savedVersion = workflowVersionRepository.save(workflowVersion);
+
+        if (version.equals(workflow.getCurrentVersion())) {
+            Optional<WorkflowVersion> fallbackPublishedVersion = workflowVersionRepository
+                    .findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(workflowCode, WorkflowVersionStatus.ARCHIVED)
+                    .stream()
+                    .filter(item -> item.getStatus() == WorkflowVersionStatus.PUBLISHED)
+                    .filter(item -> !version.equals(item.getVersion()))
+                    .findFirst();
+
+            if (fallbackPublishedVersion.isPresent()) {
+                workflow.setCurrentVersion(fallbackPublishedVersion.get().getVersion());
+                workflow.setStatus(WorkflowStatus.PUBLISHED);
+            } else {
+                workflow.setCurrentVersion(null);
+                workflow.setStatus(WorkflowStatus.DRAFT);
+            }
+            workflow.setUpdatedAt(LocalDateTime.now());
+            workflowRepository.save(workflow);
+        }
+
+        auditService.logAction(
+                workflow.getWorkspaceId(),
+                userId,
+                "workflow.version.archive",
+                "workflow_version",
+                workflowCode + ":" + version,
+                null,
+                200
+        );
+        return WorkflowVersionResponse.fromEntity(savedVersion, workflow);
+    }
+
+    private String resolveWorkflowName(CreateWorkflowVersionRequest request, String workflowCode) {
+        if (request.getWorkflowName() != null && !request.getWorkflowName().isBlank()) {
+            return request.getWorkflowName().trim();
+        }
+        return workflowCode;
     }
 
     public WorkflowVersion getWorkflowVersionEntity(String workflowCode, String version) {
@@ -178,7 +251,6 @@ public class WorkflowService {
 
     public List<Map<String, Object>> validateWorkflowDefinition(String definitionJson, String configJson) {
         Map<String, Object> definition = parseJsonObject(definitionJson);
-        Map<String, Object> workflowConfig = parseJsonObject(configJson);
         List<Map<String, Object>> issues = new ArrayList<>();
 
         Map<String, Object> nodes = asMap(definition.get("nodes"));
@@ -194,14 +266,18 @@ public class WorkflowService {
             return issues;
         }
 
-        if (!nodes.values().stream().anyMatch(node -> "end".equals(String.valueOf(asMap(node).get("type"))))) {
-            issues.add(issue(null, "nodes", "缺少 end 节点"));
-        }
+        long startCount = nodes.values().stream()
+                .filter(node -> "start".equals(String.valueOf(asMap(node).get("type"))))
+                .count();
+        long endCount = nodes.values().stream()
+                .filter(node -> "end".equals(String.valueOf(asMap(node).get("type"))))
+                .count();
 
-        String workflowDefaultProfile = readNestedString(workflowConfig, "llm_defaults", "model_profile_ref");
-        String routingProfile = stringValue(workflowConfig.get("intent_profile_ref"));
-        if (routingProfile == null) {
-            issues.add(issue(null, "config.intent_profile_ref", "未配置意图识别模型 Profile"));
+        if (startCount != 1) {
+            issues.add(issue(null, "nodes.start", "必须且只能有一个开始节点"));
+        }
+        if (endCount != 1) {
+            issues.add(issue(null, "nodes.end", "必须且只能有一个结束节点"));
         }
 
         for (Map.Entry<String, Object> nodeEntry : nodes.entrySet()) {
@@ -209,24 +285,26 @@ public class WorkflowService {
             Map<String, Object> node = asMap(nodeEntry.getValue());
             String type = stringValue(node.get("type"));
             Map<String, Object> nodeConfig = asMap(node.get("config"));
-            if ("llm".equals(type) && stringValue(nodeConfig.get("model_profile_ref")) == null && workflowDefaultProfile == null) {
-                issues.add(issue(nodeId, "config.model_profile_ref", "LLM 节点缺少模型 Profile"));
+            if (type == null || !Set.of("start", "coordinate", "sub_agent", "tool", "message", "end").contains(type)) {
+                issues.add(issue(nodeId, "type", "节点类型不受支持"));
+                continue;
             }
-            if ("knowledge".equals(type)) {
-                if (stringValue(nodeConfig.get("knowledge_base_code")) == null) {
-                    issues.add(issue(nodeId, "config.knowledge_base_code", "Knowledge 节点缺少知识库编码"));
-                }
-                Map<String, Object> queryRewrite = asMap(nodeConfig.get("query_rewrite"));
-                if (Boolean.TRUE.equals(queryRewrite.get("enabled")) && stringValue(queryRewrite.get("model_profile_ref")) == null) {
-                    issues.add(issue(nodeId, "config.query_rewrite.model_profile_ref", "Knowledge 查询改写缺少模型 Profile"));
-                }
-                Map<String, Object> answerGeneration = asMap(nodeConfig.get("answer_generation"));
-                if (Boolean.TRUE.equals(answerGeneration.get("enabled")) && stringValue(answerGeneration.get("model_profile_ref")) == null) {
-                    issues.add(issue(nodeId, "config.answer_generation.model_profile_ref", "Knowledge 回答生成缺少模型 Profile"));
+            if (("coordinate".equals(type) || "sub_agent".equals(type) || "start".equals(type) || "end".equals(type))
+                    && stringValue(nodeConfig.get("prompt")) == null
+                    && stringValue(nodeConfig.get("user_prompt")) == null) {
+                issues.add(issue(nodeId, "config.prompt", "提示词节点缺少 prompt"));
+            }
+            if ("end".equals(type)) {
+                Object outputFormat = nodeConfig.get("output_format");
+                if (outputFormat != null && !(outputFormat instanceof Map<?, ?>)) {
+                    issues.add(issue(nodeId, "config.output_format", "结束节点缺少输出变量映射"));
                 }
             }
-            if ("tool".equals(type) && stringValue(nodeConfig.get("tool_code")) == null && stringValue(nodeConfig.get("url")) == null) {
-                issues.add(issue(nodeId, "config.tool_code", "Tool 节点缺少真实工具配置"));
+            if ("message".equals(type) && stringValue(nodeConfig.get("message_text")) == null) {
+                issues.add(issue(nodeId, "config.message_text", "消息节点缺少固定话术"));
+            }
+            if ("tool".equals(type)) {
+                validateToolNode(nodeId, nodeConfig, issues);
             }
         }
         return issues;
@@ -387,14 +465,31 @@ public class WorkflowService {
 
     public RuntimeExecutionBundle buildRuntimeExecutionBundle(String workflowCode, String version) {
         WorkflowVersion workflowVersion = getWorkflowVersionEntity(workflowCode, version);
+        return buildRuntimeExecutionBundle(
+                workflowCode,
+                version,
+                parseJsonObject(workflowVersion.getDefinition()),
+                parseJsonObject(workflowVersion.getEntryRule()),
+                parseJsonObject(workflowVersion.getConfig())
+        );
+    }
+
+    public RuntimeExecutionBundle buildRuntimeExecutionBundle(
+            String workflowCode,
+            String version,
+            Map<String, Object> workflowDefinition,
+            Map<String, Object> entryRule,
+            Map<String, Object> workflowConfig
+    ) {
         Map<String, Map<String, Object>> workflowCatalog = buildWorkflowCatalog();
+        workflowCatalog.put(workflowCode + "@" + version, workflowDefinition);
         Collection<Map<String, Object>> workflowDefinitions = workflowCatalog.values();
         String routingProfileCode = modelConfigService.resolveRoutingProfileCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingProfileCode);
         return new RuntimeExecutionBundle(
-                parseJsonObject(workflowVersion.getDefinition()),
-                parseJsonObject(workflowVersion.getEntryRule()),
-                parseJsonObject(workflowVersion.getConfig()),
+                workflowDefinition,
+                entryRule,
+                workflowConfig,
                 workflowCatalog,
                 runtimeBundle.providerConfigs(),
                 runtimeBundle.modelProfiles(),
@@ -537,6 +632,46 @@ public class WorkflowService {
         issue.put("field", field);
         issue.put("message", message);
         return issue;
+    }
+
+    private void validateToolNode(String nodeId, Map<String, Object> nodeConfig, List<Map<String, Object>> issues) {
+        String invokeType = stringValue(nodeConfig.get("invoke_type"));
+        if (invokeType == null) {
+            issues.add(issue(nodeId, "config.invoke_type", "工具节点缺少调用形式"));
+            return;
+        }
+        switch (invokeType) {
+            case "function" -> {
+                if (stringValue(nodeConfig.get("function_name")) == null) {
+                    issues.add(issue(nodeId, "config.function_name", "函数调用缺少 function_name"));
+                }
+            }
+            case "api" -> {
+                if (stringValue(nodeConfig.get("url")) == null) {
+                    issues.add(issue(nodeId, "config.url", "API 调用缺少 url"));
+                }
+                if (stringValue(nodeConfig.get("method")) == null) {
+                    issues.add(issue(nodeId, "config.method", "API 调用缺少 method"));
+                }
+            }
+            case "mcp" -> {
+                if (stringValue(nodeConfig.get("mcp_endpoint")) == null) {
+                    issues.add(issue(nodeId, "config.mcp_endpoint", "MCP 调用缺少 mcp_endpoint"));
+                }
+                if (stringValue(nodeConfig.get("tool_name")) == null) {
+                    issues.add(issue(nodeId, "config.tool_name", "MCP 调用缺少 tool_name"));
+                }
+            }
+            case "skill" -> {
+                if (stringValue(nodeConfig.get("skill_endpoint")) == null) {
+                    issues.add(issue(nodeId, "config.skill_endpoint", "Skill 调用缺少 skill_endpoint"));
+                }
+                if (stringValue(nodeConfig.get("skill_name")) == null) {
+                    issues.add(issue(nodeId, "config.skill_name", "Skill 调用缺少 skill_name"));
+                }
+            }
+            default -> issues.add(issue(nodeId, "config.invoke_type", "工具节点调用形式不受支持"));
+        }
     }
 
     private String readNestedString(Map<String, Object> source, String first, String second) {

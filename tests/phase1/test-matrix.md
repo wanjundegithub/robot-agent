@@ -72,5 +72,5 @@ Java -> Python (architecture doc §7.1):
 
 1. `execution.status` casing:
    - Target (latest): lower-case values as specified by `docs/phase1-contract.md` (`pending|running|suspended|completed|failed|cancelled`).
-   - Current repo migration uses upper-case enums in `java-backend/src/main/resources/db/migration/V1__create_tables.sql` and must be updated to match the target.
+   - Current repo schema generation no longer depends on Flyway migration scripts; verify entity mappings and persisted values still match the target.
    - Tests and assertions should follow the target lower-case; treat upper-case as a temporary deviation to be fixed.

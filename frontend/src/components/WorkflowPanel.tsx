@@ -1,41 +1,118 @@
-import React, { useEffect, useState } from 'react'
-import { getWorkflows, getWorkflowVersions, publishWorkflow, rollbackWorkflow } from '../services/api'
+import React, { useCallback, useEffect, useState } from 'react'
+import {
+  archiveWorkflowVersion,
+  getWorkflows,
+  getWorkflowVersions,
+  publishWorkflow,
+  rollbackWorkflow,
+} from '../services/api'
 import type { WorkflowSummary, WorkflowVersionSummary } from '../types'
+import type { WorkflowVersionMutation } from './Orchestrator'
 
-const WorkflowPanel: React.FC = () => {
-  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([])
-  const [versions, setVersions] = useState<Record<string, WorkflowVersionSummary[]>>({})
+interface WorkflowPanelProps {
+  currentUserId: string
+  workflowCode?: string
+  refreshSignal?: WorkflowVersionMutation | null
+  onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
+}
+
+interface WorkflowVersionGroup {
+  workflow: WorkflowSummary
+  versions: WorkflowVersionSummary[]
+}
+
+const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
+  currentUserId,
+  workflowCode,
+  refreshSignal,
+  onWorkflowVersionMutation,
+}) => {
+  const [groups, setGroups] = useState<WorkflowVersionGroup[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setIsLoading(true)
     setError(null)
+
     try {
-      const workflowItems = await getWorkflows()
-      setWorkflows(workflowItems)
-      const versionEntries = await Promise.all(
-        workflowItems.map(async (workflow) => [workflow.workflowCode, await getWorkflowVersions(workflow.workflowCode)] as const)
+      const workflows = await getWorkflows()
+      const orderedWorkflows = [...workflows].sort((left, right) => {
+        const leftIsCurrent = left.workflowCode === workflowCode
+        const rightIsCurrent = right.workflowCode === workflowCode
+        if (leftIsCurrent && !rightIsCurrent) return -1
+        if (!leftIsCurrent && rightIsCurrent) return 1
+        return 0
+      })
+
+      if (workflowCode && !orderedWorkflows.some((item) => item.workflowCode === workflowCode)) {
+        orderedWorkflows.unshift({
+          id: 0,
+          workflowCode,
+          name: workflowCode,
+          status: 'draft',
+        })
+      }
+
+      const versionGroups = await Promise.all(
+        orderedWorkflows.map(async (workflow) => ({
+          workflow,
+          versions: await getWorkflowVersions(workflow.workflowCode),
+        }))
       )
-      setVersions(Object.fromEntries(versionEntries))
+
+      setGroups(
+        versionGroups.filter(
+          (group) => group.versions.length > 0 || group.workflow.workflowCode === workflowCode
+        )
+      )
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载工作流失败')
+      setError(loadError instanceof Error ? loadError.message : '加载流程版本失败')
+      setGroups([])
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [workflowCode])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
 
-  const handlePublish = async (workflowCode: string, version: string) => {
-    await publishWorkflow(workflowCode, version)
+  useEffect(() => {
+    if (!refreshSignal) return
+    void load()
+  }, [load, refreshSignal])
+
+  const handlePublish = async (targetWorkflowCode: string, version: string) => {
+    await publishWorkflow(targetWorkflowCode, version, currentUserId)
+    onWorkflowVersionMutation?.({
+      workflowCode: targetWorkflowCode,
+      version,
+      action: 'publish',
+      refreshAt: Date.now(),
+    })
     await load()
   }
 
-  const handleRollback = async (workflowCode: string, version: string) => {
-    await rollbackWorkflow(workflowCode, version)
+  const handleRollback = async (targetWorkflowCode: string, version: string) => {
+    await rollbackWorkflow(targetWorkflowCode, version, currentUserId)
+    onWorkflowVersionMutation?.({
+      workflowCode: targetWorkflowCode,
+      version,
+      action: 'rollback',
+      refreshAt: Date.now(),
+    })
+    await load()
+  }
+
+  const handleArchive = async (targetWorkflowCode: string, version: string) => {
+    await archiveWorkflowVersion(targetWorkflowCode, version, currentUserId)
+    onWorkflowVersionMutation?.({
+      workflowCode: targetWorkflowCode,
+      version,
+      action: 'archive',
+      refreshAt: Date.now(),
+    })
     await load()
   }
 
@@ -57,50 +134,95 @@ const WorkflowPanel: React.FC = () => {
       <div className="panel-header">
         <div>
           <div className="panel-title">流程版本</div>
-          <div className="text-xs text-slate-500">第三阶段 发布 / 回滚 / 路由候选</div>
+          <div className="text-xs text-slate-500">展示所有已保存和已发布的流程版本，并按流程分组。</div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
           刷新
         </button>
       </div>
       <div className="panel-body space-y-3">
+        {workflowCode ? (
+          <div className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2 text-xs text-sky-700">
+            当前编辑流程：{workflowCode}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-xs text-slate-500">
+            当前未选中流程，下面展示全部已保存或已发布的版本。
+          </div>
+        )}
+
         {isLoading && <div className="text-sm text-slate-500">加载中...</div>}
         {error && <div className="text-sm text-red-600">{error}</div>}
-        {!isLoading && !error && workflows.map((workflow) => (
-          <div key={workflow.workflowCode} className="rounded-xl border border-slate-200 bg-white/60 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-medium text-slate-800">{workflow.name}</div>
-                <div className="text-xs text-slate-500">{workflow.workflowCode}</div>
-              </div>
-              <div className="text-xs text-slate-500">当前版本：{workflow.currentVersion || '-'}</div>
-            </div>
-            <div className="mt-2 space-y-2">
-              {(versions[workflow.workflowCode] || []).map((version) => (
-                <div key={version.version} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                  <div className="text-sm text-slate-700">
-                    {version.version}
-                    <span className="ml-2 text-xs uppercase text-slate-400">{displayVersionStatus(version.status)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
-                      onClick={() => void handlePublish(workflow.workflowCode, version.version)}
-                    >
-                      发布
-                    </button>
-                    <button
-                      className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
-                      onClick={() => void handleRollback(workflow.workflowCode, version.version)}
-                    >
-                      回滚
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+
+        {!isLoading && !error && groups.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-500">
+            还没有可展示的流程版本。
           </div>
-        ))}
+        )}
+
+        {!isLoading && !error && groups.length > 0 && (
+          <div className="space-y-4">
+            {groups.map((group) => (
+              <section key={group.workflow.workflowCode} className="rounded-2xl border border-slate-200 bg-white/70 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">{group.workflow.name || group.workflow.workflowCode}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {group.workflow.workflowCode} · 共 {group.versions.length} 个版本
+                      {group.workflow.currentVersion ? ` · 当前发布 ${group.workflow.currentVersion}` : ''}
+                    </div>
+                  </div>
+                  {group.workflow.workflowCode === workflowCode && (
+                    <div className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs text-sky-700">
+                      当前流程
+                    </div>
+                  )}
+                </div>
+
+                {group.versions.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-500">
+                    当前流程还没有版本数据。
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {group.versions.map((version) => (
+                      <div key={`${group.workflow.workflowCode}_${version.version}`} className="rounded-xl bg-slate-50 px-3 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="text-sm text-slate-700">
+                            <div className="font-medium text-slate-800">{version.version}</div>
+                            <div className="mt-1 text-xs uppercase text-slate-400">
+                              {displayVersionStatus(version.status)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
+                              onClick={() => void handlePublish(group.workflow.workflowCode, version.version)}
+                            >
+                              发布
+                            </button>
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
+                              onClick={() => void handleRollback(group.workflow.workflowCode, version.version)}
+                            >
+                              回滚
+                            </button>
+                            <button
+                              className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:border-red-300"
+                              onClick={() => void handleArchive(group.workflow.workflowCode, version.version)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

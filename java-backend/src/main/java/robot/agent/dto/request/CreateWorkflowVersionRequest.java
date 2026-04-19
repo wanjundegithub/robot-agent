@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class CreateWorkflowVersionRequest {
     @JsonProperty("workflow_code")
     private String workflowCode;
+    @JsonProperty("workflow_name")
+    private String workflowName;
     private String version;
     private String definition;
     @JsonProperty("entry_rule")
@@ -15,6 +17,9 @@ public class CreateWorkflowVersionRequest {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public String getWorkflowName() { return workflowName; }
+    public void setWorkflowName(String workflowName) { this.workflowName = workflowName; }
 
     public String getVersion() { return version; }
     public void setVersion(String version) { this.version = version; }

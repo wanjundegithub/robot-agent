@@ -221,17 +221,80 @@ export interface WorkflowSummary {
   description?: string
   status: string
   currentVersion?: string
+  createdBy?: string
 }
 
 export interface WorkflowVersionSummary {
   id: number
+  workflowId?: number | null
   workflowCode: string
+  workflowName?: string | null
   version: string
   status: string
   definition?: string
   entryRule?: string
   editorMeta?: string
   config?: string
+}
+
+export interface WorkflowDraftValidationResponse {
+  valid: boolean
+  issues: WorkflowValidationIssue[]
+}
+
+export interface ModelProviderConfig {
+  provider_code: string
+  provider_name?: string | null
+  provider_type: string
+  base_url: string
+  default_model_code: string
+  enabled: boolean
+  api_key_mode?: string
+  api_key_configured?: boolean
+  api_key_masked?: string
+  api_key_error?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ProviderPreset {
+  value: string
+  label: string
+  base_url: string
+  placeholder_model: string
+  protocol: string
+}
+
+export interface ModelProfileConfig {
+  profile_code: string
+  provider_code: string
+  model_code: string
+  purpose: string
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  timeout_sec?: number
+  response_format?: Record<string, unknown>
+  fallback_profile_code?: string | null
+  enabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ProviderValidationResult {
+  valid: boolean
+  provider_code: string
+  message: string
+  status_code?: number
+  tested_model_code?: string
+}
+
+export interface ModelChatTestResult {
+  ok: boolean
+  profile_code: string
+  provider_code: string
+  model_code: string
+  answer: string
 }
 
 export type SocketState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

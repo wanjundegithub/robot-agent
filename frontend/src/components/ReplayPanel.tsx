@@ -21,7 +21,7 @@ const ReplayPanel: React.FC<ReplayPanelProps> = ({ executionId }) => {
       <div className="panel-header">
         <div>
           <div className="panel-title">执行回放</div>
-          <div className="text-xs text-slate-500">第四阶段 执行回放</div>
+          <div className="text-xs text-slate-500">查看历史执行过程</div>
         </div>
       </div>
       <div className="panel-body space-y-3 overflow-y-auto">

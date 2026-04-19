@@ -11,6 +11,7 @@ public class WorkflowResponse {
     private String description;
     private WorkflowStatus status;
     private String currentVersion;
+    private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -22,6 +23,7 @@ public class WorkflowResponse {
         response.setDescription(workflow.getDescription());
         response.setStatus(workflow.getStatus());
         response.setCurrentVersion(workflow.getCurrentVersion());
+        response.setCreatedBy(workflow.getCreatedBy());
         response.setCreatedAt(workflow.getCreatedAt());
         response.setUpdatedAt(workflow.getUpdatedAt());
         return response;
@@ -45,6 +47,9 @@ public class WorkflowResponse {
 
     public String getCurrentVersion() { return currentVersion; }
     public void setCurrentVersion(String currentVersion) { this.currentVersion = currentVersion; }
+
+    public String getCreatedBy() { return createdBy; }
+    public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

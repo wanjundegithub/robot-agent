@@ -52,14 +52,23 @@ class WorkflowServiceTest {
 
     @BeforeEach
     void setUp() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AccessControlService accessControlService = new AccessControlService(userRoleRepository);
+        AuditService auditService = new AuditService(auditLogRepository, objectMapper);
         workflowService = new WorkflowService(
                 workflowRepository,
                 workflowVersionRepository,
-                new ObjectMapper(),
-                new AccessControlService(userRoleRepository),
-                new AuditService(auditLogRepository, new ObjectMapper()),
+                objectMapper,
+                accessControlService,
+                auditService,
                 new StubPythonClient(),
-                new ModelConfigService(llmProviderConfigRepository, llmModelProfileRepository, new ObjectMapper())
+                new ModelConfigService(
+                        llmProviderConfigRepository,
+                        llmModelProfileRepository,
+                        objectMapper,
+                        accessControlService,
+                        auditService
+                )
         );
     }
 
@@ -121,17 +130,20 @@ class WorkflowServiceTest {
     }
 
     @Test
-    void validateWorkflowDefinitionRequiresIntentProfileAndModelProfiles() {
+    void validateWorkflowDefinitionRequiresPromptAndToolForm() {
         List<Map<String, Object>> issues = workflowService.validateWorkflowDefinition(
                 """
-                {"entry":"start","nodes":{"start":{"id":"start","type":"start"},"answer":{"id":"answer","type":"llm","config":{}},"end":{"id":"end","type":"end"}},"transitions":{"start":"answer","answer":"end","end":null}}
+                {"entry":"start","nodes":{"start":{"id":"start","type":"start","config":{}},"coordinate_1":{"id":"coordinate_1","type":"coordinate","config":{}},"tool_1":{"id":"tool_1","type":"tool","config":{"invoke_type":"api"}},"end":{"id":"end","type":"end","config":{}}},"transitions":{"start":"coordinate_1","coordinate_1":"tool_1","tool_1":"end","end":null}}
                 """,
                 "{}"
         );
 
         assertThat(issues).isNotEmpty();
-        assertThat(issues).anyMatch(issue -> "config.intent_profile_ref".equals(issue.get("field")));
-        assertThat(issues).anyMatch(issue -> "config.model_profile_ref".equals(issue.get("field")));
+        assertThat(issues).anyMatch(issue -> "config.prompt".equals(issue.get("field")));
+        assertThat(issues).anyMatch(issue -> "config.url".equals(issue.get("field")));
+        assertThat(issues).anyMatch(issue -> "config.method".equals(issue.get("field")));
+        assertThat(issues).noneMatch(issue -> "config.initial_variables".equals(issue.get("field")));
+        assertThat(issues).noneMatch(issue -> "config.output_format".equals(issue.get("field")));
     }
 
     private Workflow publishedWorkflow(String workflowCode, String currentVersion) {

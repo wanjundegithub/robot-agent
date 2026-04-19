@@ -9,7 +9,7 @@ from .runtime import ExecutionRuntime
 from .security import InvalidOutputError
 from .state_machine import ExecutionStateMachine, TransitionEvent
 from .telemetry import workflow_telemetry
-from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, StartNode, SubflowNode, ToolNode
+from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, MessageNode, StartNode, SubflowNode, ToolNode
 
 
 class WorkflowScheduler:
@@ -336,12 +336,14 @@ class WorkflowScheduler:
             return StartNode(node_def["id"], node_def)
         if node_type == "end":
             return EndNode(node_def["id"], node_def)
-        if node_type == "llm":
+        if node_type in {"llm", "coordinate", "sub_agent"}:
             return LLMNode(node_def["id"], node_def)
         if node_type == "condition":
             return ConditionNode(node_def["id"], node_def)
         if node_type == "form":
             return FormNode(node_def["id"], node_def)
+        if node_type == "message":
+            return MessageNode(node_def["id"], node_def)
         if node_type == "knowledge":
             return KnowledgeNode(node_def["id"], node_def)
         if node_type == "subflow":

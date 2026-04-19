@@ -4,6 +4,7 @@ from .end import EndNode
 from .llm import LLMNode
 from .condition import ConditionNode
 from .form import FormNode
+from .message import MessageNode
 from .tool import ToolNode
 from .knowledge import KnowledgeNode
 from .subflow import SubflowNode
@@ -15,6 +16,7 @@ __all__ = [
     "LLMNode",
     "ConditionNode",
     "FormNode",
+    "MessageNode",
     "ToolNode",
     "KnowledgeNode",
     "SubflowNode",

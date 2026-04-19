@@ -50,21 +50,62 @@ body {
   backdrop-filter: blur(12px);
 }
 
-.app-main {
+.page-shell {
+  display: flex;
+  flex: 1;
+}
+
+.page-grid {
   display: grid;
   grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.2fr);
   gap: 20px;
   flex: 1;
 }
 
-.app-chat,
-.app-side {
+.page-grid-wide {
+  grid-template-columns: minmax(0, 3fr) minmax(320px, 1fr);
+}
+
+.page-grid-balanced {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+.page-grid-orchestrator {
+  grid-template-columns: minmax(0, 2.4fr) minmax(320px, 1.1fr);
+}
+
+.page-stack,
+.page-single {
+  display: grid;
+  gap: 16px;
   min-height: 0;
 }
 
-.side-stack {
-  display: grid;
-  gap: 16px;
+.page-single {
+  width: min(980px, 100%);
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 8px;
+  margin-right: 8px;
+}
+
+.nav-tab {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.72);
+  color: #475569;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 160ms ease;
+}
+
+.nav-tab.active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
 }
 
 .panel-card {
@@ -171,8 +212,22 @@ body {
 }
 
 @media (max-width: 1024px) {
-  .app-main {
+  .page-grid,
+  .page-grid-wide,
+  .page-grid-balanced,
+  .page-grid-orchestrator {
     grid-template-columns: 1fr;
+  }
+
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .nav-tabs {
+    flex-wrap: wrap;
+    margin-right: 0;
   }
 
   .prompt-actions {

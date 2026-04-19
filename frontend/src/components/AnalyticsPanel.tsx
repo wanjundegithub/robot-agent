@@ -22,7 +22,7 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ sessionId }) => {
       <div className="panel-header">
         <div>
           <div className="panel-title">分析看板</div>
-          <div className="text-xs text-slate-500">第四阶段 指标 / 成本仪表盘</div>
+          <div className="text-xs text-slate-500">关键指标与成本概览</div>
         </div>
       </div>
       <div className="panel-body space-y-3 overflow-y-auto">

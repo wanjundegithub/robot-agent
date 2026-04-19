@@ -11,7 +11,7 @@ class RuntimeSettings(BaseSettings):
     vector_enabled: bool = True
     vector_table: str = "knowledge_chunks"
 
-    otel_enabled: bool = True
+    otel_enabled: bool = False
     otel_exporter_endpoint: str = "http://localhost:4317"
     otel_service_name: str = "workflow-engine"
 

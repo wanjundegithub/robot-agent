@@ -12,9 +12,10 @@ class ToolNode(BaseNode):
         super().__init__(node_id, "tool")
         config = data.get("config", {})
         self.tool_config = config.get("tool", data.get("tool", {}))
-        if not self.tool_config and config.get("tool_code"):
+        if not self.tool_config and (config.get("tool_code") or config.get("invoke_type")):
             self.tool_config = config
         self.tool_code = self.tool_config.get("tool_code", "")
+        self.invoke_type = self.tool_config.get("invoke_type", "")
         self.method = self.tool_config.get("method", "GET").upper()
         self.url = self.tool_config.get("url", "")
         self.headers = self.tool_config.get("headers", {})
@@ -23,13 +24,14 @@ class ToolNode(BaseNode):
         self.body = self.tool_config.get("body", {})
 
     async def execute(self, context) -> Dict[str, Any]:
-        if self.tool_code:
+        if self.tool_code or self.invoke_type in {"function", "mcp", "skill"}:
             params = self._build_tool_params(context)
-            tool_confirmation_gate.ensure_confirmed(context, self.tool_code, params)
-            dependency_key = f"tool:{self.tool_code}"
+            resolved_tool_code = self.tool_code or self._derive_tool_code()
+            tool_confirmation_gate.ensure_confirmed(context, resolved_tool_code, params)
+            dependency_key = f"tool:{resolved_tool_code}"
             try:
                 runtime_protection_manager.before_dependency(dependency_key)
-                result = await tool_registry.execute(self.tool_code, params, self.tool_config)
+                result = await tool_registry.execute(resolved_tool_code, params, self.tool_config)
                 runtime_protection_manager.record_dependency_success(dependency_key)
                 output = self._build_tool_output(result)
                 context.add_execution_variables(output)
@@ -37,14 +39,14 @@ class ToolNode(BaseNode):
                     "status": "completed",
                     "output": output,
                     "message_deltas": [result.get("summary")] if result.get("summary") else [],
-                    "tool_called": {"tool_code": self.tool_code, "params": params},
-                    "tool_returned": {"tool_code": self.tool_code, "output": result},
+                    "tool_called": {"tool_code": resolved_tool_code, "params": params},
+                    "tool_returned": {"tool_code": resolved_tool_code, "output": result},
                     "metrics": {"cached": bool(result.get("cached", False))},
                 })
             except Exception as exc:
                 circuit_state = runtime_protection_manager.record_dependency_failure(dependency_key, exc)
                 degraded_output = {
-                    "tool_code": self.tool_code,
+                    "tool_code": resolved_tool_code,
                     "tool_status": "degraded",
                     "fallback_message": "工具暂时不可用，已返回降级结果。",
                 }
@@ -53,8 +55,8 @@ class ToolNode(BaseNode):
                     "status": "completed",
                     "output": degraded_output,
                     "message_deltas": [degraded_output["fallback_message"]],
-                    "tool_called": {"tool_code": self.tool_code, "params": params},
-                    "tool_returned": {"tool_code": self.tool_code, "output": degraded_output},
+                    "tool_called": {"tool_code": resolved_tool_code, "params": params},
+                    "tool_returned": {"tool_code": resolved_tool_code, "output": degraded_output},
                     "metrics": {
                         "cached": False,
                         "degraded": True,
@@ -64,14 +66,14 @@ class ToolNode(BaseNode):
                         {
                             "event_type": "protection.degraded",
                             "data": {
-                                "tool_code": self.tool_code,
+                                "tool_code": resolved_tool_code,
                                 "reason": str(exc),
                             },
                         },
                         {
                             "event_type": "protection.circuit_open",
                             "data": {
-                                "tool_code": self.tool_code,
+                                "tool_code": resolved_tool_code,
                                 "state": "open" if float(circuit_state.get("opened_until", 0.0)) > 0 else "closed",
                                 "failures": int(circuit_state.get("failures", 0)),
                             },
@@ -199,6 +201,15 @@ class ToolNode(BaseNode):
                 "flight_id": first_flight.get("flight_id"),
                 "departure_date": context.get_variable("departure_date"),
             }
+        payload_mapping = self.tool_config.get("payload_mapping", {})
+        if isinstance(payload_mapping, dict) and payload_mapping:
+            payload: Dict[str, Any] = {}
+            for key, value in payload_mapping.items():
+                if isinstance(value, str) and value.startswith("execution."):
+                    payload[key] = context.get_variable(value[len("execution."):])
+                else:
+                    payload[key] = value
+            return payload
         return dict(context.execution_variables)
 
     def _build_tool_output(self, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,4 +222,15 @@ class ToolNode(BaseNode):
                 "seat_available": result.get("available"),
                 "seat_count": result.get("count"),
             }
+        if isinstance(result.get("result"), dict):
+            return dict(result["result"])
         return result
+
+    def _derive_tool_code(self) -> str:
+        if self.invoke_type == "function":
+            return str(self.tool_config.get("function_name", "function_tool"))
+        if self.invoke_type == "mcp":
+            return str(self.tool_config.get("tool_name", "mcp_tool"))
+        if self.invoke_type == "skill":
+            return str(self.tool_config.get("skill_name", "skill_tool"))
+        return "tool"
