@@ -1184,7 +1184,7 @@ const App: React.FC = () => {
                     orchestratorRef.current?.setWorkflowName(nextValue)
                   }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="???"
+                  placeholder="流程名称"
                 />
                 <div className="grid gap-2 sm:grid-cols-3">
                   <button className="prompt-secondary" type="button" onClick={() => void orchestratorRef.current?.validateDraft()}>
@@ -1296,11 +1296,11 @@ const App: React.FC = () => {
                 style={{ fontSize: 0 }}
                 data-testid="chat-new-session"
               >
-                <span className="text-xs">????</span>
-                ????
+                <span className="text-xs">新建</span>
+                新建会话
               </button>
 	              <div className="text-right text-xs text-slate-500" data-testid="current-session-meta">
-              <div>??ID?{sessionId || '????'}</div>
+              <div>会话 ID：{sessionId || '未创建'}</div>
               <div>
                 ?????{displaySessionStatus(currentSession?.status)} ? ???{displaySocketState(socketState)}
               </div>
@@ -1308,7 +1308,7 @@ const App: React.FC = () => {
 	          </div>
           </div>
 	          <div className="mb-4 rounded-2xl border border-sky-100 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))] px-4 py-4">
-            <div className="text-sm font-semibold text-slate-800">??????????</div>
+            <div className="text-sm font-semibold text-slate-800">选择已发布流程</div>
             <div className="mt-1 text-sm text-slate-600">
               鍙厛閫夋嫨涓€涓凡鍙戝竷娴佺▼杩涜瀹氬悜娴嬭瘯锛涗笉閫夋嫨鏃讹紝绯荤粺浼氭牴鎹秷鎭唴瀹硅嚜鍔ㄨ矾鐢便€?            </div>
             <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
@@ -1317,7 +1317,7 @@ const App: React.FC = () => {
                 onChange={(event) => setSelectedPublishedWorkflowCode(event.target.value)}
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
               >
-                <option value="">?????</option>
+                <option value="">不绑定流程</option>
                 {publishedWorkflowOptions.map((workflow) => (
                   <option key={workflow.workflowCode} value={workflow.workflowCode}>
                     {workflow.name} ({workflow.workflowCode} ? {workflow.currentVersion || 'Unknown version'})
@@ -1328,7 +1328,7 @@ const App: React.FC = () => {
                 ?????{' '}
                 {selectedPublishedWorkflowCode
                   ? `${selectedPublishedWorkflowCode} / ${publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion || 'Unknown version'}`
-                  : '?????'}
+                  : '未绑定流程'}
               </div>
             </div>
           </div>
@@ -1359,26 +1359,26 @@ const App: React.FC = () => {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">?????</h1>
-          <div className="text-sm text-slate-500">????????</div>
+          <h1 className="text-2xl font-semibold tracking-tight">服务机器人演示</h1>
+          <div className="text-sm text-slate-500">多流程编排与会话调试</div>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-400">
           <nav className="nav-tabs">
             <button className={`nav-tab ${activePage === 'chat' ? 'active' : ''}`} onClick={() => navigateToPage('chat')}>
-              ??
+              对话
             </button>
             <button className={`nav-tab ${activePage === 'workflow' ? 'active' : ''}`} onClick={() => navigateToPage('workflow')}>
-              ????
+              流程
             </button>
             <button className={`nav-tab ${activePage === 'execution' ? 'active' : ''}`} onClick={() => navigateToPage('execution')}>
-              ????
+              执行
             </button>
             <button className={`nav-tab ${activePage === 'models' ? 'active' : ''}`} onClick={() => navigateToPage('models')}>
-              ?? Profile
+              模型
             </button>
           </nav>
           <label className="flex items-center gap-2">
-            <span>??</span>
+            <span>用户</span>
             <select
               value={currentUserId}
               onChange={(event) => {
@@ -1386,13 +1386,13 @@ const App: React.FC = () => {
               }}
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
             >
-              <option value="demo-user">????</option>
-              <option value="demo-admin">?????</option>
-              <option value="anonymous">????</option>
+              <option value="demo-user">演示用户</option>
+              <option value="demo-admin">演示管理员</option>
+              <option value="anonymous">匿名用户</option>
             </select>
           </label>
           <label className="flex items-center gap-2">
-            <span>??</span>
+            <span>会话</span>
             <select
               value={sessionId}
               onChange={(event) => {
@@ -1412,7 +1412,7 @@ const App: React.FC = () => {
             onClick={() => void handleCreateNewSession()}
             type="button"
           >
-            ????
+            新建会话
           </button>
         </div>
       </header>

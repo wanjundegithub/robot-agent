@@ -16,7 +16,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
     })
   }
 
@@ -43,7 +43,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
           }`}
         >
           <div className="flex items-center gap-2 mb-1">
-            {isUser && <span className="text-xs opacity-75">您</span>}
+            {isUser && <span className="text-xs opacity-75">用户</span>}
             {isAI && <span className="text-xs opacity-75">机器人</span>}
             {isSystem && <span className="text-xs opacity-75">系统</span>}
             {isError && <span className="text-xs opacity-75">错误</span>}
@@ -51,7 +51,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
           </div>
           <p className={`whitespace-pre-wrap break-words ${message.streaming ? 'opacity-80 italic' : ''}`}>
             {message.content}
-            {message.streaming && <span className="inline-block animate-pulse ml-1">▍</span>}
+            {message.streaming && <span className="inline-block animate-pulse ml-1">...</span>}
           </p>
         </div>
       </div>

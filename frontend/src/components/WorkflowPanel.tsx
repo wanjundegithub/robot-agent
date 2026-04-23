@@ -69,7 +69,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
         )
       )
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载流程版本失败')
+      setError(loadError instanceof Error ? loadError.message : '�������̰汾ʧ��')
       setGroups([])
     } finally {
       setIsLoading(false)
@@ -121,11 +121,11 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
   const displayVersionStatus = (value: string) => {
     switch ((value || '').toLowerCase()) {
       case 'draft':
-        return '草稿'
+        return '�ݸ�'
       case 'published':
-        return '已发布'
+        return '�ѷ���'
       case 'archived':
-        return '已归档'
+        return '�ѹ鵵'
       default:
         return value
     }
@@ -135,30 +135,30 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     <div className="panel-card h-full flex flex-col">
       <div className="panel-header">
         <div>
-          <div className="panel-title">流程版本</div>
-          <div className="text-xs text-slate-500">展示所有已保存和已发布的流程版本，并按流程分组。</div>
+          <div className="panel-title">���̰汾</div>
+          <div className="text-xs text-slate-500">չʾ�����ѱ�����ѷ��������̰汾���������̷��顣</div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
-          刷新
+          ˢ��
         </button>
       </div>
       <div className="panel-body space-y-3">
         {workflowCode ? (
           <div className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2 text-xs text-sky-700">
-            当前编辑流程：{workflowCode}
+            ��ǰ�༭���̣�{workflowCode}
           </div>
         ) : (
           <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-xs text-slate-500">
-            当前未选中流程，下面展示全部已保存或已发布的版本。
+            ��ǰδѡ�����̣�����չʾȫ���ѱ�����ѷ����İ汾��
           </div>
         )}
 
-        {isLoading && <div className="text-sm text-slate-500">加载中...</div>}
+        {isLoading && <div className="text-sm text-slate-500">������...</div>}
         {error && <div className="text-sm text-red-600">{error}</div>}
 
         {!isLoading && !error && groups.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-500">
-            还没有可展示的流程版本。
+            ��û�п�չʾ�����̰汾��
           </div>
         )}
 
@@ -170,20 +170,20 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                   <div>
                     <div className="text-sm font-semibold text-slate-800">{group.workflow.name || group.workflow.workflowCode}</div>
                     <div className="mt-1 text-xs text-slate-500">
-                      {group.workflow.workflowCode} · 共 {group.versions.length} 个版本
-                      {group.workflow.currentVersion ? ` · 当前发布 ${group.workflow.currentVersion}` : ''}
+                      {group.workflow.workflowCode} �� �� {group.versions.length} ���汾
+                      {group.workflow.currentVersion ? ` �� ��ǰ���� ${group.workflow.currentVersion}` : ''}
                     </div>
                   </div>
                   {group.workflow.workflowCode === workflowCode && (
                     <div className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs text-sky-700">
-                      当前流程
+                      ��ǰ����
                     </div>
                   )}
                 </div>
 
                 {group.versions.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-500">
-                    当前流程还没有版本数据。
+                    ��ǰ���̻�û�а汾���ݡ�
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -208,25 +208,25 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                 })
                               }
                             >
-                              编辑
+                              �༭
                             </button>
                             <button
                               className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
                               onClick={() => void handlePublish(group.workflow.workflowCode, version.version)}
                             >
-                              发布
+                              ����
                             </button>
                             <button
                               className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
                               onClick={() => void handleRollback(group.workflow.workflowCode, version.version)}
                             >
-                              回滚
+                              �ع�
                             </button>
                             <button
                               className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:border-red-300"
                               onClick={() => void handleArchive(group.workflow.workflowCode, version.version)}
                             >
-                              删除
+                              ɾ��
                             </button>
                           </div>
                         </div>
