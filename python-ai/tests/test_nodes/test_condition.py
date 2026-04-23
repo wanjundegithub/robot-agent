@@ -56,3 +56,32 @@ async def test_condition_node_greater_than():
 
     result = await node.execute(context)
     assert result["condition_met"] is True
+
+
+@pytest.mark.asyncio
+async def test_condition_node_expression():
+    context = ExecutionContext(
+        execution_id="exec_test",
+        session_id="sess_test",
+        workflow_code="flight_booking",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variables({
+        "departure_city": "上海",
+        "arrival_city": "北京",
+        "passengers": 2,
+    })
+
+    node = ConditionNode("cond4", {
+        "config": {
+            "condition": {
+                "type": "expression",
+                "expression": "departure_city == '上海' and passengers >= 2"
+            },
+            "branches": {"true": "node_a", "false": "node_b"}
+        }
+    })
+
+    result = await node.execute(context)
+    assert result["condition_met"] is True
+    assert result["next_node"] == "node_a"

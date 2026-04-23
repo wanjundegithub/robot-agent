@@ -2,9 +2,15 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from .context_assembler import ContextAssembler
 from .costing import budget_alert_evaluator
 from .events import utc_now_iso
+from .journal import WorkflowJournal
+from .node_readiness import NodeReadinessChecker
+from .path_resolver import PathResolver
+from .planner import Planner
 from .protection import ConfirmationRequiredError
+from .replanner import RePlanner
 from .runtime import ExecutionRuntime
 from .security import InvalidOutputError
 from .state_machine import ExecutionStateMachine, TransitionEvent
@@ -13,10 +19,16 @@ from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, 
 
 
 class WorkflowScheduler:
-    """Phase 3 workflow scheduler with suspend/resume and security hooks."""
+    """Workflow scheduler with planning, path resolution and node readiness checks."""
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.context_assembler = ContextAssembler()
+        self.planner = Planner()
+        self.path_resolver = PathResolver()
+        self.node_readiness_checker = NodeReadinessChecker()
+        self.replanner = RePlanner()
+        self.workflow_journal = WorkflowJournal()
 
     async def run(self, runtime: ExecutionRuntime) -> None:
         context = runtime.context
@@ -64,10 +76,53 @@ class WorkflowScheduler:
                 if suspend_reason:
                     await self._suspend_execution(runtime, state_machine, suspend_reason)
 
+                planning_context = self.context_assembler.build(context, workflow, current_node_id)
+                plan = self.planner.plan(planning_context)
+                path_decision = self.path_resolver.resolve(plan, workflow, context)
+                if not path_decision.selected_node:
+                    raise ValueError(f"No resolvable node for workflow {context.workflow_code}")
+
+                context.record_plan(plan.to_dict())
+                self.workflow_journal.record_plan({
+                    **plan.to_dict(),
+                    "selected_node": path_decision.selected_node,
+                    "path_reason": path_decision.reason,
+                })
+                runtime.emit("plan.created" if context.plan_round == 1 else "plan.replanned", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "workflow_code": context.workflow_code,
+                    "workflow_version": context.workflow_version,
+                    "selected_node": path_decision.selected_node,
+                    "candidate_nodes": plan.candidate_nodes,
+                    "reason": plan.reasoning_summary,
+                    "confidence": plan.confidence,
+                    "need_user_input": plan.need_user_input,
+                    "missing_fields": plan.missing_fields,
+                    "trace_id": context.trace_id,
+                })
+
+                current_node_id = path_decision.selected_node
                 context.update_node_position(current_node_id)
                 node_def = workflow["nodes"].get(current_node_id)
                 if not node_def:
                     raise ValueError(f"Node not found: {current_node_id}")
+
+                readiness = self.node_readiness_checker.check(node_def, context, workflow)
+                if readiness.should_skip:
+                    context.record_skipped_node(node_def["id"], readiness.reason)
+                    self.workflow_journal.record_skip(node_def["id"], readiness.reason)
+                    runtime.emit("node.skipped", {
+                        "execution_id": context.execution_id,
+                        "session_id": context.session_id,
+                        "node_id": node_def["id"],
+                        "node_type": node_def["type"],
+                        "reason": readiness.reason,
+                        "next_node": readiness.next_node,
+                        "trace_id": context.trace_id,
+                    })
+                    current_node_id = readiness.next_node
+                    continue
 
                 node = self._build_node(node_def)
                 runtime.emit("node.started", {
@@ -103,6 +158,20 @@ class WorkflowScheduler:
                         "session_id": context.session_id,
                         "node_id": node_def["id"],
                         **protection_event.get("data", {}),
+                        "trace_id": context.trace_id,
+                    })
+
+                next_node_id = self._next_node(workflow, node_def, result)
+                if node_def["type"] == "condition":
+                    runtime.emit("branch.decided", {
+                        "execution_id": context.execution_id,
+                        "session_id": context.session_id,
+                        "node_id": node_def["id"],
+                        "node_type": node_def["type"],
+                        "branch": result.get("branch"),
+                        "condition_met": result.get("condition_met"),
+                        "missing_fields": result.get("missing_fields", []),
+                        "next_node": next_node_id,
                         "trace_id": context.trace_id,
                     })
 
@@ -198,22 +267,33 @@ class WorkflowScheduler:
                             "message": alert.message,
                             "trace_id": context.trace_id,
                         })
+
+                output = result.get("output", {})
+                context.record_completed_node(node_def["id"], output if isinstance(output, dict) else {})
+                self.workflow_journal.record_execution(
+                    node_def["id"],
+                    "completed",
+                    output if isinstance(output, dict) else {},
+                )
                 runtime.emit("node.completed", {
                     "execution_id": context.execution_id,
                     "session_id": context.session_id,
                     "node_id": node_def["id"],
                     "node_type": node_def["type"],
                     "status": "completed",
-                    "output": result.get("output", {}),
+                    "output": output,
                     "metrics": metrics,
                     "trace_id": context.trace_id,
                 })
                 workflow_telemetry.record_node(context.workflow_code, node_def["type"], "completed", duration_ms)
 
-                next_node_id = self._next_node(workflow, node_def, result)
                 suspend_reason = runtime.consume_suspend_request()
                 if suspend_reason:
                     await self._suspend_execution(runtime, state_machine, suspend_reason)
+
+                if self.replanner.should_replan(result, node_def):
+                    current_node_id = next_node_id
+                    continue
                 current_node_id = next_node_id
 
             state_machine.transition(TransitionEvent.COMPLETE)
@@ -236,6 +316,7 @@ class WorkflowScheduler:
                     "experiment_group": context.experiment_group,
                     "dynamic_threshold": context.dynamic_threshold,
                     "threshold_source": context.threshold_source,
+                    "plan_round": context.plan_round,
                 },
                 "trace_id": context.trace_id,
             })
@@ -249,6 +330,8 @@ class WorkflowScheduler:
             })
         except InvalidOutputError as exc:
             self.logger.exception("Structured output validation failed")
+            if context.current_node_id:
+                context.record_failed_node(context.current_node_id, str(exc))
             runtime.emit("security.output_rejected", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -266,6 +349,8 @@ class WorkflowScheduler:
             })
         except ConfirmationRequiredError as exc:
             self.logger.exception("High-risk tool confirmation required")
+            if context.current_node_id:
+                context.record_failed_node(context.current_node_id, str(exc))
             runtime.emit("confirmation.required", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -282,6 +367,8 @@ class WorkflowScheduler:
             })
         except Exception as exc:
             self.logger.exception("Execution failed")
+            if context.current_node_id:
+                context.record_failed_node(context.current_node_id, str(exc))
             state_machine.transition(TransitionEvent.FAIL)
             if context.current_node_id:
                 workflow_telemetry.record_node(
@@ -336,7 +423,7 @@ class WorkflowScheduler:
             return StartNode(node_def["id"], node_def)
         if node_type == "end":
             return EndNode(node_def["id"], node_def)
-        if node_type in {"llm", "coordinate", "sub_agent"}:
+        if node_type in {"llm", "coordinate", "sub_agent", "planner"}:
             return LLMNode(node_def["id"], node_def)
         if node_type == "condition":
             return ConditionNode(node_def["id"], node_def)
@@ -354,6 +441,10 @@ class WorkflowScheduler:
         transitions = workflow.get("transitions", {})
         node_id = node_def["id"]
         node_type = node_def["type"]
+
+        explicit_next = result.get("next_node")
+        if explicit_next:
+            return explicit_next
 
         if node_type == "condition":
             branch = result.get("branch")

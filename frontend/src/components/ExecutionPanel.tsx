@@ -34,6 +34,9 @@ const ExecutionPanel: React.FC<ExecutionPanelProps> = ({
   const displayEventType = (value: string) => {
     const labels: Record<string, string> = {
       'routing.decided': '路由决策完成',
+      'plan.created': '已生成执行计划',
+      'plan.replanned': '已重新规划',
+      'branch.decided': '分支决策完成',
       'execution.started': '执行开始',
       'execution.completed': '执行完成',
       'execution.failed': '执行失败',
@@ -44,6 +47,7 @@ const ExecutionPanel: React.FC<ExecutionPanelProps> = ({
       'execution.switch_requested': '请求切换流程',
       'execution.resume_offered': '提示恢复流程',
       'node.started': '节点开始',
+      'node.skipped': '节点跳过',
       'node.completed': '节点完成',
       'node.failed': '节点失败',
       'form.requested': '请求表单',

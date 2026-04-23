@@ -38,6 +38,12 @@ class ExecutionContext:
     execution_variables: Dict[str, Any] = field(default_factory=dict)
     execution_stack: List[Dict[str, Any]] = field(default_factory=list)
     runtime_metrics: Dict[str, Any] = field(default_factory=dict)
+    completed_nodes: List[str] = field(default_factory=list)
+    skipped_nodes: List[str] = field(default_factory=list)
+    failed_nodes: List[str] = field(default_factory=list)
+    node_outputs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    plan_round: int = 0
+    last_plan: Dict[str, Any] = field(default_factory=dict)
 
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -66,4 +72,25 @@ class ExecutionContext:
 
     def add_runtime_metric(self, key: str, value: Any) -> None:
         self.runtime_metrics[key] = value
+        self.updated_at = datetime.now()
+
+    def record_plan(self, plan: Dict[str, Any]) -> None:
+        self.plan_round += 1
+        self.last_plan = dict(plan)
+        self.updated_at = datetime.now()
+
+    def record_completed_node(self, node_id: str, output: Optional[Dict[str, Any]] = None) -> None:
+        self.completed_nodes.append(node_id)
+        if output is not None:
+            self.node_outputs[node_id] = dict(output)
+        self.updated_at = datetime.now()
+
+    def record_skipped_node(self, node_id: str, reason: str) -> None:
+        self.skipped_nodes.append(node_id)
+        self.node_outputs[node_id] = {"skip_reason": reason}
+        self.updated_at = datetime.now()
+
+    def record_failed_node(self, node_id: str, error: str) -> None:
+        self.failed_nodes.append(node_id)
+        self.node_outputs[node_id] = {"error": error}
         self.updated_at = datetime.now()

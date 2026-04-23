@@ -70,6 +70,10 @@ body {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
 }
 
+.page-grid-chat {
+  grid-template-columns: minmax(0, 7fr) minmax(320px, 3fr);
+}
+
 .page-grid-orchestrator {
   grid-template-columns: minmax(0, 2.4fr) minmax(320px, 1.1fr);
 }
@@ -106,6 +110,11 @@ body {
   background: #0f172a;
   color: #ffffff;
   border-color: #0f172a;
+}
+
+.app-header > div:last-child > label:nth-of-type(2),
+.app-header > div:last-child > button {
+  display: none;
 }
 
 .panel-card {

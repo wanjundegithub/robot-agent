@@ -7,6 +7,7 @@ class ExecuteRequest(BaseModel):
     session_id: str = Field(..., description="Session identifier from Java")
     execution_id: str = Field(..., description="Execution identifier from Java")
     workflow_code: str = Field(..., description="Workflow code")
+    workflow_id: Optional[int] = Field(default=None, description="Workflow identifier")
     workflow_version: str = Field(..., description="Workflow version")
     message_id: Optional[str] = Field(default=None, description="Client message id for idempotency")
     priority: int = Field(default=0, description="Routing priority")

@@ -49,6 +49,9 @@ export interface ResumeExecutionResponse {
 
 export type ExecutionEventType =
   | 'routing.decided'
+  | 'plan.created'
+  | 'plan.replanned'
+  | 'branch.decided'
   | 'execution.started'
   | 'execution.completed'
   | 'execution.failed'
@@ -59,6 +62,7 @@ export type ExecutionEventType =
   | 'execution.switch_requested'
   | 'execution.resume_offered'
   | 'node.started'
+  | 'node.skipped'
   | 'node.completed'
   | 'node.failed'
   | 'form.requested'
@@ -199,8 +203,30 @@ export interface ReplayResponse {
   output_variables: Record<string, unknown>
   variables: Record<string, unknown>
   metrics: Record<string, unknown>
-  node_logs: Array<Record<string, unknown>>
-  event_stream: Array<Record<string, unknown>>
+  node_logs: ReplayNodeLog[]
+  event_stream: ReplayEvent[]
+}
+
+export interface ReplayNodeLog {
+  node_id?: string
+  node_type?: string
+  status?: string
+  started_at?: string
+  completed_at?: string
+  input?: Record<string, unknown>
+  output?: Record<string, unknown>
+  metrics?: Record<string, unknown>
+  error?: string | null
+}
+
+export interface ReplayEvent {
+  event_type?: string
+  execution_id?: string
+  workflow_code?: string
+  workflow_version?: string
+  node_id?: string
+  node_type?: string
+  final_output?: Record<string, unknown>
 }
 
 export interface RagEvaluationResponse {

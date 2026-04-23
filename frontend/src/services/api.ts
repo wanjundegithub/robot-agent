@@ -56,6 +56,8 @@ export async function sendMessage(
     requestedToolCode?: string
     confirmationId?: string
     cancelConfirmation?: boolean
+    workflowId?: number | null
+    sessionId?: string
   }
 ): Promise<SendMessageResponse> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
@@ -70,6 +72,8 @@ export async function sendMessage(
       requested_tool_code: options?.requestedToolCode ?? null,
       confirmation_id: options?.confirmationId ?? null,
       cancel_confirmation: options?.cancelConfirmation ?? false,
+      session_id: options?.sessionId ?? sessionId,
+      workflow_id: options?.workflowId ?? null,
     }),
   })
 

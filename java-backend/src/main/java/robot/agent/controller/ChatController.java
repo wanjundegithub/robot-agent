@@ -34,10 +34,12 @@ public class ChatController {
             @RequestBody SendMessageRequest request
     ) {
         log.info(
-                "chat.http.sendMessage sessionId={} messageId={} userId={} workflowCode={} workflowVersion={}",
+                "chat.http.sendMessage sessionId={} requestSessionId={} messageId={} userId={} workflowId={} workflowCode={} workflowVersion={}",
                 sessionId,
+                request == null ? null : request.getSessionId(),
                 request == null ? null : request.getMessageId(),
                 request == null ? null : request.getUserId(),
+                request == null ? null : request.getWorkflowId(),
                 request == null ? null : request.getWorkflowCode(),
                 request == null ? null : request.getWorkflowVersion()
         );

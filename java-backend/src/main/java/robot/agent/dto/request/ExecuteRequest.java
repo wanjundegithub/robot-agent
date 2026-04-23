@@ -11,6 +11,8 @@ public class ExecuteRequest {
     private String executionId;
     @JsonProperty("workflow_code")
     private String workflowCode;
+    @JsonProperty("workflow_id")
+    private Long workflowId;
     @JsonProperty("workflow_version")
     private String workflowVersion;
     @JsonProperty("message_id")
@@ -61,6 +63,9 @@ public class ExecuteRequest {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public Long getWorkflowId() { return workflowId; }
+    public void setWorkflowId(Long workflowId) { this.workflowId = workflowId; }
 
     public String getWorkflowVersion() { return workflowVersion; }
     public void setWorkflowVersion(String workflowVersion) { this.workflowVersion = workflowVersion; }

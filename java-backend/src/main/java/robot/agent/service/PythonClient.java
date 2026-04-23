@@ -29,9 +29,10 @@ public class PythonClient {
 
     public Flux<ServerSentEvent<String>> execute(ExecuteRequest request) {
         log.info(
-                "python.execute.request sessionId={} executionId={} workflowCode={} workflowVersion={} providerCount={} profileCount={}",
+                "python.execute.request sessionId={} executionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} profileCount={}",
                 request.getSessionId(),
                 request.getExecutionId(),
+                request.getWorkflowId(),
                 request.getWorkflowCode(),
                 request.getWorkflowVersion(),
                 request.getProviderConfigs() == null ? 0 : request.getProviderConfigs().size(),

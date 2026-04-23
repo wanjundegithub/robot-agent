@@ -21,10 +21,12 @@ public class WebSocketPublisher {
     public void publishEvent(String eventType, String executionId, String sessionId, Map<String, Object> data) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", "event");
+        payload.put("event", eventType);
         payload.put("event_type", eventType);
         payload.put("execution_id", executionId);
         payload.put("session_id", sessionId);
         payload.put("data", data == null ? Map.of() : data);
+        payload.put("timestamp", java.time.OffsetDateTime.now().toString());
         log.debug("websocket.publish.event eventType={} executionId={} sessionId={} dataKeys={}", eventType, executionId, sessionId, data == null ? java.util.Set.of() : data.keySet());
         gatewayHub.publish(payload);
     }
@@ -40,6 +42,7 @@ public class WebSocketPublisher {
         payload.put("session_id", sessionId);
         payload.put("content", content);
         payload.put("is_complete", isComplete != null && isComplete);
+        payload.put("timestamp", java.time.OffsetDateTime.now().toString());
         log.debug("websocket.publish.delta executionId={} sessionId={} contentLength={} isComplete={}", executionId, sessionId, content == null ? 0 : content.length(), isComplete);
         gatewayHub.publish(payload);
     }

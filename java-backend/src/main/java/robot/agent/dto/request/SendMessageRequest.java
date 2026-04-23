@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.List;
 
 public class SendMessageRequest {
+    @JsonProperty("session_id")
+    private String sessionId;
     @JsonProperty("message_id")
     private String messageId;
     private String content;
@@ -21,6 +23,8 @@ public class SendMessageRequest {
     private Boolean cancelConfirmation;
     @JsonProperty("workflow_code")
     private String workflowCode;
+    @JsonProperty("workflow_id")
+    private Long workflowId;
     @JsonProperty("workflow_version")
     private String workflowVersion;
     @JsonProperty("workflow_definition")
@@ -29,6 +33,9 @@ public class SendMessageRequest {
     private Map<String, Object> entryRule;
     @JsonProperty("workflow_config")
     private Map<String, Object> workflowConfig;
+
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
     public String getMessageId() { return messageId; }
     public void setMessageId(String messageId) { this.messageId = messageId; }
@@ -56,6 +63,9 @@ public class SendMessageRequest {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public Long getWorkflowId() { return workflowId; }
+    public void setWorkflowId(Long workflowId) { this.workflowId = workflowId; }
 
     public String getWorkflowVersion() { return workflowVersion; }
     public void setWorkflowVersion(String workflowVersion) { this.workflowVersion = workflowVersion; }

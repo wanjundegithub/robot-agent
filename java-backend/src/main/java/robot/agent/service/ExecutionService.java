@@ -79,10 +79,12 @@ public class ExecutionService {
     @Transactional
     public SendMessageResponse startExecution(String sessionId, SendMessageRequest request) {
         log.info(
-                "execution.start.request sessionId={} messageId={} userId={} workflowCode={} workflowVersion={} hasWorkflowDefinition={} contentPreview={}",
+                "execution.start.request sessionId={} requestSessionId={} messageId={} userId={} workflowId={} workflowCode={} workflowVersion={} hasWorkflowDefinition={} contentPreview={}",
                 sessionId,
+                request == null ? null : request.getSessionId(),
                 request == null ? null : request.getMessageId(),
                 request == null ? null : request.getUserId(),
+                request == null ? null : request.getWorkflowId(),
                 request == null ? null : request.getWorkflowCode(),
                 request == null ? null : request.getWorkflowVersion(),
                 request != null && request.getWorkflowDefinition() != null && !request.getWorkflowDefinition().isEmpty(),
@@ -251,7 +253,9 @@ public class ExecutionService {
         execution.setStatus(ExecutionStatus.PENDING);
         Map<String, Object> inputVariables = new LinkedHashMap<>();
         inputVariables.put("user_message", request.getContent());
+        inputVariables.put("session_id", session.getId());
         inputVariables.put("user_id", effectiveUserId);
+        inputVariables.put("workflow_id", request.getWorkflowId());
         inputVariables.put("route_decision", routingDecision.decision());
         inputVariables.put("route_confidence", routingDecision.confidence());
         inputVariables.put("route_threshold", routingDecision.threshold());
@@ -268,6 +272,7 @@ public class ExecutionService {
         executeRequest.setSessionId(session.getId());
         executeRequest.setExecutionId(saved.getId());
         executeRequest.setWorkflowCode(saved.getWorkflowCode());
+        executeRequest.setWorkflowId(request.getWorkflowId());
         executeRequest.setWorkflowVersion(saved.getWorkflowVersion());
         executeRequest.setMessageId(request.getMessageId());
         executeRequest.setPriority(routingDecision.priority());
@@ -292,16 +297,19 @@ public class ExecutionService {
         executeRequest.setIntentProfileCode(runtimeBundle.routingProfileCode());
         Map<String, Object> executeInput = new LinkedHashMap<>();
         executeInput.put("user_message", request.getContent());
+        executeInput.put("session_id", session.getId());
         executeInput.put("experiment_id", experimentAssignment.experimentId());
         executeInput.put("experiment_group", experimentAssignment.experimentGroup());
+        executeInput.put("workflow_id", request.getWorkflowId());
         executeInput.put("requested_tool_code", confirmationEvaluation.toolCode());
         executeInput.put("confirmed_tool_codes", executeRequest.getConfirmedToolCodes());
         executeInput.put("intent_profile_code", runtimeBundle.routingProfileCode());
         executeRequest.setInputVariables(executeInput);
         log.info(
-                "execution.dispatch executionId={} sessionId={} workflowCode={} workflowVersion={} providerCount={} profileCount={} intentProfileCode={}",
+                "execution.dispatch executionId={} sessionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} profileCount={} intentProfileCode={}",
                 saved.getId(),
                 session.getId(),
+                request.getWorkflowId(),
                 saved.getWorkflowCode(),
                 saved.getWorkflowVersion(),
                 runtimeBundle.providerConfigs().size(),
@@ -491,10 +499,14 @@ public class ExecutionService {
                 break;
             case "node.started":
             case "node.completed":
+            case "node.skipped":
             case "node.failed":
                 updateExecutionNode(executionId, eventType, payload);
                 webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
                 break;
+            case "plan.created":
+            case "plan.replanned":
+            case "branch.decided":
             case "tool.called":
             case "tool.returned":
             case "form.requested":
@@ -564,6 +576,10 @@ public class ExecutionService {
         if ("node.started".equals(eventType)) {
             log.setStatus("running");
             log.setStartedAt(LocalDateTime.now());
+        } else if ("node.skipped".equals(eventType)) {
+            log.setStatus("skipped");
+            log.setOutput(writeJson(payload));
+            log.setCompletedAt(LocalDateTime.now());
         } else if ("node.completed".equals(eventType)) {
             log.setStatus("completed");
             log.setOutput(writeJson(payload.get("output")));

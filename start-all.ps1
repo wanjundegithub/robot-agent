@@ -87,7 +87,7 @@ try {
 
     if (-not $SkipMiddleware) {
         Assert-Command "docker"
-        docker compose -f (Join-Path $root "docker-compose.phase2.yml") up -d --remove-orphans | Out-Null
+        docker compose -f (Join-Path $root "docker-compose.yml") up -d --remove-orphans | Out-Null
         Assert-MiddlewarePort -Port 6379 -Name "Redis"
         Assert-MiddlewarePort -Port 5432 -Name "pgvector"
         if (-not (Wait-ForMySqlReady -TimeoutSeconds 180)) {

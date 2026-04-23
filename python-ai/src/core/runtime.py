@@ -85,4 +85,8 @@ class ExecutionRuntime:
             "intent_profile_code": self.context.intent_profile_code,
             "variables": dict(self.context.execution_variables),
             "runtime_metrics": dict(self.context.runtime_metrics),
+            "plan_round": self.context.plan_round,
+            "completed_nodes": list(self.context.completed_nodes),
+            "skipped_nodes": list(self.context.skipped_nodes),
+            "last_plan": dict(self.context.last_plan),
         }
