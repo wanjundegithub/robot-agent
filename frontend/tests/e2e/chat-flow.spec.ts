@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 const currentSessionIds = ['session-current-1', 'session-current-2', 'session-current-3'] as const
+const failedSendContent = 'This message should fail to send'
+const disconnectAfterReplyContent = 'This message gets a reply before the socket disconnects'
 
 const baseSessionDetails = {
   'session-current-1': {
@@ -114,6 +116,7 @@ type SessionMessage = (typeof baseSessionMessages)[keyof typeof baseSessionMessa
 let createSessionCount = 0
 let sessionList: SessionSummary[] = []
 let messageStore: Record<string, SessionMessage[]> = {}
+let delayedSessionMessageLoads: Record<string, number> = {}
 
 const createSessionList = (): SessionSummary[] => [
   baseSessionDetails['session-current-2'],
@@ -138,6 +141,7 @@ test.beforeEach(async ({ page }) => {
   createSessionCount = 0
   sessionList = createSessionList()
   messageStore = createMessageStore()
+  delayedSessionMessageLoads = {}
 
   await page.addInitScript(() => {
     class MockWebSocket {
@@ -173,6 +177,55 @@ test.beforeEach(async ({ page }) => {
         }
 
         if (payload.action !== 'chat.send' || !payload.session_id || !payload.payload?.content) {
+          return
+        }
+
+        if (payload.payload.content === 'This message should fail to send') {
+          window.setTimeout(() => {
+            this.onmessage?.(
+              new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'error',
+                  request_id: payload.request_id,
+                  error_code: 'SEND_FAILED',
+                  message: 'Mock send failure',
+                }),
+              })
+            )
+          }, 0)
+          return
+        }
+
+        if (payload.payload.content === 'This message gets a reply before the socket disconnects') {
+          window
+            .fetch(`/api/sessions/${payload.session_id}/messages`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message_id: payload.payload.message_id ?? `msg-${Date.now()}`,
+                content: payload.payload.content,
+              }),
+            })
+            .catch(() => {})
+
+          window.setTimeout(() => {
+            this.onmessage?.(
+              new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'message_delta',
+                  execution_id: `exec-${payload.session_id}`,
+                  session_id: payload.session_id,
+                  content: 'Mock assistant reply',
+                  is_complete: true,
+                }),
+              })
+            )
+          }, 0)
+
+          window.setTimeout(() => {
+            this.readyState = MockWebSocket.CLOSED
+            this.onclose?.(new CloseEvent('close'))
+          }, 10)
           return
         }
 
@@ -280,7 +333,12 @@ test.beforeEach(async ({ page }) => {
         return
       }
 
-      await route.fulfill({ json: messageStore[sessionId] ?? [] })
+      const responseSnapshot = [...(messageStore[sessionId] ?? [])]
+      const delayMs = delayedSessionMessageLoads[sessionId] ?? 0
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
+      await route.fulfill({ json: responseSnapshot })
       return
     }
 
@@ -322,20 +380,34 @@ test.beforeEach(async ({ page }) => {
 })
 
 test.describe('session history panel', () => {
-  test('does not keep empty sessions in history after creating a new session', async ({ page }) => {
+  test('does not show a fresh empty current session in the history list', async ({ page }) => {
     await page.goto('/')
 
     const panel = page.getByTestId('session-replay-panel')
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-2')
-    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-empty-1')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-empty-2')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-history-1')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-history-2')).toHaveCount(1)
+  })
+
+  test('does not retain a failed-send local message in history after creating a new session', async ({ page }) => {
+    await page.goto('/')
+
+    const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-input').fill(failedSendContent)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText('Mock send failure')).toHaveCount(0)
+    await expect(panel).toContainText('消息发送失败')
 
     await page.getByTestId('chat-new-session').click()
 
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
-    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(0)
     await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
-    await expect(panel.getByTestId('session-history-item-session-empty-1')).toHaveCount(0)
-    await expect(panel.getByTestId('session-history-item-session-empty-2')).toHaveCount(0)
+    await expect(panel).not.toContainText(failedSendContent)
   })
 
   test('keeps the previous session in history after a real user message and new session', async ({ page }) => {
@@ -350,11 +422,56 @@ test.describe('session history panel', () => {
     await page.getByTestId('chat-new-session').click()
 
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
-    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(0)
     await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(1)
     await expect(panel.getByTestId('session-history-item-session-current-2')).toContainText(
       'Keep this session in his...'
     )
+  })
+
+  test('keeps user messages visible when the initial empty history request resolves after send', async ({ page }) => {
+    delayedSessionMessageLoads['session-current-1'] = 800
+    delayedSessionMessageLoads['session-current-2'] = 800
+    const content = 'Race condition should not hide this user message'
+
+    await page.goto('/')
+
+    await expect(page.getByTestId('chat-input')).toBeVisible()
+    await page.getByTestId('chat-input').fill(content)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText(content, { exact: true })).toHaveCount(2)
+    await page.waitForTimeout(1000)
+    await expect(page.getByText(content, { exact: true })).toHaveCount(2)
+  })
+
+  test('keeps the user message visible if a reply arrives before the websocket send promise fails', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('chat-input').fill(disconnectAfterReplyContent)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText('Mock assistant reply', { exact: true })).toHaveCount(2)
+    await page.waitForTimeout(200)
+    await expect(page.getByText(disconnectAfterReplyContent, { exact: true })).toHaveCount(2)
+  })
+
+  test('rebuilds history from backend sessions on refresh-style initialization', async ({ page }) => {
+    await page.goto('/')
+
+    const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-input').fill(failedSendContent)
+    await page.getByTestId('chat-send').click()
+    await expect(panel).toContainText('消息发送失败')
+
+    await page.reload()
+
+    await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-history-1')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-history-2')).toHaveCount(1)
+    await expect(panel).not.toContainText(failedSendContent)
   })
 
   test('deletes history items from the list', async ({ page }) => {
@@ -379,7 +496,7 @@ test.describe('session history panel', () => {
 
     await panel.getByTestId('session-history-delete-session-current-2').click()
 
-    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(0)
     await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
     await expect(panel).not.toContainText('Current session should be deleted')

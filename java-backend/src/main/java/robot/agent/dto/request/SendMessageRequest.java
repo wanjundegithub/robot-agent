@@ -1,5 +1,6 @@
 package robot.agent.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 import java.util.List;
@@ -9,6 +10,7 @@ public class SendMessageRequest {
     private String sessionId;
     @JsonProperty("message_id")
     private String messageId;
+    @JsonAlias("message")
     private String content;
     private List<Object> attachments;
     @JsonProperty("user_id")

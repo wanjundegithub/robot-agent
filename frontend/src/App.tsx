@@ -77,6 +77,7 @@ const App: React.FC = () => {
   const [currentSession, setCurrentSession] = useState<SessionSummary | null>(null)
   const [currentUserId, setCurrentUserId] = useState('demo-user')
   const [sessionMessagesById, setSessionMessagesById] = useState<Record<string, Message[]>>({})
+  const [persistedSessionIds, setPersistedSessionIds] = useState<string[]>([])
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState('')
   const [selectedHistoryMessages, setSelectedHistoryMessages] = useState<Message[]>([])
   const [isLoadingSessionHistory, setIsLoadingSessionHistory] = useState(false)
@@ -167,9 +168,14 @@ const App: React.FC = () => {
     })
   }, [])
 
-  const updateSessionSummary = useCallback((targetSessionId: string, updater: (session: SessionSummary) => SessionSummary) => {
-    setSessions((prev) => prev.map((session) => (session.id === targetSessionId ? updater(session) : session)))
-    setCurrentSession((prev) => (prev?.id === targetSessionId ? updater(prev) : prev))
+  const markSessionPersisted = useCallback((targetSessionId: string) => {
+    if (!targetSessionId) return
+    setPersistedSessionIds((prev) => (prev.includes(targetSessionId) ? prev : [...prev, targetSessionId]))
+  }, [])
+
+  const removePersistedSession = useCallback((targetSessionId: string) => {
+    if (!targetSessionId) return
+    setPersistedSessionIds((prev) => prev.filter((sessionId) => sessionId !== targetSessionId))
   }, [])
 
   const loadRetainedHistory = useCallback(async (userId: string, activeSession: SessionSummary) => {
@@ -195,12 +201,12 @@ const App: React.FC = () => {
         ...prev,
         ...Object.fromEntries(loadedHistory.map(({ session, history }) => [session.id, history])),
       }))
-      setSessions([
-        activeSession,
-        ...loadedHistory.filter(({ history }) => hasUserMessage(history)).map(({ session }) => session),
-      ])
+      const retainedHistory = loadedHistory.filter(({ history }) => hasUserMessage(history))
+      setPersistedSessionIds(retainedHistory.map(({ session }) => session.id))
+      setSessions([activeSession, ...retainedHistory.map(({ session }) => session)])
     } catch (error) {
       console.error('Failed to load session history:', error)
+      setPersistedSessionIds([])
       setSessions([activeSession])
     } finally {
       setIsLoadingSessionHistory(false)
@@ -222,13 +228,19 @@ const App: React.FC = () => {
       const history = await getSessionMessages(activeSessionId)
       const normalizedHistory = normalizeSessionMessages(history)
       cacheSessionMessages(activeSessionId, normalizedHistory)
+      if (hasUserMessage(normalizedHistory)) {
+        markSessionPersisted(activeSessionId)
+      } else {
+        removePersistedSession(activeSessionId)
+      }
       setMessages(normalizedHistory.length > 0 ? history : [createWelcomeMessage()])
     } catch (error) {
       console.error('Failed to load session messages:', error)
       cacheSessionMessages(activeSessionId, [])
+      removePersistedSession(activeSessionId)
       setMessages([createWelcomeMessage()])
     }
-  }, [cacheSessionMessages])
+  }, [cacheSessionMessages, markSessionPersisted, removePersistedSession])
 
   const createAndSelectSession = useCallback(async (userId: string) => {
     const created = await createSession({ userId })
@@ -261,6 +273,7 @@ const App: React.FC = () => {
       setSessionId('')
       setSessions([])
       setSessionMessagesById({})
+      setPersistedSessionIds([])
       setSelectedHistorySessionId('')
       setSelectedHistoryMessages([])
       try {
@@ -813,7 +826,9 @@ const App: React.FC = () => {
 
     const messageId = fixedMessageId || createId('msg')
     const shouldAppendUserMessage = !options?.confirmSwitch && !options?.confirmationId && !options?.cancelConfirmation
+    const baselineMessages = normalizeSessionMessages(messages)
     let appendedUserMessage: Message | null = null
+    let activeSessionId = sessionId
 
     if (shouldAppendUserMessage) {
       const userMessage: Message = {
@@ -843,20 +858,14 @@ const App: React.FC = () => {
     setIsLoading(true)
 
     try {
-      let activeSessionId = sessionId
       if (!activeSessionId) {
         const createdSession = await createAndSelectSession(currentUserId)
         activeSessionId = createdSession.id
       }
 
       if (shouldAppendUserMessage && appendedUserMessage) {
-        const nextHistory = [...normalizeSessionMessages(messages), appendedUserMessage]
+        const nextHistory = [...baselineMessages, appendedUserMessage]
         cacheSessionMessages(activeSessionId, nextHistory)
-        updateSessionSummary(activeSessionId, (session) => ({
-          ...session,
-          status: 'active',
-          lastActivityAt: appendedUserMessage?.timestamp ?? session.lastActivityAt,
-        }))
       }
 
       const selectedPublishedWorkflow = publishedWorkflowOptions.find(
@@ -956,11 +965,17 @@ const App: React.FC = () => {
             : message
         )
       )
+      markSessionPersisted(activeSessionId)
       await refreshExecutions(activeSessionId)
       await refreshSessionDetail(activeSessionId)
     } catch (error) {
       console.error('Failed to send message:', error)
-      setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+      setMessages((prev) =>
+        prev.filter((message) => message.id !== pendingMessageId)
+      )
+      if (activeSessionId) {
+        cacheSessionMessages(activeSessionId, baselineMessages)
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -1007,7 +1022,9 @@ const App: React.FC = () => {
     const previousSession = currentSession
     const previousSessionId = sessionId
     const previousMessages = normalizeSessionMessages(messages)
-    const shouldRetainPrevious = Boolean(previousSession && hasUserMessage(previousMessages))
+    const shouldRetainPrevious = Boolean(
+      previousSession && previousSessionId && persistedSessionIds.includes(previousSessionId)
+    )
 
     disconnectSocket()
     resetSessionView()
@@ -1038,7 +1055,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('Failed to create session:', error)
     }
-  }, [createAndSelectSession, currentSession, currentUserId, disconnectSocket, messages, removeCachedSessionMessages, resetSessionView, sessionId])
+  }, [createAndSelectSession, currentSession, currentUserId, disconnectSocket, messages, persistedSessionIds, removeCachedSessionMessages, resetSessionView, sessionId])
 
   const handleSessionChange = useCallback((nextSessionId: string) => {
     const nextSession = sessions.find((session) => session.id === nextSessionId) ?? null
@@ -1055,6 +1072,7 @@ const App: React.FC = () => {
     try {
       await deleteSession(targetSessionId)
       removeCachedSessionMessages(targetSessionId)
+      removePersistedSession(targetSessionId)
       setSessions(remainingSessions)
 
       if (!isDeletingCurrent) {
@@ -1075,7 +1093,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('Failed to delete session:', error)
     }
-  }, [createAndSelectSession, currentUserId, disconnectSocket, removeCachedSessionMessages, resetSessionView, sessionId, sessions])
+  }, [createAndSelectSession, currentUserId, disconnectSocket, removeCachedSessionMessages, removePersistedSession, resetSessionView, sessionId, sessions])
 
   const navigateToPage = (page: PageKey) => {
     window.location.hash = page
