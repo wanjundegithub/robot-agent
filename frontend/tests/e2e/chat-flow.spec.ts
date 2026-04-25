@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const currentSessionIds = ['session-current-1', 'session-current-2', 'session-current-3']
+const currentSessionIds = ['session-current-1', 'session-current-2', 'session-current-3'] as const
 let createSessionCount = 0
 
 const sessionDetails = {
@@ -58,14 +58,14 @@ const sessionMessages = {
     {
       id: 'msg-history-1-user',
       type: 'user',
-      content: 'Historical user question',
+      content: '历史用户提问',
       timestamp: '2026-04-20T09:00:00',
       executionId: 'exec-history-1',
     },
     {
       id: 'msg-history-1-ai',
       type: 'error',
-      content: 'Historical failure response',
+      content: '历史失败响应',
       timestamp: '2026-04-20T09:01:00',
       executionId: 'exec-history-1',
     },
@@ -74,7 +74,7 @@ const sessionMessages = {
     {
       id: 'msg-history-2-user',
       type: 'user',
-      content: 'Another historical request',
+      content: '另一条历史请求',
       timestamp: '2026-04-19T08:00:00',
       executionId: 'exec-history-2',
     },
@@ -93,7 +93,7 @@ const sessionExecutions = {
       status: 'failed',
       current_node_id: 'tool_1',
       variables: null,
-      error: 'Historical failure response',
+      error: '历史失败响应',
     },
   ],
   'session-history-2': [
@@ -117,7 +117,7 @@ const replayDetails = {
     workflow_version: 'v1',
     session_id: 'session-history-1',
     status: 'failed',
-    input_variables: { user_message: 'Historical user question' },
+    input_variables: { user_message: '历史用户提问' },
     output_variables: {},
     variables: {},
     metrics: {},
@@ -131,7 +131,7 @@ const replayDetails = {
         input: {},
         output: {},
         metrics: {},
-        error: 'Tool timeout',
+        error: '工具超时',
       },
     ],
     event_stream: [
@@ -153,8 +153,8 @@ const replayDetails = {
     workflow_version: 'v3',
     session_id: 'session-history-2',
     status: 'completed',
-    input_variables: { user_message: 'Another historical request' },
-    output_variables: { answer: 'Completed' },
+    input_variables: { user_message: '另一条历史请求' },
+    output_variables: { answer: '已完成' },
     variables: {},
     metrics: {},
     node_logs: [],
@@ -271,22 +271,35 @@ test.describe('chat and session replay', () => {
   test('creates a fresh session on load and keeps history replay available after creating another session', async ({ page }) => {
     await page.goto('/')
 
+    await expect(page.getByRole('heading', { name: '机器人代理控制台' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '聊天' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '工作流' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '执行' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '模型' })).toBeVisible()
+    await expect(page.getByText('聊天控制台')).toBeVisible()
+    await expect(page.getByText('选择已发布工作流')).toBeVisible()
+    await expect(page.getByText('会话回放')).toBeVisible()
     await expect(page.getByTestId('chat-new-session')).toBeVisible()
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-2')
+    await expect(page.getByLabel('会话')).toContainText('session-current-2')
+    await expect(page.getByLabel('会话')).toContainText('session-history-1')
+    await expect(page.getByLabel('会话')).toContainText('session-history-2')
 
     await expect(page.getByTestId('session-replay-panel')).toBeVisible()
     await expect(page.getByTestId('session-history-item-session-history-1')).toBeVisible()
 
-    await expect(page.getByText('Historical user question')).toBeVisible()
-    await expect(page.getByText('Historical failure response')).toBeVisible()
+    await expect(page.getByText('历史用户提问')).toBeVisible()
+    await expect(page.getByText('历史失败响应')).toBeVisible()
     await expect(page.getByTestId('execution-history-item-exec-history-1')).toBeVisible()
-    await expect(page.getByText('execution.failed')).toBeVisible()
-    await expect(page.getByText('Tool timeout')).toBeVisible()
+    await expect(page.getByText('执行失败')).toBeVisible()
+    await expect(page.getByText('工具超时')).toBeVisible()
 
     await page.getByTestId('chat-new-session').click()
 
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
+    await expect(page.getByLabel('会话')).toContainText('session-current-3')
+    await expect(page.getByLabel('会话')).toContainText('session-history-1')
     await expect(page.getByTestId('session-history-item-session-history-1')).toBeVisible()
-    await expect(page.getByText('Historical user question')).toBeVisible()
+    await expect(page.getByText('历史用户提问')).toBeVisible()
   })
 })

@@ -79,7 +79,7 @@ const GovernancePanel: React.FC<GovernancePanelProps> = ({ sessionId, notice }) 
               <li key={`${String(rule.scope)}_${String(rule.limit)}`} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2">
                 <div className="text-sm font-medium text-slate-800">{displayScope(rule.scope)}</div>
                 <div className="text-xs text-slate-500">
-                  {String(rule.limit)} / {String(rule.window_seconds)}s · {String(rule.redis_key_pattern)}
+                  {String(rule.limit)} / {String(rule.window_seconds)} 秒 · {String(rule.redis_key_pattern)}
                 </div>
               </li>
             ))}

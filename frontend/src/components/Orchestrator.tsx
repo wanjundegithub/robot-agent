@@ -106,22 +106,22 @@ interface OrchestratorProps {
 const DRAFT_VERSION = 'draft'
 
 const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
-  { value: 'string', label: 'string' },
-  { value: 'text', label: 'text' },
-  { value: 'integer', label: 'integer' },
-  { value: 'number', label: 'number' },
-  { value: 'boolean', label: 'boolean' },
-  { value: 'date', label: 'date' },
-  { value: 'datetime', label: 'datetime' },
-  { value: 'time', label: 'time' },
-  { value: 'enum', label: 'enum' },
-  { value: 'array', label: 'array' },
-  { value: 'object', label: 'object' },
-  { value: 'json', label: 'json' },
-  { value: 'markdown', label: 'markdown' },
-  { value: 'file', label: 'file' },
-  { value: 'image', label: 'image' },
-  { value: 'any', label: 'any' },
+  { value: 'string', label: '字符串' },
+  { value: 'text', label: '长文本' },
+  { value: 'integer', label: '整数' },
+  { value: 'number', label: '数值' },
+  { value: 'boolean', label: '布尔值' },
+  { value: 'date', label: '日期' },
+  { value: 'datetime', label: '日期时间' },
+  { value: 'time', label: '时间' },
+  { value: 'enum', label: '枚举' },
+  { value: 'array', label: '数组' },
+  { value: 'object', label: '对象' },
+  { value: 'json', label: 'JSON' },
+  { value: 'markdown', label: 'Markdown' },
+  { value: 'file', label: '文件' },
+  { value: 'image', label: '图片' },
+  { value: 'any', label: '任意类型' },
 ]
 
 const initialNodes: Node<CanvasNodeData>[] = [
@@ -133,7 +133,7 @@ const initialNodes: Node<CanvasNodeData>[] = [
       label: '开始节点',
       nodeType: 'start',
       config: {
-        prompt: '接收用户输入并初始化流程变量。',
+        prompt: '接收用户输入并初始化工作流变量。',
         input_variable_ids: [],
       },
     },
@@ -145,7 +145,7 @@ const initialNodes: Node<CanvasNodeData>[] = [
       label: '消息节点',
       nodeType: 'message',
       config: {
-        message_text: '好的，我正在处理，请稍候。',
+        message_text: '正在处理中，请稍候。',
       },
     },
   },
@@ -157,7 +157,7 @@ const initialNodes: Node<CanvasNodeData>[] = [
       label: '结束节点',
       nodeType: 'end',
       config: {
-        prompt: '输出流程最终结果。',
+        prompt: '返回工作流最终输出。',
         output_variable_ids: [],
       },
     },
@@ -174,7 +174,7 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'start',
     label: '开始节点',
     config: {
-      prompt: '定义流程启动时的输入变量。',
+      prompt: '定义工作流启动时可用的输入变量。',
       input_variable_ids: [],
     },
   },
@@ -182,14 +182,14 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'coordinate',
     label: '协调节点',
     config: {
-      prompt: '协调多个子步骤，决定后续处理路径。',
+      prompt: '协调多个子步骤，并决定下一条路由路径。',
     },
   },
   {
     nodeType: 'sub_agent',
     label: '子代理节点',
     config: {
-      prompt: '让子代理处理子任务，并返回后续节点需要的变量。',
+      prompt: '将子任务委派给子代理，并记录下游所需变量。',
     },
   },
   {
@@ -206,19 +206,18 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'message',
     label: '消息节点',
     config: {
-      message_text: '这里填写固定输出内容。',
+      message_text: '在这里填写固定输出消息。',
     },
   },
   {
     nodeType: 'end',
     label: '结束节点',
     config: {
-      prompt: '定义结束节点返回的输出变量。',
+      prompt: '定义结束节点需要返回哪些输出变量。',
       output_variable_ids: [],
     },
   },
 ]
-
 const emptyVariableForm = {
   name: '',
   type: 'string' as VariableType,
@@ -260,9 +259,9 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const endCount = nodes.filter((node) => (node.data as CanvasNodeData).nodeType === 'end').length
 
     return [
-      { label: '仅保留一个开始节点', valid: startCount === 1 },
-      { label: '仅保留一个结束节点', valid: endCount === 1 },
-      { label: '已维护变量设置', valid: allVariables.length > 0 },
+      { label: '必须且只能保留一个开始节点', valid: startCount === 1 },
+      { label: '必须且只能保留一个结束节点', valid: endCount === 1 },
+      { label: '必须维护变量定义', valid: allVariables.length > 0 },
     ]
   }, [allVariables.length, nodes])
 
@@ -317,12 +316,11 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const currentEntryRule = useMemo(
     () => ({
       intent_codes: ['general_agent_request'],
-      keywords: workflowName.trim() ? [workflowName.trim()] : ['流程'],
+      keywords: workflowName.trim() ? [workflowName.trim()] : ['workflow'],
       priority: 100,
     }),
     [workflowName]
   )
-
   useEffect(() => {
     onWorkflowDraftChange?.({
       workflowCode: workflowMeta.workflowCode,
@@ -375,13 +373,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     setTempVariables(hydrated.tempVariables)
     setVariableForm(emptyVariableForm)
     setValidationIssues([])
-    setSaveStatus(`已载入版本 ${editorSelection.version.version}`)
+    setSaveStatus(`已加载版本 ${editorSelection.version.version}`)
   }, [editorSelection, setEdges, setNodes])
 
   const ensureWorkflowBasics = () => {
     const trimmedName = workflowName.trim()
     if (!trimmedName) {
-      setSaveStatus('请先填写流程名')
+      setSaveStatus('请先填写工作流名称。')
       return null
     }
 
@@ -436,7 +434,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     try {
       const response = await persistDraft(DRAFT_VERSION)
       if (!response) return
-      setSaveStatus(response.workflowId ? `草稿已保存，流程 ID: ${response.workflowId}` : '草稿已保存')
+      setSaveStatus(response.workflowId ? `草稿已保存。工作流 ID：${response.workflowId}` : '草稿已保存。')
       onWorkflowVersionMutation?.({
         workflowCode: response.workflowCode,
         version: response.version,
@@ -444,7 +442,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         refreshAt: Date.now(),
       })
     } catch (error) {
-      setSaveStatus(error instanceof Error ? `保存失败: ${error.message}` : '保存失败')
+      setSaveStatus(error instanceof Error ? `保存失败：${error.message}` : '保存失败。')
     } finally {
       setIsSaving(false)
     }
@@ -465,10 +463,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       })
       const issues = response.issues ?? []
       setValidationIssues(issues)
-      setSaveStatus(issues.length === 0 ? '校验通过' : `发现 ${issues.length} 个问题`)
+      setSaveStatus(issues.length === 0 ? '校验通过。' : `发现 ${issues.length} 个校验问题。`)
     } catch (error) {
       setValidationIssues([])
-      setSaveStatus(error instanceof Error ? `校验失败: ${error.message}` : '校验失败')
+      setSaveStatus(error instanceof Error ? `校验失败：${error.message}` : '校验失败。')
     }
   }
 
@@ -489,7 +487,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       const issues = validation.issues ?? []
       setValidationIssues(issues)
       if (issues.length > 0) {
-        setSaveStatus(`发布前校验失败，共 ${issues.length} 个问题`)
+        setSaveStatus(`发布被阻止，仍有 ${issues.length} 个校验问题待处理。`)
         return
       }
 
@@ -499,7 +497,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
       await publishWorkflow(saved.workflowCode, publishVersion, currentUserId)
       setWorkflowMeta((prev) => ({ ...prev, publishedVersion: publishVersion }))
-      setSaveStatus(`已发布版本 ${publishVersion}`)
+      setSaveStatus(`已发布版本 ${publishVersion}。`)
       onWorkflowVersionMutation?.({
         workflowCode: saved.workflowCode,
         version: publishVersion,
@@ -507,12 +505,11 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         refreshAt: Date.now(),
       })
     } catch (error) {
-      setSaveStatus(error instanceof Error ? `发布失败: ${error.message}` : '发布失败')
+      setSaveStatus(error instanceof Error ? `发布失败：${error.message}` : '发布失败。')
     } finally {
       setIsPublishing(false)
     }
   }
-
   const addNode = (nodeType: DesignerNodeType) => {
     const template = nodeTemplates.find((item) => item.nodeType === nodeType)
     if (!template) return
@@ -639,13 +636,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
     return (
       <div className="space-y-2">
-        {allVariables.length === 0 && <div className="text-xs text-slate-500">请先在右下角维护变量设置。</div>}
+        {allVariables.length === 0 && <div className="text-xs text-slate-500">请先在下方面板创建变量。</div>}
         {allVariables.map((variable) => (
           <label key={variable.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
             <span className="min-w-0">
               <span className="block font-medium text-slate-700">{variable.name}</span>
               <span className="block text-xs text-slate-400">
-                {variable.scope === 'global' ? '全局' : '临时'} · {variable.type}
+                {displayVariableScope(variable.scope)} / {displayVariableType(variable.type)}
               </span>
               {variable.description && <span className="mt-1 block text-xs text-slate-500">{variable.description}</span>}
             </span>
@@ -662,7 +659,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   const renderNodeEditor = () => {
     if (!selectedNodeData) {
-      return <div className="text-sm text-slate-500">选择一个节点后，在这里编辑节点配置。</div>
+      return <div className="text-sm text-slate-500">请选择一个节点，在这里编辑它的配置。</div>
     }
 
     const config = selectedNodeData.config || {}
@@ -676,7 +673,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           placeholder="节点名称"
         />
-        <div className="text-xs text-slate-400">节点类型: {displayNodeType(nodeType)}</div>
+        <div className="text-xs text-slate-400">节点类型：{displayNodeType(nodeType)}</div>
 
         {(nodeType === 'start' || nodeType === 'coordinate' || nodeType === 'sub_agent' || nodeType === 'end') && (
           <textarea
@@ -699,7 +696,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
             value={String(config.message_text || '')}
             onChange={(event) => updateSelectedConfigField('message_text', event.target.value)}
             className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder="请输入固定输出话术"
+            placeholder="请输入固定输出文本"
           />
         )}
 
@@ -713,7 +710,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               <option value="function">函数调用</option>
               <option value="api">API 调用</option>
               <option value="mcp">MCP 调用</option>
-              <option value="skill">Skill 调用</option>
+              <option value="skill">技能调用</option>
             </select>
 
             {String(config.invoke_type || 'api') === 'function' && (
@@ -758,7 +755,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                   value={String(config.tool_name || '')}
                   onChange={(event) => updateSelectedConfigField('tool_name', event.target.value)}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="MCP 工具名"
+                  placeholder="MCP 工具名称"
                 />
               </>
             )}
@@ -769,13 +766,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                   value={String(config.skill_endpoint || '')}
                   onChange={(event) => updateSelectedConfigField('skill_endpoint', event.target.value)}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="Skill 地址"
+                  placeholder="技能端点"
                 />
                 <input
                   value={String(config.skill_name || '')}
                   onChange={(event) => updateSelectedConfigField('skill_name', event.target.value)}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="Skill 名称"
+                  placeholder="技能名称"
                 />
               </>
             )}
@@ -784,7 +781,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               value={formatObject(config.payload_mapping)}
               onChange={(event) => updateJsonConfigField('payload_mapping', event.target.value, config, replaceSelectedConfig)}
               className="min-h-[120px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
-              placeholder='工具参数映射，例如 {"user_message":"execution.user_message"}'
+              placeholder='载荷映射，例如 {"user_message":"execution.user_message"}'
             />
           </>
         )}
@@ -807,7 +804,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   const renderVariableManager = (scope: VariableScope, items: VariableDefinition[]) => (
     <div className="space-y-2">
-      {items.length === 0 && <div className="text-xs text-slate-500">{scope === 'global' ? '暂无全局变量' : '暂无临时变量'}</div>}
+      {items.length === 0 && <div className="text-xs text-slate-500">{scope === 'global' ? '暂无全局变量。' : '暂无临时变量。'}</div>}
       {items.map((item) => (
         <div key={item.id} className="space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-3">
           <div className="grid gap-2 md:grid-cols-[1fr_140px_88px]">
@@ -815,7 +812,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               value={item.name}
               onChange={(event) => updateVariable(scope, item.id, 'name', event.target.value)}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              placeholder="变量名"
+              placeholder="变量名称"
             />
             <select
               value={item.type}
@@ -840,13 +837,12 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
             value={item.description}
             onChange={(event) => updateVariable(scope, item.id, 'description', event.target.value)}
             className="min-h-[72px] w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            placeholder="变量描述，供大模型理解变量含义和使用方式"
+            placeholder="描述变量语义，方便其他节点和代理正确使用。"
           />
         </div>
       ))}
     </div>
   )
-
   useImperativeHandle(
     ref,
     () => ({
@@ -864,8 +860,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         <div className="flex min-h-0 flex-col gap-4">
           <div className="panel-header mb-0">
             <div>
-              <div className="panel-title">流程画布</div>
-              <div className="text-xs text-slate-500">{workflowName.trim() || '未命名流程'}</div>
+              <div className="panel-title">工作流画布</div>
+              <div className="text-xs text-slate-500">{workflowName.trim() || '未命名工作流'}</div>
             </div>
             <div className="text-xs text-slate-400">{saveStatus}</div>
           </div>
@@ -904,18 +900,18 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
         <div className="grid min-h-0 gap-4 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="min-h-0 rounded-xl border border-slate-200 bg-white p-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">节点编辑</div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">节点编辑器</div>
             <div className="max-h-full overflow-auto pr-1">{renderNodeEditor()}</div>
           </div>
 
           <div className="min-h-0 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
-            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">变量设置</div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">变量管理</div>
             <div className="mb-3 grid gap-2">
               <input
                 value={variableForm.name}
                 onChange={(event) => setVariableForm((prev) => ({ ...prev, name: event.target.value }))}
                 className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                placeholder="变量名"
+                placeholder="变量名称"
               />
               <div className="grid gap-2 sm:grid-cols-[1fr_120px]">
                 <select
@@ -942,10 +938,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                 value={variableForm.description}
                 onChange={(event) => setVariableForm((prev) => ({ ...prev, description: event.target.value }))}
                 className="min-h-[80px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                placeholder="变量描述，供大模型理解变量的语义、格式和使用限制"
+                placeholder="描述变量语义、预期格式和使用约束。"
               />
               <button className="prompt-primary" type="button" onClick={addVariable}>
-                新增变量
+                添加变量
               </button>
             </div>
 
@@ -965,7 +961,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     </div>
   )
 })
-
 function toFlowType(nodeType: DesignerNodeType): 'input' | 'default' | 'output' {
   if (nodeType === 'start') return 'input'
   if (nodeType === 'end') return 'output'
@@ -1087,6 +1082,14 @@ function displayNodeType(nodeType: DesignerNodeType) {
     default:
       return nodeType
   }
+}
+
+function displayVariableScope(scope: VariableScope) {
+  return scope === 'global' ? '全局变量' : '临时变量'
+}
+
+function displayVariableType(type: VariableType) {
+  return variableTypeOptions.find((option) => option.value === type)?.label || type
 }
 
 function createWorkflowCode() {

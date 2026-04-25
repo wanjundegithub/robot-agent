@@ -9,6 +9,7 @@ import ReplayPanel from './components/ReplayPanel'
 import SessionReplayPanel from './components/SessionReplayPanel'
 import WorkflowPanel from './components/WorkflowPanel'
 import { createSession, getPublishedWorkflows, getSession, getSessionExecutions, getSessionMessages, getSessionsByUserId } from './services/api'
+import { displayExecutionStatus, displaySessionStatus, displaySocketState, displayUserLabel } from './utils/displayText'
 import type {
   ExecutionDetail,
   ExecutionEventEnvelope,
@@ -48,7 +49,7 @@ const gatewayLog = (event: string, details?: Record<string, unknown>) => {
 const createWelcomeMessage = (): Message => ({
   id: 'welcome',
   type: 'system',
-  content: 'Welcome. You can start a conversation directly or select a published workflow for targeted testing.',
+  content: '欢迎使用。你可以直接开始对话，或选择已发布工作流进行定向测试。',
   timestamp: new Date().toISOString(),
 })
 
@@ -111,7 +112,7 @@ const App: React.FC = () => {
         filteredItems.some((item) => item.workflowCode === current) ? current : ''
       )
     } catch (error) {
-      console.error('鑾峰彇宸插彂甯冩祦绋嬪け璐?', error)
+      console.error('Failed to load published workflow options:', error)
     }
   }, [])
 
@@ -134,7 +135,7 @@ const App: React.FC = () => {
       setCurrentSession(detail)
       setSessions((prev) => [detail, ...prev.filter((session) => session.id !== detail.id)])
     } catch (error) {
-      console.error('鑾峰彇浼氳瘽璇︽儏澶辫触:', error)
+      console.error('Failed to refresh session detail:', error)
     }
   }, [])
 
@@ -143,7 +144,7 @@ const App: React.FC = () => {
       const history = await getSessionMessages(activeSessionId)
       setMessages(history.length > 0 ? history : [createWelcomeMessage()])
     } catch (error) {
-      console.error('鑾峰彇浼氳瘽娑堟伅澶辫触:', error)
+      console.error('Failed to load session messages:', error)
       setMessages([createWelcomeMessage()])
     }
   }, [])
@@ -155,22 +156,6 @@ const App: React.FC = () => {
     setSessionId(created.id)
     return created
   }, [])
-
-  const loadUserSessions = useCallback(async (userId: string) => {
-    try {
-      const items = await getSessionsByUserId(userId)
-      if (items.length === 0) {
-        await createAndSelectSession(userId)
-        return
-      }
-      setSessions(items)
-      setCurrentSession(items[0])
-      setSessionId(items[0]?.id ?? '')
-    } catch (error) {
-      console.error('鑾峰彇浼氳瘽鍒楄〃澶辫触:', error)
-    }
-  }, [createAndSelectSession])
-  void loadUserSessions
 
   useEffect(() => {
     void loadPublishedWorkflowOptions()
@@ -193,13 +178,19 @@ const App: React.FC = () => {
       setCurrentSession(null)
       setSessionId('')
       try {
+        const historicalSessionsPromise = getSessionsByUserId(currentUserId).catch((error) => {
+          console.error('Failed to load user sessions:', error)
+          return [] as SessionSummary[]
+        })
         const created = await createSession({ userId: currentUserId })
+        const historicalSessions = await historicalSessionsPromise
         if (cancelled) return
+        setSessions([created, ...historicalSessions.filter((session) => session.id !== created.id)])
         setCurrentSession(created)
         setSessionId(created.id)
       } catch (error) {
         if (!cancelled) {
-          console.error('閸掓繂顫愰崠鏍︾窗鐠囨繂銇戠拹?', error)
+          console.error('Failed to initialize session:', error)
         }
       }
     }
@@ -370,21 +361,6 @@ const App: React.FC = () => {
 
   const normalizeStatus = (value: string) => value.toLowerCase()
 
-  const displaySocketState = (value: SocketState) => {
-    switch (value) {
-      case 'connecting':
-        return 'Connecting'
-      case 'connected':
-        return 'Connected'
-      case 'reconnecting':
-        return 'Reconnecting'
-      case 'disconnected':
-        return 'Disconnected'
-      default:
-        return 'Idle'
-    }
-  }
-
   const waitForSocketReady = useCallback(
     (targetSessionId: string, timeoutMs = 8000) =>
       new Promise<void>((resolve, reject) => {
@@ -429,57 +405,6 @@ const App: React.FC = () => {
     setSocketState('idle')
   }, [])
 
-  const displayExecutionStatus = (value: string) => {
-    switch ((value || '').toLowerCase()) {
-      case 'running':
-        return 'Running'
-      case 'completed':
-        return 'Completed'
-      case 'failed':
-        return 'Failed'
-      case 'waiting_user':
-        return '绛夊緟鐢ㄦ埛'
-      case 'waiting_tool':
-        return '绛夊緟宸ュ叿'
-      case 'suspended':
-        return 'Suspended'
-      case 'switch_required':
-        return 'Switch required'
-      case 'confirmation_required':
-        return '绛夊緟纭'
-      case 'permission_denied':
-        return '鏉冮檺鎷掔粷'
-      case 'rate_limited':
-        return 'Rate limited'
-      case 'degraded':
-        return 'Degraded'
-      default:
-        return 'Idle'
-    }
-  }
-
-  const displaySessionStatus = (value?: string | null) => {
-    switch ((value || '').toLowerCase()) {
-      case 'active':
-        return 'Active'
-      case 'closed':
-        return 'Closed'
-      default:
-        return value || 'Unknown'
-    }
-  }
-
-  const displayUserLabel = (value: string) => {
-    switch (value) {
-      case 'demo-admin':
-        return 'Demo Admin'
-      case 'anonymous':
-        return '鍖垮悕鐢ㄦ埛'
-      default:
-        return '婕旂ず鐢ㄦ埛'
-    }
-  }
-
   const refreshExecutions = async (activeSessionId: string) => {
     try {
       const latest = await getSessionExecutions(activeSessionId)
@@ -492,7 +417,7 @@ const App: React.FC = () => {
         setExecutionId(null)
       }
     } catch (error) {
-      console.error('鑾峰彇 execution 鍒楄〃澶辫触:', error)
+      console.error('Failed to refresh execution list:', error)
     }
   }
 
@@ -583,9 +508,8 @@ const App: React.FC = () => {
         return
       }
     }
-    appendSystemMessage(`缃戝叧閿欒锛?{payload.message}`)
+    appendSystemMessage(`网关错误：${payload.message}`)
   }
-
   const handleExecutionEvent = (payload: ExecutionEventEnvelope) => {
     if (payload.session_id && payload.session_id !== sessionId) return
 
@@ -628,7 +552,7 @@ const App: React.FC = () => {
     }
 
     if (payload.event_type === 'execution.switch_requested') {
-      appendSystemMessage('The current workflow was suspended and is switching to a new target workflow.')
+      appendSystemMessage('当前工作流已暂停，准备切换到新的目标工作流。')
     }
 
     if (payload.event_type === 'execution.resume_offered') {
@@ -638,39 +562,38 @@ const App: React.FC = () => {
         workflowVersion: String((data as any).workflow_version || ''),
         currentNodeId: (data as any).current_node_id ? String((data as any).current_node_id) : undefined,
       })
-      appendSystemMessage(`Workflow ${String((data as any).workflow_code || payload.execution_id)} can be resumed. Continue?`)
+      appendSystemMessage(`工作流 ${String((data as any).workflow_code || payload.execution_id)} 可以恢复执行，是否继续？`)
     }
 
     if (payload.event_type === 'security.prompt_sanitized') {
-      appendSystemMessage('A high-risk prompt fragment was detected and sanitized before continuing.')
+      appendSystemMessage('检测到高风险提示片段，系统已在继续前完成清洗。')
     }
 
     if (payload.event_type === 'security.output_rejected') {
-      appendSystemMessage('Model output did not pass validation and was blocked.')
+      appendSystemMessage('模型输出未通过校验，已被阻止展示。')
     }
 
     if (payload.event_type === 'budget.alert') {
-      appendSystemMessage(`Budget alert: ${String((data as any).message || 'Cost reached the alert threshold')}`)
+      appendSystemMessage(`预算预警：${String((data as any).message || '成本已达到预警阈值')}`)
     }
 
     if (payload.event_type === 'protection.degraded') {
-      const detail = String((data as any).reason || '渚濊禆鏈嶅姟杩涘叆闄嶇骇鎵ц')
-      pushGovernanceNotice('Runtime degraded', detail)
-      appendSystemMessage(`The system is running in degraded mode: ${detail}`)
+      const detail = String((data as any).reason || '运行时已进入降级模式。')
+      pushGovernanceNotice('运行已降级', detail)
+      appendSystemMessage(`系统当前以降级模式运行：${detail}`)
     }
 
     if (payload.event_type === 'protection.circuit_open') {
-      const detail = `tool=${String((data as any).tool_code || 'unknown')} 路 failures=${String((data as any).failures || 0)}`
-      pushGovernanceNotice('渚濊禆鐔旀柇宸叉墦寮€', detail)
+      const detail = `工具=${String((data as any).tool_code || '未知')} / 失败次数=${String((data as any).failures || 0)}`
+      pushGovernanceNotice('保护熔断已开启', detail)
     }
-
     if (payload.event_type === 'protection.rate_limited') {
-      const detail = String((data as any).scope || 'runtime')
-      pushGovernanceNotice('Rate limit triggered', detail)
+      const detail = String((data as any).scope || '运行时')
+      pushGovernanceNotice('触发限流', detail)
     }
 
     if (payload.event_type === 'workflow.validation_failed') {
-      pushGovernanceNotice('Workflow validation failed', 'Please fix the configuration issues in the canvas first.')
+      pushGovernanceNotice('工作流校验失败', '请先修复画布中的配置问题。')
     }
 
     if (payload.event_type === 'execution.completed') {
@@ -810,8 +733,8 @@ const App: React.FC = () => {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setExecutionStatus('permission_denied')
         setPendingConfirmation(null)
-        pushGovernanceNotice('Permission denied', response.permission_reason || 'The current operation was blocked by policy.')
-        appendSystemMessage(`Permission denied: ${response.permission_reason || 'The current user is not allowed to perform this action.'}`)
+        pushGovernanceNotice('权限不足', response.permission_reason || '当前操作被策略阻止。')
+        appendSystemMessage(`权限不足：${response.permission_reason || '当前用户无权执行此操作。'}`)
         return
       }
 
@@ -820,10 +743,10 @@ const App: React.FC = () => {
         setPendingConfirmation({ content, messageId, response })
         setExecutionStatus('confirmation_required')
         pushGovernanceNotice(
-          'Confirmation required',
-          `${response.requested_tool_code || 'unknown'} requires confirmation before execution`
+          '需要确认',
+          `${response.requested_tool_code || '未知工具'} 在执行前需要确认`
         )
-        appendSystemMessage(`High-risk operation detected: ${response.requested_tool_code}. Please confirm before continuing.`)
+        appendSystemMessage(`检测到高风险操作：${response.requested_tool_code}。请确认后继续。`)
         return
       }
 
@@ -831,8 +754,8 @@ const App: React.FC = () => {
         setPendingConfirmation(null)
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setExecutionStatus('idle')
-        pushGovernanceNotice('Confirmation cancelled', 'The sensitive operation was cancelled and will not continue.')
-        appendSystemMessage('The sensitive operation was cancelled.')
+        pushGovernanceNotice('已取消确认', '敏感操作已取消，流程不会继续执行。')
+        appendSystemMessage('敏感操作已取消。')
         return
       }
 
@@ -843,8 +766,8 @@ const App: React.FC = () => {
         const detail =
           response.degradation_message ||
           response.protection_reason ||
-          `Please retry after ${response.retry_after_seconds || 0} seconds.`
-        pushGovernanceNotice(response.status === 'rate_limited' ? 'Rate limited' : 'Degraded', detail)
+          `请在 ${response.retry_after_seconds || 0} 秒后重试。`
+        pushGovernanceNotice(response.status === 'rate_limited' ? '已限流' : '已降级', detail)
         appendSystemMessage(detail)
         return
       }
@@ -854,7 +777,7 @@ const App: React.FC = () => {
         setPendingSwitch({ content, messageId, response })
         setExecutionStatus('switch_required')
         appendSystemMessage(
-          `A new intent will switch to workflow ${response.workflow_code}. Please confirm whether to save the current flow and switch.`
+          `检测到新的意图，将切换到工作流 ${response.workflow_code}。请确认是否保存当前流程并切换。`
         )
         return
       }
@@ -877,14 +800,14 @@ const App: React.FC = () => {
       await refreshExecutions(activeSessionId)
       await refreshSessionDetail(activeSessionId)
     } catch (error) {
-      console.error('鍙戦€佹秷鎭け璐?', error)
+      console.error('Failed to send message:', error)
       setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
       setMessages((prev) => [
         ...prev,
         {
           id: createId('err'),
           type: 'error',
-          content: 'Sending the message failed. Please try again later.',
+          content: '消息发送失败，请稍后再试。',
           timestamp: new Date().toISOString(),
         },
       ])
@@ -916,7 +839,7 @@ const App: React.FC = () => {
       await refreshExecutions(sessionId)
       await refreshSessionDetail(sessionId)
     } catch (error) {
-      console.error('鎭㈠ execution 澶辫触:', error)
+      console.error('Failed to resume execution:', error)
       setExecutionStatus('failed')
     }
   }
@@ -930,7 +853,7 @@ const App: React.FC = () => {
     try {
       await createAndSelectSession(currentUserId)
     } catch (error) {
-      console.error('閺傛澘缂撴导姘崇樈婢惰精瑙?', error)
+      console.error('Failed to create session:', error)
     }
   }, [createAndSelectSession, currentUserId, disconnectSocket, resetSessionView])
 
@@ -946,120 +869,24 @@ const App: React.FC = () => {
     setActivePage(page)
   }
 
-/*  const renderPromptCards = () => (
-    <>
-      {pendingSwitch && (
-        <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">闇€瑕佸垏鎹㈡祦绋?/div>
-          <div className="text-sm text-slate-700">
-            褰撳墠杩愯娴佺▼涓庢柊鎰忓浘鍐茬獊锛岀洰鏍囨祦绋嬫槸 <strong>{pendingSwitch.response.workflow_code}</strong>銆?          </div>
-          <div className="text-xs text-slate-500 mt-2">
-            鍐崇瓥锛歿pendingSwitch.response.route_decision} 路 缃俊搴︼細{' '}
-            {pendingSwitch.response.route_confidence?.toFixed(2) ?? '鏈煡'}
-          </div>
-          <div className="prompt-actions">
-            <button className="prompt-secondary" onClick={() => setPendingSwitch(null)}>
-              淇濇寔褰撳墠娴佺▼
-            </button>
-            <button
-              className="prompt-primary"
-              onClick={() =>
-                void handleSendMessage(
-                  pendingSwitch.content,
-                  { confirmSwitch: true },
-                  pendingSwitch.messageId
-                )
-              }
-            >
-              鏆傚瓨骞跺垏鎹?            </button>
-	            </div>
-            </div>
-	          </div>
-      )}
-
-      {resumeOffer && (
-        <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">鎭㈠鎻愮ず</div>
-          <div className="text-sm text-slate-700">
-            宸叉湁鎸傝捣娴佺▼ <strong>{resumeOffer.workflowCode}</strong> 寰呮仮澶嶃€?          </div>
-          <div className="text-xs text-slate-500 mt-2">
-            鐗堟湰锛歿resumeOffer.workflowVersion} 路 鑺傜偣锛歿resumeOffer.currentNodeId || '寰呭畾'}
-          </div>
-          <div className="prompt-actions">
-            <button className="prompt-secondary" onClick={() => setResumeOffer(null)}>
-              绋嶅悗鎭㈠
-            </button>
-            <button className="prompt-primary" onClick={() => void handleResume()}>
-              绔嬪嵆鎭㈠
-            </button>
-          </div>
-        </div>
-      )}
-
-      {pendingConfirmation && (
-        <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">楂橀闄╀簩娆＄‘璁?/div>
-          <div className="text-sm text-slate-700">
-            鎿嶄綔 <strong>{pendingConfirmation.response.requested_tool_code}</strong> 闇€瑕佷簩娆＄‘璁ゅ悗鎵嶈兘缁х画銆?          </div>
-          <div className="text-xs text-slate-500 mt-2">
-            澶辨晥鏃堕棿锛歿pendingConfirmation.response.confirmation_expires_at || '5 鍒嗛挓鍐?}
-          </div>
-          <div className="prompt-actions">
-            <button
-              className="prompt-secondary"
-              onClick={() =>
-                void handleSendMessage(
-                  pendingConfirmation.content,
-                  {
-                    requestedToolCode: pendingConfirmation.response.requested_tool_code,
-                    confirmationId: pendingConfirmation.response.confirmation_id,
-                    cancelConfirmation: true,
-                  },
-                  pendingConfirmation.messageId
-                )
-              }
-            >
-              鍙栨秷鎿嶄綔
-            </button>
-            <button
-              className="prompt-primary"
-              onClick={() =>
-                void handleSendMessage(
-                  pendingConfirmation.content,
-                  {
-                    requestedToolCode: pendingConfirmation.response.requested_tool_code,
-                    confirmationId: pendingConfirmation.response.confirmation_id,
-                  },
-                  pendingConfirmation.messageId
-                )
-              }
-            >
-              纭缁х画
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  )
-
-*/
   const renderPromptCards = () => (
     <>
       {pendingSwitch && (
         <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">Switch Required</div>
+          <div className="panel-title mb-2">需要切换</div>
           <div className="text-sm text-slate-700">
-            The current execution conflicts with the new intent. Target workflow:
+            当前执行与新意图冲突，目标工作流：
             {' '}
             <strong>{pendingSwitch.response.workflow_code}</strong>
           </div>
           <div className="mt-2 text-xs text-slate-500">
-            Decision: {pendingSwitch.response.route_decision || 'unknown'} 路 Confidence:{' '}
-            {pendingSwitch.response.route_confidence?.toFixed(2) ?? 'unknown'}
+            决策：{pendingSwitch.response.route_decision || '未知'} / 置信度：
+            {' '}
+            {pendingSwitch.response.route_confidence?.toFixed(2) ?? '未知'}
           </div>
           <div className="prompt-actions">
             <button className="prompt-secondary" onClick={() => setPendingSwitch(null)}>
-              Keep Current
+              保持当前流程
             </button>
             <button
               className="prompt-primary"
@@ -1071,7 +898,7 @@ const App: React.FC = () => {
                 )
               }
             >
-              Save And Switch
+              保存并切换
             </button>
           </div>
         </div>
@@ -1079,21 +906,21 @@ const App: React.FC = () => {
 
       {resumeOffer && (
         <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">Resume Execution</div>
+          <div className="panel-title mb-2">恢复执行</div>
           <div className="text-sm text-slate-700">
-            Suspended workflow:
+            已挂起工作流：
             {' '}
             <strong>{resumeOffer.workflowCode}</strong>
           </div>
           <div className="mt-2 text-xs text-slate-500">
-            Version: {resumeOffer.workflowVersion} 路 Node: {resumeOffer.currentNodeId || 'pending'}
+            版本：{resumeOffer.workflowVersion} / 节点：{resumeOffer.currentNodeId || '待定'}
           </div>
           <div className="prompt-actions">
             <button className="prompt-secondary" onClick={() => setResumeOffer(null)}>
-              Later
+              稍后处理
             </button>
             <button className="prompt-primary" onClick={() => void handleResume()}>
-              Resume Now
+              立即恢复
             </button>
           </div>
         </div>
@@ -1101,14 +928,15 @@ const App: React.FC = () => {
 
       {pendingConfirmation && (
         <div className="panel-card prompt-card">
-          <div className="panel-title mb-2">Confirmation Required</div>
+          <div className="panel-title mb-2">需要确认</div>
           <div className="text-sm text-slate-700">
-            Tool{' '}
+            工具
+            {' '}
             <strong>{pendingConfirmation.response.requested_tool_code}</strong>{' '}
-            requires explicit confirmation before execution.
+            在执行前需要显式确认。
           </div>
           <div className="mt-2 text-xs text-slate-500">
-            Expires at: {pendingConfirmation.response.confirmation_expires_at || '5 minutes'}
+            过期时间：{pendingConfirmation.response.confirmation_expires_at || '5 分钟后'}
           </div>
           <div className="prompt-actions">
             <button
@@ -1125,7 +953,7 @@ const App: React.FC = () => {
                 )
               }
             >
-              Cancel
+              取消
             </button>
             <button
               className="prompt-primary"
@@ -1140,7 +968,7 @@ const App: React.FC = () => {
                 )
               }
             >
-              Confirm
+              确认
             </button>
           </div>
         </div>
@@ -1166,8 +994,8 @@ const App: React.FC = () => {
             <div className="panel-card">
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">娴佺▼璁剧疆</div>
-                  <div className="text-xs text-slate-500">Save, publish, and design checks are all handled on the right side.</div>
+                  <div className="panel-title">工作流设置</div>
+                  <div className="text-xs text-slate-500">在此面板中保存、发布并校验工作流。</div>
                 </div>
                 {workflowSidebarState?.workflowId && (
                   <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
@@ -1184,11 +1012,11 @@ const App: React.FC = () => {
                     orchestratorRef.current?.setWorkflowName(nextValue)
                   }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="流程名称"
+                  placeholder="工作流名称"
                 />
                 <div className="grid gap-2 sm:grid-cols-3">
                   <button className="prompt-secondary" type="button" onClick={() => void orchestratorRef.current?.validateDraft()}>
-                    鏍￠獙
+                    校验
                   </button>
                   <button
                     className="prompt-secondary"
@@ -1196,7 +1024,7 @@ const App: React.FC = () => {
                     onClick={() => void orchestratorRef.current?.saveDraft()}
                     disabled={workflowSidebarState?.isSaving}
                   >
-                    {workflowSidebarState?.isSaving ? '淇濆瓨涓?..' : '淇濆瓨鑽夌'}
+                    {workflowSidebarState?.isSaving ? '保存中...' : '保存草稿'}
                   </button>
                   <button
                     className="prompt-primary"
@@ -1204,21 +1032,21 @@ const App: React.FC = () => {
                     onClick={() => void orchestratorRef.current?.publish()}
                     disabled={workflowSidebarState?.isPublishing}
                   >
-                    {workflowSidebarState?.isPublishing ? '鍙戝竷涓?..' : '鍙戝竷鐗堟湰'}
+                    {workflowSidebarState?.isPublishing ? '发布中...' : '发布版本'}
                   </button>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
-                  <div>鑽夌鐗堟湰: {workflowSidebarState?.draftVersion || 'draft'}</div>
-                  <div>Current code: {workflowSidebarState?.workflowCode || 'Generated after save'}</div>
-                  <div>Latest release: {workflowSidebarState?.publishedVersion || 'Not published yet'}</div>
-                  <div className="mt-2 text-slate-400">{workflowSidebarState?.saveStatus || '灏氭湭淇濆瓨'}</div>
+                  <div>草稿版本：{workflowSidebarState?.draftVersion || 'draft'}</div>
+                  <div>当前编码：{workflowSidebarState?.workflowCode || '保存后自动生成'}</div>
+                  <div>最新发布：{workflowSidebarState?.publishedVersion || '尚未发布'}</div>
+                  <div className="mt-2 text-slate-400">{workflowSidebarState?.saveStatus || '尚未保存'}</div>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Design Checks</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">设计检查</div>
                   <ul className="space-y-1">
                     {(workflowSidebarState?.summaryRules || []).map((rule) => (
                       <li key={rule.label} className={`text-sm ${rule.valid ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        {rule.valid ? 'Pass' : 'Needs work'} / {rule.label}
+                        {rule.valid ? '通过' : '需处理'} / {rule.label}
                       </li>
                     ))}
                   </ul>
@@ -1279,68 +1107,67 @@ const App: React.FC = () => {
     return (
       <section className="page-grid page-grid-chat">
         <div className="page-stack">
-        {renderPromptCards()}
-        <div className="panel-card flex-1 flex flex-col">
-          <div className="panel-header">
-            <div>
-              <div className="panel-title">瀵硅瘽绐楀彛</div>
-              <div className="mt-1 text-xs text-slate-500">
-                鎵ц鐘舵€侊細{displayExecutionStatus(executionStatus)}
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <button
-                className="prompt-secondary"
-                onClick={() => void handleCreateNewSession()}
-                type="button"
-                style={{ fontSize: 0 }}
-                data-testid="chat-new-session"
-              >
-                <span className="text-xs">新建</span>
-                新建会话
-              </button>
-	              <div className="text-right text-xs text-slate-500" data-testid="current-session-meta">
-              <div>会话 ID：{sessionId || '未创建'}</div>
+          {renderPromptCards()}
+          <div className="panel-card flex-1 flex flex-col">
+            <div className="panel-header">
               <div>
-                ?????{displaySessionStatus(currentSession?.status)} ? ???{displaySocketState(socketState)}
+                <div className="panel-title">聊天控制台</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  执行状态：{displayExecutionStatus(executionStatus)}
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <button
+                  className="prompt-secondary"
+                  onClick={() => void handleCreateNewSession()}
+                  type="button"
+                  data-testid="chat-new-session"
+                >
+                  新建会话
+                </button>
+                <div className="text-right text-xs text-slate-500" data-testid="current-session-meta">
+                  <div>会话 ID：{sessionId || '尚未创建'}</div>
+                  <div>
+                    会话 {displaySessionStatus(currentSession?.status)} / 连接 {displaySocketState(socketState)}
+                  </div>
+                </div>
               </div>
             </div>
-	          </div>
-          </div>
-	          <div className="mb-4 rounded-2xl border border-sky-100 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))] px-4 py-4">
-            <div className="text-sm font-semibold text-slate-800">选择已发布流程</div>
-            <div className="mt-1 text-sm text-slate-600">
-              鍙厛閫夋嫨涓€涓凡鍙戝竷娴佺▼杩涜瀹氬悜娴嬭瘯锛涗笉閫夋嫨鏃讹紝绯荤粺浼氭牴鎹秷鎭唴瀹硅嚜鍔ㄨ矾鐢便€?            </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-              <select
-                value={selectedPublishedWorkflowCode}
-                onChange={(event) => setSelectedPublishedWorkflowCode(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-              >
-                <option value="">不绑定流程</option>
-                {publishedWorkflowOptions.map((workflow) => (
-                  <option key={workflow.workflowCode} value={workflow.workflowCode}>
-                    {workflow.name} ({workflow.workflowCode} ? {workflow.currentVersion || 'Unknown version'})
-                  </option>
-                ))}
-              </select>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
-                ?????{' '}
-                {selectedPublishedWorkflowCode
-                  ? `${selectedPublishedWorkflowCode} / ${publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion || 'Unknown version'}`
-                  : '未绑定流程'}
+            <div className="mb-4 rounded-2xl border border-sky-100 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))] px-4 py-4">
+              <div className="text-sm font-semibold text-slate-800">选择已发布工作流</div>
+              <div className="mt-1 text-sm text-slate-600">
+                你可以固定一个已发布工作流进行定向测试，也可以留空并交由路由自动选择。
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <select
+                  value={selectedPublishedWorkflowCode}
+                  onChange={(event) => setSelectedPublishedWorkflowCode(event.target.value)}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                >
+                  <option value="">不固定工作流</option>
+                  {publishedWorkflowOptions.map((workflow) => (
+                    <option key={workflow.workflowCode} value={workflow.workflowCode}>
+                      {workflow.name} ({workflow.workflowCode} / {workflow.currentVersion || '未知版本'})
+                    </option>
+                  ))}
+                </select>
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                  当前目标：
+                  {' '}
+                  {selectedPublishedWorkflowCode
+                    ? `${selectedPublishedWorkflowCode} / ${publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion || '未知版本'}`
+                    : '由路由自动决定'}
+                </div>
               </div>
             </div>
-          </div>
-          <MessageList messages={messages} isLoading={isLoading} />
-          <div className="panel-footer">
-            <div className="mb-2 text-xs text-slate-400">
-              ?????{displayUserLabel(currentUserId)} ? ???????{' '}
-              {selectedPublishedWorkflowCode || '?????'} ? ???????? / ????
+            <MessageList messages={messages} isLoading={isLoading} />
+            <div className="panel-footer">
+              <div className="mb-2 text-xs text-slate-400">
+                用户：{displayUserLabel(currentUserId)} / 固定工作流：{selectedPublishedWorkflowCode || '无'} / 已启用流式输出
+              </div>
+              <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
             </div>
-            <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
           </div>
-        </div>
         </div>
         <div className="page-stack">
           <SessionReplayPanel
@@ -1354,21 +1181,20 @@ const App: React.FC = () => {
       </section>
     )
   }
-
   return (
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">服务机器人演示</h1>
-          <div className="text-sm text-slate-500">多流程编排与会话调试</div>
+          <h1 className="text-2xl font-semibold tracking-tight">机器人代理控制台</h1>
+          <div className="text-sm text-slate-500">多工作流编排与会话调试</div>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-400">
           <nav className="nav-tabs">
             <button className={`nav-tab ${activePage === 'chat' ? 'active' : ''}`} onClick={() => navigateToPage('chat')}>
-              对话
+              聊天
             </button>
             <button className={`nav-tab ${activePage === 'workflow' ? 'active' : ''}`} onClick={() => navigateToPage('workflow')}>
-              流程
+              工作流
             </button>
             <button className={`nav-tab ${activePage === 'execution' ? 'active' : ''}`} onClick={() => navigateToPage('execution')}>
               执行
@@ -1402,7 +1228,7 @@ const App: React.FC = () => {
             >
               {sessions.map((session) => (
                 <option key={session.id} value={session.id}>
-                  {session.id.slice(0, 8)} ? {displaySessionStatus(session.status)}
+                  {session.id} / {displaySessionStatus(session.status)}
                 </option>
               ))}
             </select>

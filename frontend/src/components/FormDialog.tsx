@@ -37,7 +37,7 @@ const FormDialog: React.FC<FormDialogProps> = ({ form, onSubmit, onClose }) => {
             <div className="panel-title">{form.title || '请补充信息'}</div>
             {form.description && <div className="text-sm text-slate-500">{form.description}</div>}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">X</button>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">关闭</button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           {form.fields.map((field) => (

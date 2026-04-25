@@ -230,7 +230,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       }
       setPurposeForms(rebuildPurposeForms(providerItems, profileItems))
       setLastValidatedProviderFingerprint('')
-      setStatus('Provider 负责厂商连接和默认模型，业务模型按用途选择已配置的 Provider。')
+      setStatus('服务商配置负责厂商连接和默认模型，业务模型按用途绑定已配置服务商。')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '加载模型配置失败')
     } finally {
@@ -293,7 +293,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     })
     setRequestBodyText(defaultRequestBody(preset.value, preset.placeholder_model))
     setLastValidatedProviderFingerprint('')
-    setStatus('已切换到新建 Provider 草稿，请先测试联通性，通过后才能保存。')
+    setStatus('已切换到新建服务商草稿，请先测试连通性，通过后才能保存。')
   }
 
   const handleValidateProvider = async () => {
@@ -313,7 +313,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       setStatus(`HTTP ${result.status_code || 200}，模型 ${result.tested_model_code || providerForm.default_model_code.trim()}，${result.message}`)
     } catch (error) {
       setLastValidatedProviderFingerprint('')
-      setStatus(error instanceof Error ? error.message : '联通性测试失败')
+      setStatus(error instanceof Error ? error.message : '连通性测试失败')
     } finally {
       setIsValidatingProvider(false)
     }
@@ -321,7 +321,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
   const handleSaveProvider = async () => {
     if (!providerValidationPassed) {
-      setStatus('请先测试联通性并通过后，再保存 Provider。')
+      setStatus('请先完成连通性测试并通过后，再保存服务商。')
       return
     }
     try {
@@ -342,9 +342,9 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       setProviderForm(providerToForm(saved))
       setRequestBodyText(defaultRequestBody(saved.provider_type, saved.default_model_code))
       setLastValidatedProviderFingerprint('')
-      setStatus('Provider 已保存')
+      setStatus('服务商已保存')
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '保存 Provider 失败')
+      setStatus(error instanceof Error ? error.message : '保存服务商失败')
     } finally {
       setIsSavingProvider(false)
     }
@@ -354,7 +354,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     const form = purposeForms[purpose.code]
     const provider = providers.find((item) => item.provider_code === form.provider_code)
     if (!provider) {
-      setStatus(`请先为${purpose.label}选择已配置 Provider`)
+      setStatus(`请先为${purpose.label}选择已配置服务商`)
       return
     }
     try {
@@ -381,7 +381,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     const form = purposeForms[purpose.code]
     const provider = providers.find((item) => item.provider_code === form.provider_code)
     if (!provider) {
-      setStatus(`请先为${purpose.label}选择已配置 Provider`)
+      setStatus(`请先为${purpose.label}选择已配置服务商`)
       return
     }
     try {
@@ -395,7 +395,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       )
       setStatus(`HTTP ${result.status_code || 200}，模型 ${result.tested_model_code || provider.default_model_code}，${purpose.label}${result.message}`)
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '联通性测试失败')
+      setStatus(error instanceof Error ? error.message : '连通性测试失败')
     }
   }
 
@@ -426,7 +426,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       <div className="panel-header">
         <div>
           <div className="panel-title">模型配置</div>
-          <div className="text-xs text-slate-500">Provider 配置包含厂商、Base URL、Key、默认模型；业务模型按用途绑定已配置 Provider</div>
+          <div className="text-xs text-slate-500">服务商配置包含厂商、接口地址、密钥和默认模型；业务模型按用途绑定已配置服务商</div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
           刷新
@@ -441,11 +441,11 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
         <section className="space-y-3 rounded-xl border border-slate-200 bg-white/60 p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-slate-800">Provider 配置</div>
-              <div className="text-xs text-slate-500">直接编辑当前 Provider 草稿，不再提供顶部 Provider 选择控件。</div>
+              <div className="text-sm font-medium text-slate-800">服务商配置</div>
+              <div className="text-xs text-slate-500">直接编辑当前服务商草稿，不再提供顶部服务商选择控件。</div>
             </div>
             <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={handleCreateProvider}>
-              新建 Provider
+              新建服务商
             </button>
           </div>
 
@@ -457,7 +457,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
             value={providerForm.provider_name}
             onChange={(event) => updateProviderForm({ provider_name: event.target.value })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder="Provider 名称，例如 豆包生产环境"
+            placeholder="服务商名称，例如 豆包生产环境"
           />
 
           <select value={providerForm.provider_type} onChange={(event) => handleProviderTypeChange(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
@@ -468,7 +468,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
             ))}
           </select>
 
-          <input value={providerForm.base_url} onChange={(event) => updateProviderForm({ base_url: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Base URL" />
+          <input value={providerForm.base_url} onChange={(event) => updateProviderForm({ base_url: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="接口地址" />
           <input
             value={providerForm.default_model_code}
             onChange={(event) => {
@@ -483,34 +483,34 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
             value={providerForm.api_key_secret_ref}
             onChange={(event) => updateProviderForm({ api_key_secret_ref: event.target.value })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder={selectedProvider?.api_key_configured ? selectedProvider.api_key_masked || '请输入可用 API Key' : '请输入可用 API Key'}
+            placeholder={selectedProvider?.api_key_configured ? selectedProvider.api_key_masked || '请输入可用访问密钥' : '请输入可用访问密钥'}
           />
 
           {selectedProvider?.api_key_error && !providerForm.api_key_secret_ref.trim() && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              {selectedProvider.api_key_error}。请直接输入当前厂商可用的 API Key。
+              {selectedProvider.api_key_error}。请直接输入当前厂商可用的访问密钥。
             </div>
           )}
 
-          <textarea value={requestBodyText} onChange={(event) => setRequestBodyText(event.target.value)} className="min-h-[180px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs" placeholder="联通性测试请求体 JSON" />
+          <textarea value={requestBodyText} onChange={(event) => setRequestBodyText(event.target.value)} className="min-h-[180px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs" placeholder="连通性测试请求体 JSON" />
 
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input type="checkbox" checked={providerForm.enabled} onChange={(event) => updateProviderForm({ enabled: event.target.checked })} />
-            Provider 启用
+            启用服务商
           </label>
 
-          {providerValidationPassed && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">当前草稿已通过联通测试，可以保存。</div>}
+          {providerValidationPassed && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">当前草稿已通过连通测试，可以保存。</div>}
 
           <div className="flex items-center gap-2">
             <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void handleValidateProvider()} disabled={isValidatingProvider}>
-              {isValidatingProvider ? '测试中...' : '测试联通性'}
+              {isValidatingProvider ? '测试中...' : '测试连通性'}
             </button>
             <button
               className="rounded-md bg-slate-900 px-3 py-2 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void handleSaveProvider()}
               disabled={!providerValidationPassed || isSavingProvider || isValidatingProvider}
             >
-              {isSavingProvider ? '保存中...' : '保存 Provider'}
+              {isSavingProvider ? '保存中...' : '保存服务商'}
             </button>
           </div>
         </section>
@@ -518,7 +518,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
         <section className="space-y-3 rounded-xl border border-slate-200 bg-white/60 p-4">
           <div>
             <div className="text-sm font-medium text-slate-800">业务模型配置</div>
-            <div className="text-xs text-slate-500">按业务用途逐个选择已配置 Provider，不再平铺所有用途。</div>
+            <div className="text-xs text-slate-500">按业务用途逐个选择已配置服务商，不再平铺所有用途。</div>
           </div>
 
           <select value={selectedPurposeCode} onChange={(event) => setSelectedPurposeCode(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
@@ -541,7 +541,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
               value={activePurposeForm.profile_code}
               onChange={(event) => updatePurposeForm(selectedPurpose.code, { profile_code: event.target.value })}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              placeholder="Profile 编码"
+              placeholder="配置编码"
             />
 
             <select
@@ -549,7 +549,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
               onChange={(event) => updatePurposeForm(selectedPurpose.code, { provider_code: event.target.value })}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
             >
-              <option value="">选择已配置 Provider</option>
+              <option value="">选择已配置服务商</option>
               {providers.map((item) => (
                 <option key={item.provider_code} value={item.provider_code}>
                   {providerLabel(item.provider_name, item.provider_type, item.default_model_code)}
@@ -557,7 +557,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
               ))}
             </select>
 
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">当前模型: {activePurposeProvider?.default_model_code || '未选择 Provider'}</div>
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">当前模型：{activePurposeProvider?.default_model_code || '未选择服务商'}</div>
             <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">采样参数、输出长度和超时阈值由后端按用途统一控制，前台不再编辑。</div>
 
             <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -570,7 +570,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 保存
               </button>
               <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={() => void handlePurposeValidate(selectedPurpose)}>
-                联通测试
+                连通测试
               </button>
               <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={() => void handlePurposeChatTest(selectedPurpose)}>
                 会话测试

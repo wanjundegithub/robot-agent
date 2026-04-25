@@ -20,6 +20,67 @@ function Assert-Command {
     }
 }
 
+function Resolve-PythonCommand {
+    $venvPython = Join-Path $root "python-ai\.venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $venvPython) {
+        return $venvPython
+    }
+    Assert-Command "python"
+    return "python"
+}
+
+function Invoke-ProcessCapture {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    $tempRoot = Join-Path $env:TEMP ("robot-agent-process-" + [guid]::NewGuid().ToString("N"))
+    $stdoutPath = Join-Path $tempRoot "stdout.log"
+    $stderrPath = Join-Path $tempRoot "stderr.log"
+
+    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    try {
+        $process = Start-Process -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -PassThru `
+            -Wait
+
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) { [string](Get-Content -LiteralPath $stdoutPath -Raw) } else { "" }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { [string](Get-Content -LiteralPath $stderrPath -Raw) } else { "" }
+
+        return @{
+            ExitCode = $process.ExitCode
+            StdOut = if ($stdout) { $stdout.Trim() } else { "" }
+            StdErr = if ($stderr) { $stderr.Trim() } else { "" }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-PythonModule {
+    param(
+        [string]$PythonCommand,
+        [string]$ModuleName
+    )
+
+    $result = Invoke-ProcessCapture -FilePath $PythonCommand -ArgumentList @("-c `"import $ModuleName`"")
+    if ($result.ExitCode -eq 0) {
+        return
+    }
+
+    $details = @($result.StdErr, $result.StdOut) | Where-Object { $_ } | Select-Object -First 1
+    $hint = "$PythonCommand -m pip install -r python-ai/requirements.txt"
+    if ($details) {
+        throw "python-ai is missing Python module '$ModuleName'. Run '$hint'. Details: $details"
+    }
+    throw "python-ai is missing Python module '$ModuleName'. Run '$hint'."
+}
+
 function Assert-PortFree {
     param(
         [int[]]$Ports,
@@ -47,6 +108,61 @@ function Wait-ForPort {
         Start-Sleep -Milliseconds 500
     }
     return $false
+}
+
+function Get-LogExcerpt {
+    param(
+        [string]$Path,
+        [int]$Tail = 20
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    $lines = Get-Content -LiteralPath $Path -Tail $Tail -ErrorAction SilentlyContinue
+    if (-not $lines) {
+        return $null
+    }
+
+    return (($lines | ForEach-Object { "$_" }) -join [Environment]::NewLine).Trim()
+}
+
+function Wait-ForServicePort {
+    param(
+        [int]$Port,
+        [int]$TimeoutSeconds,
+        [System.Diagnostics.Process]$Process,
+        [string]$ServiceName,
+        [string]$ErrorLogPath
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($listener) {
+            return $true
+        }
+
+        if ($Process) {
+            $Process.Refresh()
+            if ($Process.HasExited) {
+                $details = Get-LogExcerpt -Path $ErrorLogPath
+                if ($details) {
+                    throw "$ServiceName exited before opening port $Port (exit code $($Process.ExitCode)). $details"
+                }
+                throw "$ServiceName exited before opening port $Port (exit code $($Process.ExitCode)). See $ErrorLogPath for details."
+            }
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    $details = Get-LogExcerpt -Path $ErrorLogPath
+    if ($details) {
+        throw "$ServiceName did not open port $Port in time. Last error: $details"
+    }
+    throw "$ServiceName did not open port $Port in time."
 }
 
 function Assert-MiddlewarePort {
@@ -107,12 +223,13 @@ try {
     }
 
     if (-not $SkipPython) {
-        Assert-Command "python"
+        $pythonCommand = Resolve-PythonCommand
+        Assert-PythonModule -PythonCommand $pythonCommand -ModuleName "uvicorn"
         Assert-PortFree -Ports @(8000) -ServiceName "python-ai"
 
         $pythonOut = Join-Path $logDir "python.out.log"
         $pythonErr = Join-Path $logDir "python.err.log"
-        $python = Start-Process -FilePath "python" `
+        $python = Start-Process -FilePath $pythonCommand `
             -ArgumentList @("-m", "uvicorn", "src.api.main:app", "--host", "127.0.0.1", "--port", "8000") `
             -WorkingDirectory (Join-Path $root "python-ai") `
             -RedirectStandardOutput $pythonOut `
@@ -169,24 +286,16 @@ try {
     }
 
     if ($services.python) {
-        if (-not (Wait-ForPort -Port 8000 -TimeoutSeconds 60)) {
-            throw "python-ai did not open port 8000 in time."
-        }
+        Wait-ForServicePort -Port 8000 -TimeoutSeconds 60 -Process $python -ServiceName "python-ai" -ErrorLogPath $pythonErr
     }
 
     if ($services.java) {
-        if (-not (Wait-ForPort -Port 8080 -TimeoutSeconds 90)) {
-            throw "java-backend did not open port 8080 in time."
-        }
-        if (-not (Wait-ForPort -Port 8091 -TimeoutSeconds 90)) {
-            throw "java-backend did not open port 8091 in time."
-        }
+        Wait-ForServicePort -Port 8080 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath $javaErr
+        Wait-ForServicePort -Port 8091 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath $javaErr
     }
 
     if ($services.frontend) {
-        if (-not (Wait-ForPort -Port 5173 -TimeoutSeconds 60)) {
-            throw "frontend did not open port 5173 in time."
-        }
+        Wait-ForServicePort -Port 5173 -TimeoutSeconds 60 -Process $frontend -ServiceName "frontend" -ErrorLogPath $frontErr
     }
 
     $payload = [ordered]@{

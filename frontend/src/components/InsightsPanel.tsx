@@ -43,7 +43,7 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ workflowCode }) => {
           <ul className="space-y-2">
             {(recommendations?.recommendations || []).map((item, index) => (
               <li key={`${String(item.subflow_code)}_${index}`} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm text-slate-700">
-                {String(item.subflow_code)}@{String(item.subflow_version)} · score {String(item.score)} · {String(item.reason)}
+                {String(item.subflow_code)}@{String(item.subflow_version)} · 评分 {String(item.score)} · {String(item.reason)}
               </li>
             ))}
             {!recommendations && <li className="text-sm text-slate-500">暂无推荐结果。</li>}
