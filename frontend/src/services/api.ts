@@ -1,5 +1,12 @@
 import type {
   AnalyticsDashboard,
+  AuthConfigSummary,
+  CapabilityGroupSnapshot,
+  CapabilityGroupSummary,
+  CapabilityItemSummary,
+  CapabilityTestResult,
+  CapabilityValidationResult,
+  CapabilityVersionSummary,
   CostAlert,
   ExecutionDetail,
   FormSubmitResponse,
@@ -522,6 +529,260 @@ export async function rollbackWorkflow(workflowCode: string, version: string, cu
     },
     body: JSON.stringify({ version }),
   })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getCapabilityGroups(): Promise<CapabilityGroupSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveCapabilityGroup(
+  payload: {
+    groupCode: string
+    groupName: string
+    domainCode: string
+    description?: string
+    defaultAuthConfigId?: number | null
+  },
+  currentUserId: string,
+  existingGroupCode?: string
+): Promise<CapabilityGroupSummary> {
+  const isUpdate = Boolean(existingGroupCode)
+  const response = await fetch(
+    isUpdate
+      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(existingGroupCode || '')}`
+      : `${API_BASE_URL}/capabilities/groups`,
+    {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+      body: JSON.stringify(payload),
+    }
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function deleteCapabilityGroup(groupCode: string, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
+export async function getCapabilitiesByGroup(groupCode: string): Promise<CapabilityItemSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getCapabilityVersions(
+  groupCode: string,
+  capabilityCode: string
+): Promise<CapabilityVersionSummary[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/versions`
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveCapabilityDraft(
+  groupCode: string,
+  capabilityCode: string | undefined,
+  payload: {
+    capabilityCode: string
+    capabilityName: string
+    capabilityType: string
+    description?: string
+    inputSchema?: string
+    outputSchema?: string
+    definitionJson?: string
+    authConfigId?: number | null
+  },
+  currentUserId: string
+): Promise<CapabilityVersionSummary> {
+  const isUpdate = Boolean(capabilityCode)
+  const response = await fetch(
+    isUpdate
+      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode || '')}/draft`
+      : `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items`,
+    {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+      body: JSON.stringify(payload),
+    }
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function publishCapability(
+  groupCode: string,
+  capabilityCode: string,
+  currentUserId: string
+): Promise<CapabilityVersionSummary> {
+  const response = await fetch(
+    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/publish`,
+    {
+      method: 'POST',
+      headers: {
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+    }
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function deleteCapability(
+  groupCode: string,
+  capabilityCode: string,
+  currentUserId: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+    }
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
+export async function getCapabilityGroupSnapshots(groupCode: string): Promise<CapabilityGroupSnapshot[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/snapshots`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function publishCapabilityGroupSnapshot(
+  groupCode: string,
+  payload: { description?: string },
+  currentUserId: string
+): Promise<CapabilityGroupSnapshot> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/snapshots/publish`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getCapabilityAuthConfigs(groupCode: string): Promise<AuthConfigSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveCapabilityAuthConfig(
+  groupCode: string,
+  payload: {
+    id?: number
+    authName: string
+    authType: string
+    maskedPreview?: string
+    config?: Record<string, unknown>
+  },
+  currentUserId: string
+): Promise<AuthConfigSummary> {
+  const isUpdate = Boolean(payload.id)
+  const response = await fetch(
+    isUpdate
+      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs/${payload.id}`
+      : `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs`,
+    {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+      body: JSON.stringify(payload),
+    }
+  )
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function validateCapabilityDraft(
+  groupCode: string,
+  payload: Record<string, unknown>,
+  currentUserId: string
+): Promise<CapabilityValidationResult> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/validate-draft`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function testCapability(
+  groupCode: string,
+  capabilityCode: string,
+  payload: Record<string, unknown>,
+  currentUserId: string
+): Promise<CapabilityTestResult> {
+  const response = await fetch(
+    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/test`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUserId || ADMIN_USER_ID,
+      },
+      body: JSON.stringify(payload),
+    }
+  )
   if (!response.ok) {
     await parseApiError(response)
   }

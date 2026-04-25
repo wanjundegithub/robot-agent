@@ -5,16 +5,17 @@ interface FormDialogProps {
   form: FormDefinition
   onSubmit: (data: Record<string, unknown>) => void
   onClose: () => void
+  initialValues?: Record<string, unknown>
 }
 
-const FormDialog: React.FC<FormDialogProps> = ({ form, onSubmit, onClose }) => {
+const FormDialog: React.FC<FormDialogProps> = ({ form, onSubmit, onClose, initialValues }) => {
   const initial = useMemo(() => {
     const values: Record<string, unknown> = {}
     form.fields.forEach((field) => {
-      values[field.name] = ''
+      values[field.name] = initialValues?.[field.name] ?? ''
     })
     return values
-  }, [form.fields])
+  }, [form.fields, initialValues])
 
   const [values, setValues] = useState<Record<string, unknown>>(initial)
 

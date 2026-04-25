@@ -377,3 +377,98 @@ export interface WorkflowValidationIssue {
   field: string
   message: string
 }
+
+export type CapabilityType = 'API' | 'SKILL' | 'MCP'
+
+export type CapabilityVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | string
+
+export type CapabilityAuthType =
+  | 'NONE'
+  | 'OAUTH2'
+  | 'JWT'
+  | 'API_KEY'
+  | 'BASIC'
+  | 'PASSWORD'
+  | 'CUSTOM'
+  | string
+
+export interface CapabilityGroupSummary {
+  id: number
+  groupCode: string
+  groupName: string
+  domainCode: string
+  description?: string
+  status: string
+  latestSnapshotVersion?: string | null
+  capabilityCount?: number
+  defaultAuthConfigId?: number | null
+  updatedAt?: string
+}
+
+export interface CapabilityItemSummary {
+  id: number
+  groupCode: string
+  capabilityCode: string
+  capabilityName: string
+  capabilityType: CapabilityType
+  status: string
+  draftVersion?: string | null
+  publishedVersion?: string | null
+  lastTestStatus?: string | null
+  lastTestTime?: string | null
+  description?: string
+}
+
+export interface CapabilityVersionSummary {
+  id: number
+  groupCode?: string
+  capabilityCode: string
+  capabilityName: string
+  capabilityType: CapabilityType
+  version: string
+  status: CapabilityVersionStatus
+  description?: string
+  definitionJson?: string | null
+  inputSchema?: string | null
+  outputSchema?: string | null
+  authBinding?: string | null
+  environmentBinding?: string | null
+  publishedAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface CapabilityGroupSnapshot {
+  id: number
+  groupCode: string
+  snapshotVersion: string
+  status: string
+  description?: string
+  publishedAt?: string | null
+}
+
+export interface AuthConfigSummary {
+  id: number
+  authName: string
+  authType: CapabilityAuthType
+  maskedPreview?: string | null
+  scope?: 'GROUP' | 'CAPABILITY' | string
+  status: string
+  updatedAt?: string | null
+}
+
+export interface CapabilityValidationResult {
+  valid: boolean
+  message: string
+  issues?: WorkflowValidationIssue[]
+  details?: Record<string, unknown>
+}
+
+export interface CapabilityTestResult {
+  success: boolean
+  testType: string
+  requestPayload?: string | null
+  responsePayload?: string | null
+  errorMessage?: string | null
+  durationMs?: number | null
+  testedAt?: string | null
+}

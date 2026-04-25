@@ -196,9 +196,12 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'tool',
     label: '工具节点',
     config: {
-      invoke_type: 'api',
-      url: '',
-      method: 'POST',
+      invoke_type: 'capability',
+      group_code: '',
+      group_snapshot_version: '',
+      capability_type: 'API',
+      capability_code: '',
+      capability_version: '',
       payload_mapping: {},
     },
   },
@@ -703,17 +706,56 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         {nodeType === 'tool' && (
           <>
             <select
-              value={String(config.invoke_type || 'api')}
+              value={String(config.invoke_type || 'capability')}
               onChange={(event) => updateSelectedConfigField('invoke_type', event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
+              <option value="capability">能力调用</option>
               <option value="function">函数调用</option>
               <option value="api">API 调用</option>
               <option value="mcp">MCP 调用</option>
               <option value="skill">技能调用</option>
             </select>
 
-            {String(config.invoke_type || 'api') === 'function' && (
+            {String(config.invoke_type || 'capability') === 'capability' && (
+              <>
+                <input
+                  value={String(config.group_code || '')}
+                  onChange={(event) => updateSelectedConfigField('group_code', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="集合组编码"
+                />
+                <input
+                  value={String(config.group_snapshot_version || '')}
+                  onChange={(event) => updateSelectedConfigField('group_snapshot_version', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="集合组快照版本"
+                />
+                <select
+                  value={String(config.capability_type || 'API')}
+                  onChange={(event) => updateSelectedConfigField('capability_type', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="API">API</option>
+                  <option value="SKILL">Skill</option>
+                  <option value="MCP">MCP</option>
+                </select>
+                <input
+                  value={String(config.capability_code || '')}
+                  onChange={(event) => updateSelectedConfigField('capability_code', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="能力编码"
+                />
+                <input
+                  value={String(config.capability_version || '')}
+                  onChange={(event) => updateSelectedConfigField('capability_version', event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="能力版本（可选）"
+                />
+              </>
+            )}
+
+            {String(config.invoke_type || 'capability') === 'function' && (
               <input
                 value={String(config.function_name || '')}
                 onChange={(event) => updateSelectedConfigField('function_name', event.target.value)}
@@ -722,7 +764,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               />
             )}
 
-            {String(config.invoke_type || 'api') === 'api' && (
+            {String(config.invoke_type || 'capability') === 'api' && (
               <>
                 <input
                   value={String(config.url || '')}
@@ -743,7 +785,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               </>
             )}
 
-            {String(config.invoke_type || 'api') === 'mcp' && (
+            {String(config.invoke_type || 'capability') === 'mcp' && (
               <>
                 <input
                   value={String(config.mcp_endpoint || '')}
@@ -760,7 +802,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               </>
             )}
 
-            {String(config.invoke_type || 'api') === 'skill' && (
+            {String(config.invoke_type || 'capability') === 'skill' && (
               <>
                 <input
                   value={String(config.skill_endpoint || '')}
@@ -989,12 +1031,21 @@ function normalizeNodeConfig(
         message_text: String(config.message_text || ''),
       }
     case 'tool': {
-      const invokeType = String(config.invoke_type || 'api')
+      const invokeType = String(config.invoke_type || 'capability')
       const base: Record<string, unknown> = {
         invoke_type: invokeType,
         payload_mapping: ensureObject(config.payload_mapping),
       }
-      if (invokeType === 'function') {
+      if (invokeType === 'capability') {
+        base.group_code = String(config.group_code || '')
+        base.group_snapshot_version = String(config.group_snapshot_version || '')
+        base.capability_type = String(config.capability_type || 'API')
+        base.capability_code = String(config.capability_code || '')
+        if (String(config.capability_version || '').trim()) {
+          base.capability_version = String(config.capability_version || '')
+        }
+        base.tool_code = String(config.capability_code || '')
+      } else if (invokeType === 'function') {
         base.function_name = String(config.function_name || '')
         base.tool_code = String(config.function_name || '')
       } else if (invokeType === 'api') {
@@ -1218,12 +1269,18 @@ function denormalizeNodeConfig(
         message_text: String(config.message_text || ''),
       }
     case 'tool': {
-      const invokeType = String(config.invoke_type || 'api')
+      const invokeType = String(config.invoke_type || 'capability')
       const restored: Record<string, unknown> = {
         invoke_type: invokeType,
         payload_mapping: ensureObject(config.payload_mapping),
       }
-      if (invokeType === 'function') {
+      if (invokeType === 'capability') {
+        restored.group_code = String(config.group_code || '')
+        restored.group_snapshot_version = String(config.group_snapshot_version || '')
+        restored.capability_type = String(config.capability_type || 'API')
+        restored.capability_code = String(config.capability_code || config.tool_code || '')
+        restored.capability_version = String(config.capability_version || '')
+      } else if (invokeType === 'function') {
         restored.function_name = String(config.function_name || config.tool_code || '')
       } else if (invokeType === 'api') {
         restored.url = String(config.url || '')

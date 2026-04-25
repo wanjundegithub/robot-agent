@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import ChatInput from './components/ChatInput'
+import CapabilityCenterPanel from './components/CapabilityCenterPanel'
 import ExecutionPanel from './components/ExecutionPanel'
 import FormDialog from './components/FormDialog'
 import MessageList from './components/MessageList'
@@ -36,7 +37,7 @@ interface WorkflowDraftState {
   workflowConfig: Record<string, unknown>
 }
 
-type PageKey = 'chat' | 'workflow' | 'execution' | 'models'
+type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'capability-center'
 
 const gatewayLog = (event: string, details?: Record<string, unknown>) => {
   if (details) {
@@ -381,7 +382,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const syncPageFromHash = () => {
       const value = window.location.hash.replace('#', '')
-      if (value === 'workflow' || value === 'execution' || value === 'models' || value === 'chat') {
+      if (value === 'workflow' || value === 'execution' || value === 'models' || value === 'chat' || value === 'capability-center') {
         setActivePage(value)
         return
       }
@@ -1335,6 +1336,14 @@ const App: React.FC = () => {
       )
     }
 
+    if (activePage === 'capability-center') {
+      return (
+        <section className="page-single">
+          <CapabilityCenterPanel currentUserId={currentUserId} />
+        </section>
+      )
+    }
+
     return (
       <section className="page-grid page-grid-chat">
         <div className="page-stack">
@@ -1437,6 +1446,9 @@ const App: React.FC = () => {
             </button>
             <button className={`nav-tab ${activePage === 'models' ? 'active' : ''}`} onClick={() => navigateToPage('models')}>
               模型
+            </button>
+            <button className={`nav-tab ${activePage === 'capability-center' ? 'active' : ''}`} onClick={() => navigateToPage('capability-center')}>
+              能力中心
             </button>
           </nav>
           <label className="flex items-center gap-2">

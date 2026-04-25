@@ -684,6 +684,20 @@ public class WorkflowService {
                     issues.add(issue(nodeId, "config.skill_name", "Skill 调用缺少 skill_name"));
                 }
             }
+            case "capability" -> {
+                if (stringValue(nodeConfig.get("group_code")) == null) {
+                    issues.add(issue(nodeId, "config.group_code", "Capability 调用缺少 group_code"));
+                }
+                if (stringValue(nodeConfig.get("group_snapshot_version")) == null) {
+                    issues.add(issue(nodeId, "config.group_snapshot_version", "Capability 调用缺少 group_snapshot_version"));
+                }
+                if (stringValue(nodeConfig.get("capability_type")) == null) {
+                    issues.add(issue(nodeId, "config.capability_type", "Capability 调用缺少 capability_type"));
+                }
+                if (stringValue(nodeConfig.get("capability_code")) == null) {
+                    issues.add(issue(nodeId, "config.capability_code", "Capability 调用缺少 capability_code"));
+                }
+            }
             default -> issues.add(issue(nodeId, "config.invoke_type", "工具节点调用形式不受支持"));
         }
     }
