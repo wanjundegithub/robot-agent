@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 const currentSessionIds = ['session-current-1', 'session-current-2', 'session-current-3'] as const
-let createSessionCount = 0
 
-const sessionDetails = {
+const baseSessionDetails = {
   'session-current-1': {
     id: 'session-current-1',
     workspaceId: 1,
@@ -49,23 +48,42 @@ const sessionDetails = {
     createdAt: '2026-04-19T08:00:00',
     lastActivityAt: '2026-04-19T08:10:00',
   },
+  'session-empty-1': {
+    id: 'session-empty-1',
+    workspaceId: 1,
+    userId: 'demo-user',
+    status: 'closed',
+    currentExecutionId: null,
+    createdAt: '2026-04-18T08:00:00',
+    lastActivityAt: '2026-04-18T08:10:00',
+  },
+  'session-empty-2': {
+    id: 'session-empty-2',
+    workspaceId: 1,
+    userId: 'demo-user',
+    status: 'closed',
+    currentExecutionId: null,
+    createdAt: '2026-04-17T08:00:00',
+    lastActivityAt: '2026-04-17T08:10:00',
+  },
 } as const
 
-const sessionMessages = {
+const baseSessionMessages = {
   'session-current-1': [],
   'session-current-2': [],
+  'session-current-3': [],
   'session-history-1': [
     {
       id: 'msg-history-1-user',
       type: 'user',
-      content: '历史用户提问',
+      content: 'Help me investigate last week order issues',
       timestamp: '2026-04-20T09:00:00',
       executionId: 'exec-history-1',
     },
     {
       id: 'msg-history-1-ai',
-      type: 'error',
-      content: '历史失败响应',
+      type: 'ai',
+      content: 'The main issue came from inventory sync lag.',
       timestamp: '2026-04-20T09:01:00',
       executionId: 'exec-history-1',
     },
@@ -74,101 +92,52 @@ const sessionMessages = {
     {
       id: 'msg-history-2-user',
       type: 'user',
-      content: '另一条历史请求',
+      content: 'Tell me about membership benefits',
       timestamp: '2026-04-19T08:00:00',
       executionId: 'exec-history-2',
     },
-  ],
-} as const
-
-const sessionExecutions = {
-  'session-current-1': [],
-  'session-current-2': [],
-  'session-history-1': [
     {
-      execution_id: 'exec-history-1',
-      session_id: 'session-history-1',
-      workflow_code: 'order_query',
-      workflow_version: 'v1',
-      status: 'failed',
-      current_node_id: 'tool_1',
-      variables: null,
-      error: '历史失败响应',
+      id: 'msg-history-2-ai',
+      type: 'ai',
+      content: 'Benefits include points, coupons, and priority support.',
+      timestamp: '2026-04-19T08:01:00',
+      executionId: 'exec-history-2',
     },
   ],
-  'session-history-2': [
-    {
-      execution_id: 'exec-history-2',
-      session_id: 'session-history-2',
-      workflow_code: 'faq',
-      workflow_version: 'v3',
-      status: 'completed',
-      current_node_id: 'end',
-      variables: null,
-      error: null,
-    },
-  ],
+  'session-empty-1': [],
+  'session-empty-2': [],
 } as const
 
-const replayDetails = {
-  'exec-history-1': {
-    execution_id: 'exec-history-1',
-    workflow_code: 'order_query',
-    workflow_version: 'v1',
-    session_id: 'session-history-1',
-    status: 'failed',
-    input_variables: { user_message: '历史用户提问' },
-    output_variables: {},
-    variables: {},
-    metrics: {},
-    node_logs: [
-      {
-        node_id: 'tool_1',
-        node_type: 'tool',
-        status: 'failed',
-        started_at: '2026-04-20T09:00:05',
-        completed_at: '2026-04-20T09:00:10',
-        input: {},
-        output: {},
-        metrics: {},
-        error: '工具超时',
-      },
-    ],
-    event_stream: [
-      {
-        event_type: 'execution.started',
-        execution_id: 'exec-history-1',
-        workflow_code: 'order_query',
-        workflow_version: 'v1',
-      },
-      {
-        event_type: 'execution.failed',
-        execution_id: 'exec-history-1',
-      },
-    ],
-  },
-  'exec-history-2': {
-    execution_id: 'exec-history-2',
-    workflow_code: 'faq',
-    workflow_version: 'v3',
-    session_id: 'session-history-2',
-    status: 'completed',
-    input_variables: { user_message: '另一条历史请求' },
-    output_variables: { answer: '已完成' },
-    variables: {},
-    metrics: {},
-    node_logs: [],
-    event_stream: [
-      {
-        event_type: 'execution.completed',
-        execution_id: 'exec-history-2',
-      },
-    ],
-  },
-} as const
+type SessionSummary = (typeof baseSessionDetails)[keyof typeof baseSessionDetails]
+type SessionMessage = (typeof baseSessionMessages)[keyof typeof baseSessionMessages][number]
+
+let createSessionCount = 0
+let sessionList: SessionSummary[] = []
+let messageStore: Record<string, SessionMessage[]> = {}
+
+const createSessionList = (): SessionSummary[] => [
+  baseSessionDetails['session-current-2'],
+  baseSessionDetails['session-history-1'],
+  baseSessionDetails['session-history-1'],
+  baseSessionDetails['session-history-2'],
+  baseSessionDetails['session-empty-1'],
+  baseSessionDetails['session-empty-2'],
+]
+
+const createMessageStore = (): Record<string, SessionMessage[]> => ({
+  'session-current-1': [...baseSessionMessages['session-current-1']],
+  'session-current-2': [...baseSessionMessages['session-current-2']],
+  'session-current-3': [...baseSessionMessages['session-current-3']],
+  'session-history-1': [...baseSessionMessages['session-history-1']],
+  'session-history-2': [...baseSessionMessages['session-history-2']],
+  'session-empty-1': [...baseSessionMessages['session-empty-1']],
+  'session-empty-2': [...baseSessionMessages['session-empty-2']],
+})
 
 test.beforeEach(async ({ page }) => {
   createSessionCount = 0
+  sessionList = createSessionList()
+  messageStore = createMessageStore()
 
   await page.addInitScript(() => {
     class MockWebSocket {
@@ -192,7 +161,52 @@ test.beforeEach(async ({ page }) => {
         }, 0)
       }
 
-      send(_data: string) {}
+      send(data: string) {
+        const payload = JSON.parse(data) as {
+          action?: string
+          request_id?: string
+          session_id?: string
+          payload?: {
+            message_id?: string
+            content?: string
+          }
+        }
+
+        if (payload.action !== 'chat.send' || !payload.session_id || !payload.payload?.content) {
+          return
+        }
+
+        window
+          .fetch(`/api/sessions/${payload.session_id}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message_id: payload.payload.message_id ?? `msg-${Date.now()}`,
+              content: payload.payload.content,
+            }),
+          })
+          .catch(() => {})
+
+        window.setTimeout(() => {
+          this.onmessage?.(
+            new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'ack',
+                request_id: payload.request_id,
+                action: 'chat.send',
+                status: 'ok',
+                data: {
+                  session_id: payload.session_id,
+                  execution_id: `exec-${payload.session_id}`,
+                  workflow_code: 'test-workflow',
+                  workflow_version: 'v1',
+                  status: 'completed',
+                },
+              }),
+            })
+          )
+        }, 0)
+      }
 
       close() {
         this.readyState = MockWebSocket.CLOSED
@@ -215,7 +229,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    const { pathname, searchParams } = url
+    const { pathname } = url
 
     if (pathname === '/api/workflows/published') {
       await route.fulfill({ json: [] })
@@ -224,42 +238,82 @@ test.beforeEach(async ({ page }) => {
 
     if (pathname === '/api/sessions' && request.method() === 'POST') {
       const sessionId = currentSessionIds[Math.min(createSessionCount, currentSessionIds.length - 1)]
+      const createdSession = baseSessionDetails[sessionId]
       createSessionCount += 1
-      await route.fulfill({ json: sessionDetails[sessionId] })
+      sessionList = [createdSession, ...sessionList.filter((session) => session.id !== createdSession.id)]
+      messageStore[sessionId] = messageStore[sessionId] ?? []
+      await route.fulfill({ json: createdSession })
       return
     }
 
     if (pathname === '/api/sessions' && request.method() === 'GET') {
-      await route.fulfill({
-        json: [sessionDetails['session-history-1'], sessionDetails['session-history-2']],
-      })
-      return
-    }
-
-    const sessionDetailMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/)
-    if (sessionDetailMatch) {
-      const sessionId = sessionDetailMatch[1] as keyof typeof sessionDetails
-      await route.fulfill({ json: sessionDetails[sessionId] })
+      await route.fulfill({ json: sessionList })
       return
     }
 
     const sessionMessagesMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
     if (sessionMessagesMatch) {
-      const sessionId = sessionMessagesMatch[1] as keyof typeof sessionMessages
-      await route.fulfill({ json: sessionMessages[sessionId] ?? [] })
+      const sessionId = sessionMessagesMatch[1]
+
+      if (request.method() === 'POST') {
+        const body = request.postDataJSON() as { message_id: string; content: string }
+        const timestamp = '2026-04-25T12:00:00.000Z'
+        const nextMessage: SessionMessage = {
+          id: body.message_id,
+          type: 'user',
+          content: body.content,
+          timestamp,
+        }
+
+        messageStore[sessionId] = [...(messageStore[sessionId] ?? []), nextMessage]
+        sessionList = sessionList.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                status: 'active',
+                lastActivityAt: timestamp,
+              }
+            : session
+        )
+
+        await route.fulfill({ json: nextMessage })
+        return
+      }
+
+      await route.fulfill({ json: messageStore[sessionId] ?? [] })
+      return
+    }
+
+    const sessionDetailMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/)
+    if (sessionDetailMatch && request.method() === 'GET') {
+      const sessionId = sessionDetailMatch[1]
+      const session = sessionList.find((item) => item.id === sessionId) ?? baseSessionDetails[sessionId as keyof typeof baseSessionDetails]
+      await route.fulfill({ json: session })
+      return
+    }
+
+    if (sessionDetailMatch && request.method() === 'DELETE') {
+      const sessionId = sessionDetailMatch[1]
+      sessionList = sessionList.filter((session) => session.id !== sessionId)
+      delete messageStore[sessionId]
+      await route.fulfill({ status: 200, body: '' })
       return
     }
 
     if (pathname === '/api/executions' && request.method() === 'GET') {
-      const sessionId = searchParams.get('sessionId') as keyof typeof sessionExecutions
-      await route.fulfill({ json: sessionExecutions[sessionId] ?? [] })
+      await route.fulfill({ json: [] })
       return
     }
 
-    const replayMatch = pathname.match(/^\/api\/executions\/([^/]+)\/replay$/)
-    if (replayMatch) {
-      const executionId = replayMatch[1] as keyof typeof replayDetails
-      await route.fulfill({ json: replayDetails[executionId] })
+    if (pathname.match(/^\/api\/executions\/([^/]+)\/replay$/)) {
+      await route.fulfill({
+        json: {
+          execution_id: 'exec-history-1',
+          status: 'failed',
+          node_logs: [],
+          event_stream: [],
+        },
+      })
       return
     }
 
@@ -267,39 +321,67 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-test.describe('chat and session replay', () => {
-  test('creates a fresh session on load and keeps history replay available after creating another session', async ({ page }) => {
+test.describe('session history panel', () => {
+  test('does not keep empty sessions in history after creating a new session', async ({ page }) => {
     await page.goto('/')
 
-    await expect(page.getByRole('heading', { name: '机器人代理控制台' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '聊天' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '工作流' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '执行' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '模型' })).toBeVisible()
-    await expect(page.getByText('聊天控制台')).toBeVisible()
-    await expect(page.getByText('选择已发布工作流')).toBeVisible()
-    await expect(page.getByText('会话回放')).toBeVisible()
-    await expect(page.getByTestId('chat-new-session')).toBeVisible()
+    const panel = page.getByTestId('session-replay-panel')
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-2')
-    await expect(page.getByLabel('会话')).toContainText('session-current-2')
-    await expect(page.getByLabel('会话')).toContainText('session-history-1')
-    await expect(page.getByLabel('会话')).toContainText('session-history-2')
-
-    await expect(page.getByTestId('session-replay-panel')).toBeVisible()
-    await expect(page.getByTestId('session-history-item-session-history-1')).toBeVisible()
-
-    await expect(page.getByText('历史用户提问')).toBeVisible()
-    await expect(page.getByText('历史失败响应')).toBeVisible()
-    await expect(page.getByTestId('execution-history-item-exec-history-1')).toBeVisible()
-    await expect(page.getByText('执行失败')).toBeVisible()
-    await expect(page.getByText('工具超时')).toBeVisible()
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(1)
 
     await page.getByTestId('chat-new-session').click()
 
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
-    await expect(page.getByLabel('会话')).toContainText('session-current-3')
-    await expect(page.getByLabel('会话')).toContainText('session-history-1')
-    await expect(page.getByTestId('session-history-item-session-history-1')).toBeVisible()
-    await expect(page.getByText('历史用户提问')).toBeVisible()
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-empty-1')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-empty-2')).toHaveCount(0)
+  })
+
+  test('keeps the previous session in history after a real user message and new session', async ({ page }) => {
+    await page.goto('/')
+
+    const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-input').fill('Keep this session in history')
+    await page.getByTestId('chat-send').click()
+
+    await expect(panel).toContainText('Keep this session in history')
+
+    await page.getByTestId('chat-new-session').click()
+
+    await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toContainText(
+      'Keep this session in his...'
+    )
+  })
+
+  test('deletes history items from the list', async ({ page }) => {
+    await page.goto('/')
+
+    const panel = page.getByTestId('session-replay-panel')
+    await expect(panel.getByTestId('session-history-item-session-history-1')).toHaveCount(1)
+
+    await panel.getByTestId('session-history-delete-session-history-1').click()
+
+    await expect(panel.getByTestId('session-history-item-session-history-1')).toHaveCount(0)
+    await expect(panel.getByTestId('session-history-item-session-history-2')).toHaveCount(1)
+  })
+
+  test('deleting the current session falls back to a fresh empty session', async ({ page }) => {
+    await page.goto('/')
+
+    const panel = page.getByTestId('session-replay-panel')
+    await expect(page.getByTestId('current-session-meta')).toContainText('session-current-2')
+    await page.getByTestId('chat-input').fill('Current session should be deleted')
+    await page.getByTestId('chat-send').click()
+
+    await panel.getByTestId('session-history-delete-session-current-2').click()
+
+    await expect(panel.getByTestId('session-history-item-session-current-3')).toHaveCount(1)
+    await expect(panel.getByTestId('session-history-item-session-current-2')).toHaveCount(0)
+    await expect(page.getByTestId('current-session-meta')).toContainText('session-current-3')
+    await expect(panel).not.toContainText('Current session should be deleted')
   })
 })

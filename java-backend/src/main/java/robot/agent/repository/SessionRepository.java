@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SessionRepository extends JpaRepository<Session, String> {
+    List<Session> findByUserIdOrderByLastActivityAtDesc(String userId);
     List<Session> findByUserIdAndStatusOrderByLastActivityAtDesc(String userId, SessionStatus status);
     List<Session> findByStatusAndExpiresAtBefore(SessionStatus status, LocalDateTime time);
 }

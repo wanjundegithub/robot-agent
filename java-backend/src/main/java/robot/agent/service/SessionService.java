@@ -6,8 +6,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.dto.request.CreateSessionRequest;
 import robot.agent.dto.response.SessionResponse;
+import robot.agent.model.Execution;
 import robot.agent.model.Session;
 import robot.agent.model.SessionStatus;
+import robot.agent.repository.ExecutionRepository;
 import robot.agent.repository.SessionRepository;
 
 import java.time.LocalDateTime;
@@ -24,10 +26,12 @@ import java.util.stream.Collectors;
 public class SessionService {
 
     private final SessionRepository sessionRepository;
+    private final ExecutionRepository executionRepository;
     private final ObjectMapper objectMapper;
 
-    public SessionService(SessionRepository sessionRepository, ObjectMapper objectMapper) {
+    public SessionService(SessionRepository sessionRepository, ExecutionRepository executionRepository, ObjectMapper objectMapper) {
         this.sessionRepository = sessionRepository;
+        this.executionRepository = executionRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -143,8 +147,9 @@ public class SessionService {
     }
 
     public List<SessionResponse> getSessionsByUserId(String userId) {
-        List<Session> sessions = sessionRepository.findByUserIdAndStatusOrderByLastActivityAtDesc(userId, SessionStatus.ACTIVE);
+        List<Session> sessions = sessionRepository.findByUserIdOrderByLastActivityAtDesc(userId);
         return sessions.stream()
+                .filter(this::shouldIncludeInHistory)
                 .map(SessionResponse::fromEntity)
                 .collect(Collectors.toList());
     }
@@ -152,8 +157,45 @@ public class SessionService {
     public void closeSession(String sessionId) {
         Session session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
-        session.setStatus(SessionStatus.CLOSED);
+        session.setStatus(SessionStatus.DELETED);
+        session.setLastActivityAt(LocalDateTime.now());
         sessionRepository.save(session);
+    }
+
+    private boolean shouldIncludeInHistory(Session session) {
+        if (session.getStatus() == SessionStatus.DELETED) {
+            return false;
+        }
+        return hasRealUserInteraction(session.getId());
+    }
+
+    private boolean hasRealUserInteraction(String sessionId) {
+        return executionRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+                .map(Execution::getInputVariables)
+                .map(this::readUserMessage)
+                .anyMatch(message -> message != null && !message.isBlank());
+    }
+
+    private String readUserMessage(String inputVariables) {
+        if (inputVariables == null || inputVariables.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(inputVariables, new TypeReference<Map<String, Object>>() {});
+            return readPreferredText(payload, "user_message", "message", "content", "question");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String readPreferredText(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object value = payload.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                return text;
+            }
+        }
+        return null;
     }
 
     private String writeJson(Object value) {

@@ -8,7 +8,7 @@ import Orchestrator from './components/Orchestrator'
 import ReplayPanel from './components/ReplayPanel'
 import SessionReplayPanel from './components/SessionReplayPanel'
 import WorkflowPanel from './components/WorkflowPanel'
-import { createSession, getPublishedWorkflows, getSession, getSessionExecutions, getSessionMessages, getSessionsByUserId } from './services/api'
+import { createSession, deleteSession, getPublishedWorkflows, getSession, getSessionExecutions, getSessionMessages, getSessionsByUserId } from './services/api'
 import { displayExecutionStatus, displaySessionStatus, displaySocketState, displayUserLabel } from './utils/displayText'
 import type {
   ExecutionDetail,
@@ -53,6 +53,22 @@ const createWelcomeMessage = (): Message => ({
   timestamp: new Date().toISOString(),
 })
 
+const normalizeSessionMessages = (items: Message[]): Message[] =>
+  items.filter((message) => message.id !== 'welcome')
+
+const hasUserMessage = (items: Message[]): boolean =>
+  items.some((message) => message.type === 'user' && message.content.trim().length > 0)
+
+const dedupeSessions = (items: SessionSummary[]): SessionSummary[] =>
+  Array.from(
+    items.reduce((sessionsById, session) => {
+      if (!sessionsById.has(session.id)) {
+        sessionsById.set(session.id, session)
+      }
+      return sessionsById
+    }, new Map<string, SessionSummary>()).values()
+  )
+
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([createWelcomeMessage()])
   const [isLoading, setIsLoading] = useState(false)
@@ -60,6 +76,11 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [currentSession, setCurrentSession] = useState<SessionSummary | null>(null)
   const [currentUserId, setCurrentUserId] = useState('demo-user')
+  const [sessionMessagesById, setSessionMessagesById] = useState<Record<string, Message[]>>({})
+  const [selectedHistorySessionId, setSelectedHistorySessionId] = useState('')
+  const [selectedHistoryMessages, setSelectedHistoryMessages] = useState<Message[]>([])
+  const [isLoadingSessionHistory, setIsLoadingSessionHistory] = useState(false)
+  const [isLoadingSelectedHistory, setIsLoadingSelectedHistory] = useState(false)
   const [executionId, setExecutionId] = useState<string | null>(null)
   const [executions, setExecutions] = useState<ExecutionDetail[]>([])
   const [events, setEvents] = useState<ExecutionEventView[]>([])
@@ -129,6 +150,63 @@ const App: React.FC = () => {
     setIsLoading(false)
   }, [])
 
+  const cacheSessionMessages = useCallback((targetSessionId: string, nextMessages: Message[]) => {
+    if (!targetSessionId) return
+    setSessionMessagesById((prev) => ({
+      ...prev,
+      [targetSessionId]: nextMessages,
+    }))
+  }, [])
+
+  const removeCachedSessionMessages = useCallback((targetSessionId: string) => {
+    setSessionMessagesById((prev) => {
+      if (!(targetSessionId in prev)) return prev
+      const next = { ...prev }
+      delete next[targetSessionId]
+      return next
+    })
+  }, [])
+
+  const updateSessionSummary = useCallback((targetSessionId: string, updater: (session: SessionSummary) => SessionSummary) => {
+    setSessions((prev) => prev.map((session) => (session.id === targetSessionId ? updater(session) : session)))
+    setCurrentSession((prev) => (prev?.id === targetSessionId ? updater(prev) : prev))
+  }, [])
+
+  const loadRetainedHistory = useCallback(async (userId: string, activeSession: SessionSummary) => {
+    setIsLoadingSessionHistory(true)
+    try {
+      const loadedSessions = dedupeSessions(await getSessionsByUserId(userId)).filter(
+        (session) => session.id !== activeSession.id
+      )
+      const loadedHistory = await Promise.all(
+        loadedSessions.map(async (session) => {
+          try {
+            const history = normalizeSessionMessages(await getSessionMessages(session.id))
+            return { session, history }
+          } catch (error) {
+            console.error('Failed to load session history messages:', error)
+            return { session, history: [] as Message[] }
+          }
+        })
+      )
+
+      cacheSessionMessages(activeSession.id, [])
+      setSessionMessagesById((prev) => ({
+        ...prev,
+        ...Object.fromEntries(loadedHistory.map(({ session, history }) => [session.id, history])),
+      }))
+      setSessions([
+        activeSession,
+        ...loadedHistory.filter(({ history }) => hasUserMessage(history)).map(({ session }) => session),
+      ])
+    } catch (error) {
+      console.error('Failed to load session history:', error)
+      setSessions([activeSession])
+    } finally {
+      setIsLoadingSessionHistory(false)
+    }
+  }, [cacheSessionMessages])
+
   const refreshSessionDetail = useCallback(async (activeSessionId: string) => {
     try {
       const detail = await getSession(activeSessionId)
@@ -142,20 +220,24 @@ const App: React.FC = () => {
   const loadSessionMessages = useCallback(async (activeSessionId: string) => {
     try {
       const history = await getSessionMessages(activeSessionId)
-      setMessages(history.length > 0 ? history : [createWelcomeMessage()])
+      const normalizedHistory = normalizeSessionMessages(history)
+      cacheSessionMessages(activeSessionId, normalizedHistory)
+      setMessages(normalizedHistory.length > 0 ? history : [createWelcomeMessage()])
     } catch (error) {
       console.error('Failed to load session messages:', error)
+      cacheSessionMessages(activeSessionId, [])
       setMessages([createWelcomeMessage()])
     }
-  }, [])
+  }, [cacheSessionMessages])
 
   const createAndSelectSession = useCallback(async (userId: string) => {
     const created = await createSession({ userId })
-    setSessions((prev) => [created, ...prev.filter((session) => session.id !== created.id)])
+    cacheSessionMessages(created.id, [])
     setCurrentSession(created)
     setSessionId(created.id)
+    setSelectedHistorySessionId(created.id)
     return created
-  }, [])
+  }, [cacheSessionMessages])
 
   useEffect(() => {
     void loadPublishedWorkflowOptions()
@@ -177,17 +259,14 @@ const App: React.FC = () => {
       resetSessionView()
       setCurrentSession(null)
       setSessionId('')
+      setSessions([])
+      setSessionMessagesById({})
+      setSelectedHistorySessionId('')
+      setSelectedHistoryMessages([])
       try {
-        const historicalSessionsPromise = getSessionsByUserId(currentUserId).catch((error) => {
-          console.error('Failed to load user sessions:', error)
-          return [] as SessionSummary[]
-        })
-        const created = await createSession({ userId: currentUserId })
-        const historicalSessions = await historicalSessionsPromise
+        const created = await createAndSelectSession(currentUserId)
         if (cancelled) return
-        setSessions([created, ...historicalSessions.filter((session) => session.id !== created.id)])
-        setCurrentSession(created)
-        setSessionId(created.id)
+        await loadRetainedHistory(currentUserId, created)
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to initialize session:', error)
@@ -200,7 +279,7 @@ const App: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [currentUserId, resetSessionView])
+  }, [createAndSelectSession, currentUserId, loadRetainedHistory, resetSessionView])
 
   useEffect(() => {
     setWorkflowNameInput(workflowSidebarState?.workflowName ?? '')
@@ -217,6 +296,74 @@ const App: React.FC = () => {
     void loadSessionMessages(sessionId)
     void refreshSessionDetail(sessionId)
   }, [loadSessionMessages, refreshSessionDetail, resetSessionView, sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+    setSelectedHistorySessionId((current) => current || sessionId)
+  }, [sessionId])
+
+  useEffect(() => {
+    setSelectedHistorySessionId((current) => {
+      if (current && sessions.some((session) => session.id === current)) {
+        return current
+      }
+      return sessionId || sessions[0]?.id || ''
+    })
+  }, [sessionId, sessions])
+
+  useEffect(() => {
+    if (!sessionId) return
+    cacheSessionMessages(sessionId, normalizeSessionMessages(messages))
+  }, [cacheSessionMessages, messages, sessionId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadSelectedHistoryMessages = async () => {
+      if (!selectedHistorySessionId) {
+        setSelectedHistoryMessages([])
+        setIsLoadingSelectedHistory(false)
+        return
+      }
+
+      if (selectedHistorySessionId === sessionId) {
+        setSelectedHistoryMessages(messages)
+        setIsLoadingSelectedHistory(false)
+        return
+      }
+
+      const cachedMessages = sessionMessagesById[selectedHistorySessionId]
+      if (cachedMessages) {
+        setSelectedHistoryMessages(cachedMessages)
+        setIsLoadingSelectedHistory(false)
+        return
+      }
+
+      setIsLoadingSelectedHistory(true)
+      try {
+        const history = normalizeSessionMessages(await getSessionMessages(selectedHistorySessionId))
+        if (!cancelled) {
+          cacheSessionMessages(selectedHistorySessionId, history)
+          setSelectedHistoryMessages(history)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load selected history messages:', error)
+          setSelectedHistoryMessages([])
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingSelectedHistory(false)
+        }
+      }
+    }
+
+    void loadSelectedHistoryMessages()
+
+    return () => {
+      cancelled = true
+    }
+  }, [cacheSessionMessages, messages, selectedHistorySessionId, sessionId, sessionMessagesById])
 
   useEffect(() => {
     const syncPageFromHash = () => {
@@ -666,6 +813,7 @@ const App: React.FC = () => {
 
     const messageId = fixedMessageId || createId('msg')
     const shouldAppendUserMessage = !options?.confirmSwitch && !options?.confirmationId && !options?.cancelConfirmation
+    let appendedUserMessage: Message | null = null
 
     if (shouldAppendUserMessage) {
       const userMessage: Message = {
@@ -674,6 +822,7 @@ const App: React.FC = () => {
         content,
         timestamp: new Date().toISOString(),
       }
+      appendedUserMessage = userMessage
       setMessages((prev) => [...prev, userMessage])
     }
 
@@ -698,6 +847,16 @@ const App: React.FC = () => {
       if (!activeSessionId) {
         const createdSession = await createAndSelectSession(currentUserId)
         activeSessionId = createdSession.id
+      }
+
+      if (shouldAppendUserMessage && appendedUserMessage) {
+        const nextHistory = [...normalizeSessionMessages(messages), appendedUserMessage]
+        cacheSessionMessages(activeSessionId, nextHistory)
+        updateSessionSummary(activeSessionId, (session) => ({
+          ...session,
+          status: 'active',
+          lastActivityAt: appendedUserMessage?.timestamp ?? session.lastActivityAt,
+        }))
       }
 
       const selectedPublishedWorkflow = publishedWorkflowOptions.find(
@@ -845,24 +1004,78 @@ const App: React.FC = () => {
   }
 
   const handleCreateNewSession = useCallback(async () => {
+    const previousSession = currentSession
+    const previousSessionId = sessionId
+    const previousMessages = normalizeSessionMessages(messages)
+    const shouldRetainPrevious = Boolean(previousSession && hasUserMessage(previousMessages))
+
     disconnectSocket()
     resetSessionView()
     setCurrentSession(null)
     setSessionId('')
     navigateToPage('chat')
     try {
-      await createAndSelectSession(currentUserId)
+      const created = await createAndSelectSession(currentUserId)
+      setSessions((prev) => {
+        const retainedSessions = prev.filter(
+          (session) => session.id !== created.id && session.id !== previousSessionId
+        )
+        return shouldRetainPrevious && previousSession
+          ? [
+              created,
+              {
+                ...previousSession,
+                lastActivityAt:
+                  previousMessages[previousMessages.length - 1]?.timestamp ?? previousSession.lastActivityAt,
+              },
+              ...retainedSessions,
+            ]
+          : [created, ...retainedSessions]
+      })
+      if (!shouldRetainPrevious && previousSessionId) {
+        removeCachedSessionMessages(previousSessionId)
+      }
     } catch (error) {
       console.error('Failed to create session:', error)
     }
-  }, [createAndSelectSession, currentUserId, disconnectSocket, resetSessionView])
+  }, [createAndSelectSession, currentSession, currentUserId, disconnectSocket, messages, removeCachedSessionMessages, resetSessionView, sessionId])
 
   const handleSessionChange = useCallback((nextSessionId: string) => {
     const nextSession = sessions.find((session) => session.id === nextSessionId) ?? null
     disconnectSocket()
     setCurrentSession(nextSession)
     setSessionId(nextSessionId)
+    setSelectedHistorySessionId(nextSessionId)
   }, [disconnectSocket, sessions])
+
+  const handleDeleteSession = useCallback(async (targetSessionId: string) => {
+    const isDeletingCurrent = targetSessionId === sessionId
+    const remainingSessions = sessions.filter((session) => session.id !== targetSessionId)
+
+    try {
+      await deleteSession(targetSessionId)
+      removeCachedSessionMessages(targetSessionId)
+      setSessions(remainingSessions)
+
+      if (!isDeletingCurrent) {
+        setSelectedHistorySessionId((current) =>
+          current === targetSessionId ? sessionId || remainingSessions[0]?.id || '' : current
+        )
+        return
+      }
+
+      disconnectSocket()
+      resetSessionView()
+      setCurrentSession(null)
+      setSessionId('')
+      navigateToPage('chat')
+
+      const created = await createAndSelectSession(currentUserId)
+      setSessions([created, ...remainingSessions])
+    } catch (error) {
+      console.error('Failed to delete session:', error)
+    }
+  }, [createAndSelectSession, currentUserId, disconnectSocket, removeCachedSessionMessages, resetSessionView, sessionId, sessions])
 
   const navigateToPage = (page: PageKey) => {
     window.location.hash = page
@@ -1171,11 +1384,16 @@ const App: React.FC = () => {
         </div>
         <div className="page-stack">
           <SessionReplayPanel
-            currentUserId={currentUserId}
+            sessions={sessions}
             activeSessionId={sessionId}
             connectedSessionId={socketState === 'connected' ? sessionId : ''}
-            currentMessages={messages}
-            currentExecutions={executions}
+            selectedSessionId={selectedHistorySessionId}
+            selectedMessages={selectedHistorySessionId === sessionId ? messages : selectedHistoryMessages}
+            sessionMessagesById={sessionMessagesById}
+            isLoadingSessions={isLoadingSessionHistory}
+            isLoadingMessages={isLoadingSelectedHistory}
+            onSelectSession={setSelectedHistorySessionId}
+            onDeleteSession={handleDeleteSession}
           />
         </div>
       </section>

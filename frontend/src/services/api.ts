@@ -167,6 +167,15 @@ export async function getSession(sessionId: string): Promise<SessionSummary> {
   return await response.json()
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
 export async function getSessionsByUserId(userId: string): Promise<SessionSummary[]> {
   const response = await fetch(`${API_BASE_URL}/sessions?userId=${encodeURIComponent(userId)}`)
   if (!response.ok) {
