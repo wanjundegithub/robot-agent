@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,6 +24,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class UnifiedModelServiceTest {
+
+    private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 26, 10, 30, 0);
 
     private final LlmModelRecordRepository modelRecordRepository = mock(LlmModelRecordRepository.class);
     private final LlmProviderConfigRepository providerRepository = mock(LlmProviderConfigRepository.class);
@@ -58,16 +61,26 @@ class UnifiedModelServiceTest {
         ));
 
         assertThat(result.text()).isEqualTo("connectivity ok");
-        assertThat(result.usage().get("total_tokens")).isEqualTo(20);
+        Object totalTokens = result.usage().get("total_tokens");
+        assertThat(totalTokens).isInstanceOf(Number.class);
+        assertThat(((Number) totalTokens).intValue()).isEqualTo(20);
     }
 
     @Test
     void invokeChatMapsMissingModelToStableErrorCode() {
         when(modelRecordRepository.findByModelCode("missing")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> unifiedModelService.invokeChat(new UnifiedModelRequest("missing", List.of(), "", Map.of(), null, false)))
+        assertThatThrownBy(() -> unifiedModelService.invokeChat(new UnifiedModelRequest(
+                "missing",
+                List.of(Map.of("role", "user", "content", "ping")),
+                "system",
+                Map.of(),
+                null,
+                false
+        )))
                 .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("MODEL_NOT_FOUND");
+                .satisfies(error -> assertThat(((ResponseStatusException) error).getReason())
+                        .contains("MODEL_NOT_FOUND"));
     }
 
     private void stubProviderResponse(String jsonBody) {
@@ -94,6 +107,7 @@ class UnifiedModelServiceTest {
         record.setProviderCode("provider-a");
         record.setProviderModelCode(modelCode);
         record.setEnabled(true);
+        record.setUpdatedAt(FIXED_UPDATED_AT);
         return record;
     }
 
