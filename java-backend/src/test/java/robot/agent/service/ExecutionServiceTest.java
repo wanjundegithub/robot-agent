@@ -7,6 +7,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 import robot.agent.dto.request.SendMessageRequest;
+import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.response.SendMessageResponse;
 import robot.agent.model.Execution;
 import robot.agent.model.Session;
@@ -40,6 +41,8 @@ class ExecutionServiceTest {
         AccessControlService accessControlService = mock(AccessControlService.class);
         ConfirmationService confirmationService = mock(ConfirmationService.class);
         EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
 
         ExecutionService executionService = new ExecutionService(
                 sessionService,
@@ -52,7 +55,9 @@ class ExecutionServiceTest {
                 objectMapper,
                 accessControlService,
                 confirmationService,
-                entryProtectionService
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
         );
 
         Session session = new Session("session-1", 1L, "user-1");
@@ -97,6 +102,8 @@ class ExecutionServiceTest {
         when(entryProtectionService.evaluateExecutionStart("user-1", "session-1", "general_query", null))
                 .thenReturn(new EntryProtectionService.ProtectionDecision(true, "allowed", null, null, null));
         when(workflowService.buildRuntimeExecutionBundle("general_query", "v1")).thenReturn(runtimeBundle);
+        when(capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition()))
+                .thenReturn(runtimeBundle.workflowDefinition());
         when(executionRepository.save(any(Execution.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(sessionService.updateCurrentExecutionId(eq(session), any(String.class))).thenAnswer(invocation -> {
             session.setCurrentExecutionId(invocation.getArgument(1));
@@ -120,5 +127,118 @@ class ExecutionServiceTest {
         assertThat(savedInput.get("user_message")).isEqualTo("hello from websocket");
         assertThat(savedInput.get("user_id")).isEqualTo("user-1");
         assertThat(savedInput.get("session_id")).isEqualTo("session-1");
+    }
+
+    @Test
+    void startExecution_resolvesCapabilityWorkflowDefinitionBeforeDispatch() {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        Session session = new Session("session-1", 1L, "user-1");
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-1",
+                        "message", "run capability",
+                        "user_id", "user-1"
+                ),
+                SendMessageRequest.class
+        );
+        RoutingDecision routingDecision = new RoutingDecision(
+                "start",
+                "cap_workflow",
+                "draft",
+                1.0d,
+                0.0d,
+                "manual",
+                "canvas_selected_workflow",
+                List.of("cap_workflow"),
+                100
+        );
+        Map<String, Object> rawDefinition = Map.of(
+                "entry", "start",
+                "nodes", Map.of(
+                        "call_health", Map.of(
+                                "id", "call_health",
+                                "type", "tool",
+                                "config", Map.of("invoke_type", "capability")
+                        )
+                )
+        );
+        Map<String, Object> resolvedDefinition = Map.of(
+                "entry", "start",
+                "nodes", Map.of(
+                        "call_health", Map.of(
+                                "id", "call_health",
+                                "type", "tool",
+                                "config", Map.of(
+                                        "invoke_type", "api",
+                                        "tool_code", "health_check",
+                                        "url", "http://127.0.0.1:8080/actuator/health",
+                                        "method", "GET"
+                                )
+                        )
+                )
+        );
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = new WorkflowService.RuntimeExecutionBundle(
+                rawDefinition,
+                Map.of(),
+                Map.of(),
+                Map.of("cap_workflow@draft", Map.of()),
+                List.of(),
+                List.of(),
+                "routing-default"
+        );
+
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(executionRepository.findBySessionIdAndClientMessageId("session-1", "msg-1")).thenReturn(Optional.empty());
+        when(executionRepository.findBySessionIdOrderByCreatedAtDesc("session-1")).thenReturn(List.of());
+        when(workflowService.routeMessage(eq("run capability"), eq(null))).thenReturn(routingDecision);
+        when(accessControlService.evaluateExecutionAccess("user-1", 1L, "cap_workflow", null, "user-1"))
+                .thenReturn(new AccessControlService.AuthorizationDecision(true, "allow", "policy_allow_execution", java.util.Set.of("viewer"), Map.of()));
+        when(confirmationService.resolveRequestedToolCode(null, "run capability")).thenReturn(null);
+        when(confirmationService.evaluate("session-1", "user-1", "run capability", null, null, false))
+                .thenReturn(new ConfirmationService.ConfirmationEvaluation("approved", null, null, null, null));
+        when(entryProtectionService.evaluateExecutionStart("user-1", "session-1", "cap_workflow", null))
+                .thenReturn(new EntryProtectionService.ProtectionDecision(true, "allowed", null, null, null));
+        when(workflowService.buildRuntimeExecutionBundle("cap_workflow", "draft")).thenReturn(runtimeBundle);
+        when(capabilityRuntimeResolver.resolveWorkflowDefinition(rawDefinition)).thenReturn(resolvedDefinition);
+        when(executionRepository.save(any(Execution.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionService.updateCurrentExecutionId(eq(session), any(String.class))).thenAnswer(invocation -> {
+            session.setCurrentExecutionId(invocation.getArgument(1));
+            return session;
+        });
+        when(pythonClient.execute(any())).thenReturn(Flux.<ServerSentEvent<String>>empty());
+
+        executionService.startExecution("session-1", request);
+
+        ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
+        verify(pythonClient).execute(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getWorkflowDefinition()).isEqualTo(resolvedDefinition);
     }
 }

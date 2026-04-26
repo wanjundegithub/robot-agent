@@ -2,6 +2,8 @@ package robot.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.dto.request.CreateSessionRequest;
@@ -12,6 +14,7 @@ import robot.agent.model.SessionStatus;
 import robot.agent.repository.ExecutionRepository;
 import robot.agent.repository.SessionRepository;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -28,11 +31,21 @@ public class SessionService {
     private final SessionRepository sessionRepository;
     private final ExecutionRepository executionRepository;
     private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbcTemplate;
+    private final SessionSchemaRepairService sessionSchemaRepairService;
 
-    public SessionService(SessionRepository sessionRepository, ExecutionRepository executionRepository, ObjectMapper objectMapper) {
+    public SessionService(
+            SessionRepository sessionRepository,
+            ExecutionRepository executionRepository,
+            ObjectMapper objectMapper,
+            JdbcTemplate jdbcTemplate,
+            SessionSchemaRepairService sessionSchemaRepairService
+    ) {
         this.sessionRepository = sessionRepository;
         this.executionRepository = executionRepository;
         this.objectMapper = objectMapper;
+        this.jdbcTemplate = jdbcTemplate;
+        this.sessionSchemaRepairService = sessionSchemaRepairService;
     }
 
     public SessionResponse createSession(CreateSessionRequest request) {
@@ -157,9 +170,18 @@ public class SessionService {
     public void closeSession(String sessionId) {
         Session session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
+        LocalDateTime now = LocalDateTime.now();
+        try {
+            markSessionDeleted(sessionId, now);
+        } catch (RuntimeException exception) {
+            if (!isLegacyDeletedStatusFailure(exception)) {
+                throw exception;
+            }
+            sessionSchemaRepairService.ensureDeletedStatusSupported();
+            markSessionDeleted(sessionId, now);
+        }
         session.setStatus(SessionStatus.DELETED);
-        session.setLastActivityAt(LocalDateTime.now());
-        sessionRepository.save(session);
+        session.setLastActivityAt(now);
     }
 
     private boolean shouldIncludeInHistory(Session session) {
@@ -207,5 +229,31 @@ public class SessionService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private boolean isLegacyDeletedStatusFailure(RuntimeException exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof DataIntegrityViolationException) {
+                String message = current.getMessage();
+                if (message != null) {
+                    String normalized = message.toLowerCase();
+                    if (normalized.contains("data truncated") && normalized.contains("status")) {
+                        return true;
+                    }
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void markSessionDeleted(String sessionId, LocalDateTime lastActivityAt) {
+        jdbcTemplate.update(
+                "UPDATE `session` SET status = ?, last_activity_at = ? WHERE id = ?",
+                SessionStatus.DELETED.name(),
+                Timestamp.valueOf(lastActivityAt),
+                sessionId
+        );
     }
 }

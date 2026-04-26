@@ -400,6 +400,7 @@ export interface CapabilityGroupSummary {
   description?: string
   status: string
   latestSnapshotVersion?: string | null
+  latestPublishedAt?: string | null
   capabilityCount?: number
   defaultAuthConfigId?: number | null
   updatedAt?: string
@@ -471,4 +472,39 @@ export interface CapabilityTestResult {
   errorMessage?: string | null
   durationMs?: number | null
   testedAt?: string | null
+}
+
+export interface CapabilityTestRecord {
+  id: number
+  groupCode: string
+  capabilityCode: string
+  capabilityName?: string | null
+  capabilityType?: string | null
+  capabilityVersion?: string | null
+  testType: string
+  requestPayload?: string | null
+  responsePayload?: string | null
+  success: boolean
+  errorMessage?: string | null
+  durationMs?: number | null
+  createdBy?: string | null
+  testedAt?: string | null
+}
+
+export interface CapabilityAuditRecord {
+  id: number
+  groupCode: string
+  groupSnapshotVersion?: string | null
+  capabilityCode: string
+  capabilityVersion?: string | null
+  capabilityType?: string | null
+  executionId?: string | null
+  nodeId?: string | null
+  toolCode?: string | null
+  status: string
+  requestPayload?: string | null
+  responsePayload?: string | null
+  errorMessage?: string | null
+  durationMs?: number | null
+  createdAt?: string | null
 }

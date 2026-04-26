@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _is_missing(value: Any) -> bool:
@@ -17,9 +17,14 @@ class ExecutionPlan:
     need_user_input: bool = False
     missing_fields: List[str] = field(default_factory=list)
 
+    @property
+    def selected_node(self) -> Optional[str]:
+        return self.candidate_nodes[0] if self.candidate_nodes else None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "current_node_id": self.current_node_id,
+            "selected_node": self.selected_node,
             "candidate_nodes": list(self.candidate_nodes),
             "reasoning_summary": self.reasoning_summary,
             "confidence": self.confidence,

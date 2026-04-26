@@ -545,7 +545,7 @@ export async function getCapabilityGroups(): Promise<CapabilityGroupSummary[]> {
 
 export async function saveCapabilityGroup(
   payload: {
-    groupCode: string
+    groupCode?: string
     groupName: string
     domainCode: string
     description?: string
@@ -611,7 +611,7 @@ export async function saveCapabilityDraft(
   groupCode: string,
   capabilityCode: string | undefined,
   payload: {
-    capabilityCode: string
+    capabilityCode?: string
     capabilityName: string
     capabilityType: string
     description?: string
@@ -722,6 +722,7 @@ export async function saveCapabilityAuthConfig(
     id?: number
     authName: string
     authType: string
+    scope?: 'GROUP' | 'CAPABILITY'
     maskedPreview?: string
     config?: Record<string, unknown>
   },

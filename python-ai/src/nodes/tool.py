@@ -24,9 +24,13 @@ class ToolNode(BaseNode):
         self.body = self.tool_config.get("body", {})
 
     async def execute(self, context) -> Dict[str, Any]:
+        if self.invoke_type == "capability":
+            raise RuntimeError("capability invoke_type must be resolved by Java before execution")
+
         if self.tool_code or self.invoke_type in {"function", "mcp", "skill"}:
             params = self._build_tool_params(context)
             resolved_tool_code = self.tool_code or self._derive_tool_code()
+            capability_metadata = self._build_capability_metadata()
             tool_confirmation_gate.ensure_confirmed(context, resolved_tool_code, params)
             dependency_key = f"tool:{resolved_tool_code}"
             try:
@@ -39,8 +43,8 @@ class ToolNode(BaseNode):
                     "status": "completed",
                     "output": output,
                     "message_deltas": [result.get("summary")] if result.get("summary") else [],
-                    "tool_called": {"tool_code": resolved_tool_code, "params": params},
-                    "tool_returned": {"tool_code": resolved_tool_code, "output": result},
+                    "tool_called": {"tool_code": resolved_tool_code, "params": params, **capability_metadata},
+                    "tool_returned": {"tool_code": resolved_tool_code, "params": params, "output": result, **capability_metadata},
                     "metrics": {"cached": bool(result.get("cached", False))},
                 })
             except Exception as exc:
@@ -55,8 +59,8 @@ class ToolNode(BaseNode):
                     "status": "completed",
                     "output": degraded_output,
                     "message_deltas": [degraded_output["fallback_message"]],
-                    "tool_called": {"tool_code": resolved_tool_code, "params": params},
-                    "tool_returned": {"tool_code": resolved_tool_code, "output": degraded_output},
+                    "tool_called": {"tool_code": resolved_tool_code, "params": params, **capability_metadata},
+                    "tool_returned": {"tool_code": resolved_tool_code, "params": params, "output": degraded_output, "error": str(exc), **capability_metadata},
                     "metrics": {
                         "cached": False,
                         "degraded": True,
@@ -234,3 +238,11 @@ class ToolNode(BaseNode):
         if self.invoke_type == "skill":
             return str(self.tool_config.get("skill_name", "skill_tool"))
         return "tool"
+
+    def _build_capability_metadata(self) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        for key in ("group_code", "group_snapshot_version", "capability_code", "capability_version", "capability_type"):
+            value = self.tool_config.get(key)
+            if value not in (None, ""):
+                metadata[key] = value
+        return metadata

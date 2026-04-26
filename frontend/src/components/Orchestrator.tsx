@@ -11,8 +11,19 @@ import ReactFlow, {
   type Node,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { publishWorkflow, saveWorkflowDraft, validateWorkflowDraft } from '../services/api'
-import type { WorkflowEditorSelection, WorkflowValidationIssue } from '../types'
+import {
+  getCapabilitiesByGroup,
+  getCapabilityGroups,
+  publishWorkflow,
+  saveWorkflowDraft,
+  validateWorkflowDraft,
+} from '../services/api'
+import type {
+  CapabilityGroupSummary,
+  CapabilityItemSummary,
+  WorkflowEditorSelection,
+  WorkflowValidationIssue,
+} from '../types'
 
 type DesignerNodeType = 'start' | 'coordinate' | 'sub_agent' | 'tool' | 'message' | 'end'
 type VariableScope = 'global' | 'temp'
@@ -198,8 +209,6 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     config: {
       invoke_type: 'capability',
       group_code: '',
-      group_snapshot_version: '',
-      capability_type: 'API',
       capability_code: '',
       capability_version: '',
       payload_mapping: {},
@@ -249,6 +258,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const [globalVariables, setGlobalVariables] = useState<VariableDefinition[]>([])
   const [tempVariables, setTempVariables] = useState<VariableDefinition[]>([])
   const [variableForm, setVariableForm] = useState(emptyVariableForm)
+  const [capabilityGroups, setCapabilityGroups] = useState<CapabilityGroupSummary[]>([])
+  const [capabilityItems, setCapabilityItems] = useState<CapabilityItemSummary[]>([])
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
   const selectedNodeData = (selectedNode?.data || null) as CanvasNodeData | null
@@ -256,6 +267,40 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const allVariables = useMemo(() => [...globalVariables, ...tempVariables], [globalVariables, tempVariables])
 
   const variableNameMap = useMemo(() => new Map(allVariables.map((item) => [item.id, item])), [allVariables])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const groups = await getCapabilityGroups()
+        setCapabilityGroups(groups)
+      } catch (error) {
+        console.error('Failed to load capability groups for orchestrator:', error)
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    const config = selectedNodeData?.config || {}
+    if (selectedNodeData?.nodeType !== 'tool' || String(config.invoke_type || 'capability') !== 'capability') {
+      setCapabilityItems([])
+      return
+    }
+    const groupCode = String(config.group_code || '')
+    if (!groupCode) {
+      setCapabilityItems([])
+      return
+    }
+
+    void (async () => {
+      try {
+        const items = await getCapabilitiesByGroup(groupCode)
+        setCapabilityItems(items)
+      } catch (error) {
+        console.error('Failed to load capability node options:', error)
+        setCapabilityItems([])
+      }
+    })()
+  }, [selectedNodeData])
 
   const summaryRules = useMemo<WorkflowSummaryRule[]>(() => {
     const startCount = nodes.filter((node) => (node.data as CanvasNodeData).nodeType === 'start').length
@@ -710,58 +755,49 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               onChange={(event) => updateSelectedConfigField('invoke_type', event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="capability">能力调用</option>
-              <option value="function">函数调用</option>
-              <option value="api">API 调用</option>
-              <option value="mcp">MCP 调用</option>
-              <option value="skill">技能调用</option>
+              <option value="capability">已发布 API 能力</option>
+              <option value="api">直接 API 调用</option>
             </select>
 
             {String(config.invoke_type || 'capability') === 'capability' && (
               <>
-                <input
-                  value={String(config.group_code || '')}
-                  onChange={(event) => updateSelectedConfigField('group_code', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="集合组编码"
-                />
-                <input
-                  value={String(config.group_snapshot_version || '')}
-                  onChange={(event) => updateSelectedConfigField('group_snapshot_version', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="集合组快照版本"
-                />
                 <select
-                  value={String(config.capability_type || 'API')}
-                  onChange={(event) => updateSelectedConfigField('capability_type', event.target.value)}
+                  value={String(config.group_code || '')}
+                  onChange={(event) => {
+                    updateSelectedConfigField('group_code', event.target.value)
+                    updateSelectedConfigField('capability_code', '')
+                    updateSelectedConfigField('capability_version', '')
+                  }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 >
-                  <option value="API">API</option>
-                  <option value="SKILL">Skill</option>
-                  <option value="MCP">MCP</option>
+                  <option value="">选择能力组</option>
+                  {capabilityGroups.map((group) => (
+                    <option key={group.groupCode} value={group.groupCode}>
+                      {group.groupName} ({group.groupCode})
+                    </option>
+                  ))}
                 </select>
-                <input
+                <select
                   value={String(config.capability_code || '')}
-                  onChange={(event) => updateSelectedConfigField('capability_code', event.target.value)}
+                  onChange={(event) => {
+                    const nextCapabilityCode = event.target.value
+                    updateSelectedConfigField('capability_code', nextCapabilityCode)
+                    const selectedCapability = capabilityItems.find((item) => item.capabilityCode === nextCapabilityCode)
+                    updateSelectedConfigField('capability_version', selectedCapability?.publishedVersion || '')
+                  }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="能力编码"
-                />
-                <input
-                  value={String(config.capability_version || '')}
-                  onChange={(event) => updateSelectedConfigField('capability_version', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="能力版本（可选）"
-                />
+                >
+                  <option value="">选择能力</option>
+                  {capabilityItems.map((item) => (
+                    <option key={item.capabilityCode} value={item.capabilityCode}>
+                      {item.capabilityName}
+                    </option>
+                  ))}
+                </select>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                  当前发布版本：{String(config.capability_version || '未发布')}
+                </div>
               </>
-            )}
-
-            {String(config.invoke_type || 'capability') === 'function' && (
-              <input
-                value={String(config.function_name || '')}
-                onChange={(event) => updateSelectedConfigField('function_name', event.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                placeholder="函数名称"
-              />
             )}
 
             {String(config.invoke_type || 'capability') === 'api' && (
@@ -781,41 +817,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                   <option value="POST">POST</option>
                   <option value="PUT">PUT</option>
                   <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
                 </select>
-              </>
-            )}
-
-            {String(config.invoke_type || 'capability') === 'mcp' && (
-              <>
-                <input
-                  value={String(config.mcp_endpoint || '')}
-                  onChange={(event) => updateSelectedConfigField('mcp_endpoint', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="MCP 服务地址"
-                />
-                <input
-                  value={String(config.tool_name || '')}
-                  onChange={(event) => updateSelectedConfigField('tool_name', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="MCP 工具名称"
-                />
-              </>
-            )}
-
-            {String(config.invoke_type || 'capability') === 'skill' && (
-              <>
-                <input
-                  value={String(config.skill_endpoint || '')}
-                  onChange={(event) => updateSelectedConfigField('skill_endpoint', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="技能端点"
-                />
-                <input
-                  value={String(config.skill_name || '')}
-                  onChange={(event) => updateSelectedConfigField('skill_name', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="技能名称"
-                />
               </>
             )}
 
@@ -1038,27 +1041,14 @@ function normalizeNodeConfig(
       }
       if (invokeType === 'capability') {
         base.group_code = String(config.group_code || '')
-        base.group_snapshot_version = String(config.group_snapshot_version || '')
-        base.capability_type = String(config.capability_type || 'API')
         base.capability_code = String(config.capability_code || '')
         if (String(config.capability_version || '').trim()) {
           base.capability_version = String(config.capability_version || '')
         }
         base.tool_code = String(config.capability_code || '')
-      } else if (invokeType === 'function') {
-        base.function_name = String(config.function_name || '')
-        base.tool_code = String(config.function_name || '')
       } else if (invokeType === 'api') {
         base.url = String(config.url || '')
         base.method = String(config.method || 'POST')
-      } else if (invokeType === 'mcp') {
-        base.mcp_endpoint = String(config.mcp_endpoint || '')
-        base.tool_name = String(config.tool_name || '')
-        base.tool_code = String(config.tool_name || '')
-      } else if (invokeType === 'skill') {
-        base.skill_endpoint = String(config.skill_endpoint || '')
-        base.skill_name = String(config.skill_name || '')
-        base.tool_code = String(config.skill_name || '')
       }
       return base
     }
@@ -1276,21 +1266,11 @@ function denormalizeNodeConfig(
       }
       if (invokeType === 'capability') {
         restored.group_code = String(config.group_code || '')
-        restored.group_snapshot_version = String(config.group_snapshot_version || '')
-        restored.capability_type = String(config.capability_type || 'API')
         restored.capability_code = String(config.capability_code || config.tool_code || '')
         restored.capability_version = String(config.capability_version || '')
-      } else if (invokeType === 'function') {
-        restored.function_name = String(config.function_name || config.tool_code || '')
       } else if (invokeType === 'api') {
         restored.url = String(config.url || '')
         restored.method = String(config.method || 'POST')
-      } else if (invokeType === 'mcp') {
-        restored.mcp_endpoint = String(config.mcp_endpoint || '')
-        restored.tool_name = String(config.tool_name || config.tool_code || '')
-      } else if (invokeType === 'skill') {
-        restored.skill_endpoint = String(config.skill_endpoint || '')
-        restored.skill_name = String(config.skill_name || config.tool_code || '')
       }
       return restored
     }

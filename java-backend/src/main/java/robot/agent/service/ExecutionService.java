@@ -49,6 +49,8 @@ public class ExecutionService {
     private final AccessControlService accessControlService;
     private final ConfirmationService confirmationService;
     private final EntryProtectionService entryProtectionService;
+    private final CapabilityRuntimeResolver capabilityRuntimeResolver;
+    private final CapabilityAuditService capabilityAuditService;
 
     public ExecutionService(
             SessionService sessionService,
@@ -61,7 +63,9 @@ public class ExecutionService {
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             ConfirmationService confirmationService,
-            EntryProtectionService entryProtectionService
+            EntryProtectionService entryProtectionService,
+            CapabilityRuntimeResolver capabilityRuntimeResolver,
+            CapabilityAuditService capabilityAuditService
     ) {
         this.sessionService = sessionService;
         this.workflowService = workflowService;
@@ -74,6 +78,8 @@ public class ExecutionService {
         this.accessControlService = accessControlService;
         this.confirmationService = confirmationService;
         this.entryProtectionService = entryProtectionService;
+        this.capabilityRuntimeResolver = capabilityRuntimeResolver;
+        this.capabilityAuditService = capabilityAuditService;
     }
 
     @Transactional
@@ -288,7 +294,9 @@ public class ExecutionService {
         executeRequest.setConfirmedToolCodes(
                 confirmationEvaluation.toolCode() == null ? List.of() : List.of(confirmationEvaluation.toolCode())
         );
-        executeRequest.setWorkflowDefinition(runtimeBundle.workflowDefinition());
+        executeRequest.setWorkflowDefinition(
+                capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition())
+        );
         executeRequest.setEntryRule(runtimeBundle.entryRule());
         executeRequest.setWorkflowConfig(runtimeBundle.workflowConfig());
         executeRequest.setWorkflowCatalog(runtimeBundle.workflowCatalog());
@@ -508,7 +516,10 @@ public class ExecutionService {
             case "plan.replanned":
             case "branch.decided":
             case "tool.called":
+                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                break;
             case "tool.returned":
+                capabilityAuditService.recordToolReturn(payload);
             case "form.requested":
             case "security.prompt_sanitized":
             case "security.output_rejected":

@@ -89,6 +89,13 @@ body {
   width: min(980px, 100%);
 }
 
+.page-capability-center {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .nav-tabs {
   display: flex;
   gap: 8px;

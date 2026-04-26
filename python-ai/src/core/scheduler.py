@@ -205,21 +205,36 @@ class WorkflowScheduler:
                     })
                 else:
                     if result.get("tool_called"):
+                        called = result["tool_called"]
                         runtime.emit("tool.called", {
                             "execution_id": context.execution_id,
                             "session_id": context.session_id,
                             "node_id": node_def["id"],
-                            "tool_code": result["tool_called"].get("tool_code"),
-                            "params": result["tool_called"].get("params", {}),
+                            "tool_code": called.get("tool_code"),
+                            "params": called.get("params", {}),
+                            "group_code": called.get("group_code"),
+                            "group_snapshot_version": called.get("group_snapshot_version"),
+                            "capability_code": called.get("capability_code"),
+                            "capability_version": called.get("capability_version"),
+                            "capability_type": called.get("capability_type"),
                             "trace_id": context.trace_id,
                         })
                     if result.get("tool_returned"):
+                        returned = result["tool_returned"]
                         runtime.emit("tool.returned", {
                             "execution_id": context.execution_id,
                             "session_id": context.session_id,
                             "node_id": node_def["id"],
-                            "tool_code": result["tool_returned"].get("tool_code"),
-                            "output": result["tool_returned"].get("output", {}),
+                            "tool_code": returned.get("tool_code"),
+                            "params": returned.get("params", {}),
+                            "output": returned.get("output", {}),
+                            "error": returned.get("error"),
+                            "group_code": returned.get("group_code"),
+                            "group_snapshot_version": returned.get("group_snapshot_version"),
+                            "capability_code": returned.get("capability_code"),
+                            "capability_version": returned.get("capability_version"),
+                            "capability_type": returned.get("capability_type"),
+                            "status": "completed",
                             "trace_id": context.trace_id,
                         })
                     for delta in result.get("message_deltas", []):

@@ -1338,7 +1338,7 @@ const App: React.FC = () => {
 
     if (activePage === 'capability-center') {
       return (
-        <section className="page-single">
+        <section className="page-capability-center">
           <CapabilityCenterPanel currentUserId={currentUserId} />
         </section>
       )
