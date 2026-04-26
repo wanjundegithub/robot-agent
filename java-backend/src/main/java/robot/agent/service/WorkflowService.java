@@ -685,8 +685,8 @@ public class WorkflowService {
                 }
             }
             case "capability" -> {
-                if (stringValue(nodeConfig.get("group_code")) == null) {
-                    issues.add(issue(nodeId, "config.group_code", "Capability 调用缺少 group_code"));
+                if (stringValue(nodeConfig.get("group_id")) == null && stringValue(nodeConfig.get("group_code")) == null) {
+                    issues.add(issue(nodeId, "config.group_id", "Capability 调用缺少 group_id"));
                 }
                 if (stringValue(nodeConfig.get("group_snapshot_version")) == null) {
                     issues.add(issue(nodeId, "config.group_snapshot_version", "Capability 调用缺少 group_snapshot_version"));

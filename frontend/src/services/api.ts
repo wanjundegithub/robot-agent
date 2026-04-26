@@ -545,19 +545,16 @@ export async function getCapabilityGroups(): Promise<CapabilityGroupSummary[]> {
 
 export async function saveCapabilityGroup(
   payload: {
-    groupCode?: string
     groupName: string
-    domainCode: string
     description?: string
-    defaultAuthConfigId?: number | null
   },
   currentUserId: string,
-  existingGroupCode?: string
+  existingGroupId?: number
 ): Promise<CapabilityGroupSummary> {
-  const isUpdate = Boolean(existingGroupCode)
+  const isUpdate = typeof existingGroupId === 'number'
   const response = await fetch(
     isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(existingGroupCode || '')}`
+      ? `${API_BASE_URL}/capabilities/groups/${existingGroupId}`
       : `${API_BASE_URL}/capabilities/groups`,
     {
       method: isUpdate ? 'PUT' : 'POST',
@@ -574,8 +571,8 @@ export async function saveCapabilityGroup(
   return await response.json()
 }
 
-export async function deleteCapabilityGroup(groupCode: string, currentUserId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}`, {
+export async function deleteCapabilityGroup(groupId: number, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId || ADMIN_USER_ID,
@@ -586,8 +583,8 @@ export async function deleteCapabilityGroup(groupCode: string, currentUserId: st
   }
 }
 
-export async function getCapabilitiesByGroup(groupCode: string): Promise<CapabilityItemSummary[]> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items`)
+export async function getCapabilitiesByGroup(groupId: number): Promise<CapabilityItemSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}/items`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -595,11 +592,11 @@ export async function getCapabilitiesByGroup(groupCode: string): Promise<Capabil
 }
 
 export async function getCapabilityVersions(
-  groupCode: string,
+  groupId: number,
   capabilityCode: string
 ): Promise<CapabilityVersionSummary[]> {
   const response = await fetch(
-    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/versions`
+    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/versions`
   )
   if (!response.ok) {
     await parseApiError(response)
@@ -608,7 +605,7 @@ export async function getCapabilityVersions(
 }
 
 export async function saveCapabilityDraft(
-  groupCode: string,
+  groupId: number,
   capabilityCode: string | undefined,
   payload: {
     capabilityCode?: string
@@ -625,8 +622,8 @@ export async function saveCapabilityDraft(
   const isUpdate = Boolean(capabilityCode)
   const response = await fetch(
     isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode || '')}/draft`
-      : `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items`,
+      ? `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode || '')}/draft`
+      : `${API_BASE_URL}/capabilities/groups/${groupId}/items`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -643,12 +640,12 @@ export async function saveCapabilityDraft(
 }
 
 export async function publishCapability(
-  groupCode: string,
+  groupId: number,
   capabilityCode: string,
   currentUserId: string
 ): Promise<CapabilityVersionSummary> {
   const response = await fetch(
-    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/publish`,
+    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/publish`,
     {
       method: 'POST',
       headers: {
@@ -663,12 +660,12 @@ export async function publishCapability(
 }
 
 export async function deleteCapability(
-  groupCode: string,
+  groupId: number,
   capabilityCode: string,
   currentUserId: string
 ): Promise<void> {
   const response = await fetch(
-    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}`,
+    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}`,
     {
       method: 'DELETE',
       headers: {
@@ -681,8 +678,8 @@ export async function deleteCapability(
   }
 }
 
-export async function getCapabilityGroupSnapshots(groupCode: string): Promise<CapabilityGroupSnapshot[]> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/snapshots`)
+export async function getCapabilityGroupSnapshots(groupId: number): Promise<CapabilityGroupSnapshot[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}/snapshots`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -690,11 +687,11 @@ export async function getCapabilityGroupSnapshots(groupCode: string): Promise<Ca
 }
 
 export async function publishCapabilityGroupSnapshot(
-  groupCode: string,
+  groupId: number,
   payload: { description?: string },
   currentUserId: string
 ): Promise<CapabilityGroupSnapshot> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/snapshots/publish`, {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}/snapshots/publish`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -708,8 +705,8 @@ export async function publishCapabilityGroupSnapshot(
   return await response.json()
 }
 
-export async function getCapabilityAuthConfigs(groupCode: string): Promise<AuthConfigSummary[]> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs`)
+export async function getCapabilityAuthConfigs(groupId: number): Promise<AuthConfigSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -717,7 +714,7 @@ export async function getCapabilityAuthConfigs(groupCode: string): Promise<AuthC
 }
 
 export async function saveCapabilityAuthConfig(
-  groupCode: string,
+  groupId: number,
   payload: {
     id?: number
     authName: string
@@ -731,8 +728,8 @@ export async function saveCapabilityAuthConfig(
   const isUpdate = Boolean(payload.id)
   const response = await fetch(
     isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs/${payload.id}`
-      : `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/auth-configs`,
+      ? `${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs/${payload.id}`
+      : `${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -749,11 +746,11 @@ export async function saveCapabilityAuthConfig(
 }
 
 export async function validateCapabilityDraft(
-  groupCode: string,
+  groupId: number,
   payload: Record<string, unknown>,
   currentUserId: string
 ): Promise<CapabilityValidationResult> {
-  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/validate-draft`, {
+  const response = await fetch(`${API_BASE_URL}/capabilities/groups/${groupId}/validate-draft`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -768,13 +765,13 @@ export async function validateCapabilityDraft(
 }
 
 export async function testCapability(
-  groupCode: string,
+  groupId: number,
   capabilityCode: string,
   payload: Record<string, unknown>,
   currentUserId: string
 ): Promise<CapabilityTestResult> {
   const response = await fetch(
-    `${API_BASE_URL}/capabilities/groups/${encodeURIComponent(groupCode)}/items/${encodeURIComponent(capabilityCode)}/test`,
+    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/test`,
     {
       method: 'POST',
       headers: {

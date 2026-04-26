@@ -394,21 +394,18 @@ export type CapabilityAuthType =
 
 export interface CapabilityGroupSummary {
   id: number
-  groupCode: string
   groupName: string
-  domainCode: string
   description?: string
   status: string
   latestSnapshotVersion?: string | null
   latestPublishedAt?: string | null
   capabilityCount?: number
-  defaultAuthConfigId?: number | null
   updatedAt?: string
 }
 
 export interface CapabilityItemSummary {
   id: number
-  groupCode: string
+  groupId?: number
   capabilityCode: string
   capabilityName: string
   capabilityType: CapabilityType
@@ -418,11 +415,12 @@ export interface CapabilityItemSummary {
   lastTestStatus?: string | null
   lastTestTime?: string | null
   description?: string
+  authConfigId?: number | null
 }
 
 export interface CapabilityVersionSummary {
   id: number
-  groupCode?: string
+  groupId?: number
   capabilityCode: string
   capabilityName: string
   capabilityType: CapabilityType
@@ -432,6 +430,7 @@ export interface CapabilityVersionSummary {
   definitionJson?: string | null
   inputSchema?: string | null
   outputSchema?: string | null
+  authConfigId?: number | null
   authBinding?: string | null
   environmentBinding?: string | null
   publishedAt?: string | null
@@ -440,7 +439,7 @@ export interface CapabilityVersionSummary {
 
 export interface CapabilityGroupSnapshot {
   id: number
-  groupCode: string
+  groupId?: number
   snapshotVersion: string
   status: string
   description?: string
@@ -476,7 +475,7 @@ export interface CapabilityTestResult {
 
 export interface CapabilityTestRecord {
   id: number
-  groupCode: string
+  groupId?: number
   capabilityCode: string
   capabilityName?: string | null
   capabilityType?: string | null
@@ -493,7 +492,7 @@ export interface CapabilityTestRecord {
 
 export interface CapabilityAuditRecord {
   id: number
-  groupCode: string
+  groupId?: number
   groupSnapshotVersion?: string | null
   capabilityCode: string
   capabilityVersion?: string | null

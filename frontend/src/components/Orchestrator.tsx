@@ -208,7 +208,7 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     label: '工具节点',
     config: {
       invoke_type: 'capability',
-      group_code: '',
+      group_id: '',
       capability_code: '',
       capability_version: '',
       payload_mapping: {},
@@ -285,15 +285,15 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       setCapabilityItems([])
       return
     }
-    const groupCode = String(config.group_code || '')
-    if (!groupCode) {
+    const groupId = Number(config.group_id || 0)
+    if (!groupId) {
       setCapabilityItems([])
       return
     }
 
     void (async () => {
       try {
-        const items = await getCapabilitiesByGroup(groupCode)
+        const items = await getCapabilitiesByGroup(groupId)
         setCapabilityItems(items)
       } catch (error) {
         console.error('Failed to load capability node options:', error)
@@ -762,9 +762,9 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
             {String(config.invoke_type || 'capability') === 'capability' && (
               <>
                 <select
-                  value={String(config.group_code || '')}
+                  value={String(config.group_id || '')}
                   onChange={(event) => {
-                    updateSelectedConfigField('group_code', event.target.value)
+                    updateSelectedConfigField('group_id', event.target.value)
                     updateSelectedConfigField('capability_code', '')
                     updateSelectedConfigField('capability_version', '')
                   }}
@@ -772,8 +772,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                 >
                   <option value="">选择能力组</option>
                   {capabilityGroups.map((group) => (
-                    <option key={group.groupCode} value={group.groupCode}>
-                      {group.groupName} ({group.groupCode})
+                    <option key={group.id} value={group.id}>
+                      {group.groupName}
                     </option>
                   ))}
                 </select>
@@ -1040,7 +1040,7 @@ function normalizeNodeConfig(
         payload_mapping: ensureObject(config.payload_mapping),
       }
       if (invokeType === 'capability') {
-        base.group_code = String(config.group_code || '')
+        base.group_id = Number(config.group_id || 0) || ''
         base.capability_code = String(config.capability_code || '')
         if (String(config.capability_version || '').trim()) {
           base.capability_version = String(config.capability_version || '')
@@ -1265,7 +1265,7 @@ function denormalizeNodeConfig(
         payload_mapping: ensureObject(config.payload_mapping),
       }
       if (invokeType === 'capability') {
-        restored.group_code = String(config.group_code || '')
+        restored.group_id = String(config.group_id || '')
         restored.capability_code = String(config.capability_code || config.tool_code || '')
         restored.capability_version = String(config.capability_version || '')
       } else if (invokeType === 'api') {
