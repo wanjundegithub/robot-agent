@@ -10,6 +10,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.server.ResponseStatusException;
 import robot.agent.model.LlmModelRecord;
+import robot.agent.model.LlmProviderConfig;
 import robot.agent.repository.LlmModelRecordRepository;
 import robot.agent.repository.LlmModelProfileRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
@@ -55,9 +56,9 @@ class ModelConfigServiceTest {
 
     @Test
     void listModelRecordsReturnsPagedRowsSortedByUpdatedAtDesc() {
-        PageRequest pageRequest = PageRequest.of(0, 10, Sort.by(Sort.Order.desc("updatedAt")));
+        PageRequest repositoryPageFixture = PageRequest.of(0, 10, Sort.by(Sort.Order.desc("updatedAt")));
         when(modelRecordRepository.search("doubao", "provider-a", true, any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(modelRecord("chat-main", "Doubao Chat")), pageRequest, 1));
+                .thenReturn(new PageImpl<>(List.of(modelRecord("chat-main", "Doubao Chat")), repositoryPageFixture, 1));
 
         Map<String, Object> page = modelConfigService.getModelRecords("doubao", "provider-a", true, 0, 10);
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
@@ -80,6 +81,7 @@ class ModelConfigServiceTest {
 
     @Test
     void deleteProviderRejectsWhenModelRecordsStillReferenceIt() {
+        when(providerRepository.findByProviderCode("provider-a")).thenReturn(java.util.Optional.of(provider("provider-a")));
         when(modelRecordRepository.countByProviderCode("provider-a")).thenReturn(2L);
 
         assertThatThrownBy(() -> modelConfigService.deleteProviderConfig("demo-admin", "provider-a"))
@@ -97,5 +99,16 @@ class ModelConfigServiceTest {
         record.setEnabled(true);
         record.setUpdatedAt(FIXED_UPDATED_AT);
         return record;
+    }
+
+    private LlmProviderConfig provider(String providerCode) {
+        LlmProviderConfig provider = new LlmProviderConfig();
+        provider.setProviderCode(providerCode);
+        provider.setProviderName("Provider A");
+        provider.setProviderType("openai");
+        provider.setBaseUrl("https://api.example.com");
+        provider.setDefaultModelCode("gpt-4o-mini");
+        provider.setEnabled(true);
+        return provider;
     }
 }

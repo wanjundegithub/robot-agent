@@ -1,5 +1,6 @@
 package robot.agent.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ import static org.mockito.Mockito.when;
 class UnifiedModelServiceTest {
 
     private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 26, 10, 30, 0);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final LlmModelRecordRepository modelRecordRepository = mock(LlmModelRecordRepository.class);
     private final LlmProviderConfigRepository providerRepository = mock(LlmProviderConfigRepository.class);
@@ -87,9 +89,25 @@ class UnifiedModelServiceTest {
         try {
             server = HttpServer.create(new InetSocketAddress(0), 0);
         } catch (IOException exception) {
-            throw new RuntimeException(exception);
+            throw new IllegalStateException("Failed to start local stub provider server for UnifiedModelServiceTest", exception);
         }
         server.createContext("/chat/completions", exchange -> {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                throw new AssertionError("Expected POST request but got: " + exchange.getRequestMethod());
+            }
+            if (!"/chat/completions".equals(exchange.getRequestURI().getPath())) {
+                throw new AssertionError("Unexpected request path: " + exchange.getRequestURI().getPath());
+            }
+            String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<?, ?> requestJson = OBJECT_MAPPER.readValue(requestBody, Map.class);
+            Object model = requestJson.get("model");
+            if (model == null || String.valueOf(model).isBlank()) {
+                throw new AssertionError("Expected non-empty model field in request payload: " + requestBody);
+            }
+            if (!(requestJson.get("messages") instanceof List<?> messages) || messages.isEmpty()) {
+                throw new AssertionError("Expected non-empty messages field in request payload: " + requestBody);
+            }
+
             byte[] payload = jsonBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, payload.length);
