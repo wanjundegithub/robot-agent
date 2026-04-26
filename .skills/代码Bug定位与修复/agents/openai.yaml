@@ -1,0 +1,4 @@
+interface:
+  display_name: "代码Bug定位与修复"
+  short_description: "根据文字或截图报错定位、解释并修复代码 Bug"
+  default_prompt: "Use $debug-and-fix-bug to analyze the error report, explain the bug cause, propose a fix, and repair it after confirmation."
