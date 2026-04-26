@@ -5,6 +5,14 @@ from uuid import uuid4
 
 
 @dataclass
+class GraphFrame:
+    graph_id: str
+    parent_graph_id: Optional[str] = None
+    parent_node_id: Optional[str] = None
+    output_mapping: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ExecutionContext:
     """Execution context for a single workflow run."""
 
@@ -44,6 +52,11 @@ class ExecutionContext:
     node_outputs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     plan_round: int = 0
     last_plan: Dict[str, Any] = field(default_factory=dict)
+    current_graph_id: Optional[str] = None
+    graph_stack: List[GraphFrame] = field(default_factory=list)
+    available_targets: List[str] = field(default_factory=list)
+    node_input_snapshot: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    node_output_snapshot: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -93,4 +106,41 @@ class ExecutionContext:
     def record_failed_node(self, node_id: str, error: str) -> None:
         self.failed_nodes.append(node_id)
         self.node_outputs[node_id] = {"error": error}
+        self.updated_at = datetime.now()
+
+    def enter_graph(
+        self,
+        graph_id: str,
+        parent_graph_id: Optional[str] = None,
+        parent_node_id: Optional[str] = None,
+        output_mapping: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        frame = GraphFrame(
+            graph_id=graph_id,
+            parent_graph_id=parent_graph_id,
+            parent_node_id=parent_node_id,
+            output_mapping=dict(output_mapping or {}),
+        )
+        self.graph_stack.append(frame)
+        self.current_graph_id = graph_id
+        self.updated_at = datetime.now()
+
+    def exit_graph(self) -> Optional[GraphFrame]:
+        if not self.graph_stack:
+            return None
+        frame = self.graph_stack.pop()
+        self.current_graph_id = self.graph_stack[-1].graph_id if self.graph_stack else None
+        self.updated_at = datetime.now()
+        return frame
+
+    def set_available_targets(self, targets: List[str]) -> None:
+        self.available_targets = list(targets)
+        self.updated_at = datetime.now()
+
+    def record_node_input_snapshot(self, node_id: str, snapshot: Dict[str, Any]) -> None:
+        self.node_input_snapshot[node_id] = dict(snapshot)
+        self.updated_at = datetime.now()
+
+    def record_node_output_snapshot(self, node_id: str, snapshot: Dict[str, Any]) -> None:
+        self.node_output_snapshot[node_id] = dict(snapshot)
         self.updated_at = datetime.now()

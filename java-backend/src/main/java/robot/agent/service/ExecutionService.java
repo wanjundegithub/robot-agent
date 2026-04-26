@@ -628,7 +628,7 @@ public class ExecutionService {
                 routingDecision.workflowVersion(),
                 request.getWorkflowDefinition() != null && !request.getWorkflowDefinition().isEmpty()
         );
-        return workflowService.buildRuntimeExecutionBundle(
+        return workflowService.buildRuntimeExecutionBundleForExplicitExecution(
                 routingDecision.workflowCode(),
                 routingDecision.workflowVersion()
         );

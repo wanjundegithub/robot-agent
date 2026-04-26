@@ -73,3 +73,40 @@ async def test_registry_enforces_session_concurrency_limit():
             "workflow_catalog": {"flight_booking@1.0.0": flight_booking},
             "input_variables": {"user_message": "订机票"},
         })
+
+
+@pytest.mark.asyncio
+async def test_registry_falls_back_to_builtin_workflow_registry():
+    runtime_protection_manager.reset()
+    registry = ExecutionRegistry()
+
+    runtime = await registry.create_execution({
+        "session_id": "sess_builtin",
+        "execution_id": "exec_builtin",
+        "workflow_code": "flight_booking",
+        "workflow_version": "1.0.0",
+        "message_id": "msg_builtin",
+        "input_variables": {"user_message": "订机票"},
+    })
+
+    assert runtime.workflow["workflow_code"] == "flight_booking"
+    assert runtime.workflow["workflow_version"] == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_registry_returns_existing_runtime_for_duplicate_execution_id():
+    runtime_protection_manager.reset()
+    registry = ExecutionRegistry()
+
+    payload = {
+        "session_id": "sess_same_exec",
+        "execution_id": "exec_same",
+        "workflow_code": "flight_booking",
+        "workflow_version": "1.0.0",
+        "input_variables": {"user_message": "订机票"},
+    }
+
+    first_runtime = await registry.create_execution(payload)
+    second_runtime = await registry.create_execution(payload)
+
+    assert second_runtime is first_runtime

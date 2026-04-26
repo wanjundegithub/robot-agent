@@ -444,6 +444,13 @@ export async function saveWorkflowDraft(
     currentUserId: string
   }
 ): Promise<WorkflowVersionSummary> {
+  const editorMetaFromDefinition =
+    payload.definition?.editor_meta &&
+    typeof payload.definition.editor_meta === 'object' &&
+    !Array.isArray(payload.definition.editor_meta)
+      ? (payload.definition.editor_meta as Record<string, unknown>)
+      : null
+
   const response = await fetch(`${API_BASE_URL}/workflows/${workflowCode}/drafts`, {
     method: 'POST',
     headers: {
@@ -456,12 +463,14 @@ export async function saveWorkflowDraft(
       version: payload.version,
       definition: JSON.stringify(payload.definition),
       entry_rule: JSON.stringify(payload.entryRule),
-      editor_meta: JSON.stringify({
-        layout_engine: 'reactflow',
-        viewport: { x: 0, y: 0, zoom: 0.92 },
-        readonly: false,
-        last_saved_by: payload.currentUserId,
-      }),
+      editor_meta: JSON.stringify(
+        editorMetaFromDefinition || {
+          layout_engine: 'reactflow',
+          viewport: { x: 0, y: 0, zoom: 0.92 },
+          readonly: false,
+          last_saved_by: payload.currentUserId,
+        }
+      ),
       config: JSON.stringify(payload.workflowConfig),
     }),
   })

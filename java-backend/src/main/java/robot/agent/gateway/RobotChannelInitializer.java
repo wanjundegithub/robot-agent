@@ -9,6 +9,7 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolConfig;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,10 +38,15 @@ public class RobotChannelInitializer extends ChannelInitializer<Channel> {
 
     @Override
     protected void initChannel(Channel channel) {
+        WebSocketServerProtocolConfig webSocketConfig = WebSocketServerProtocolConfig.newBuilder()
+                .websocketPath("/ws/robot")
+                .allowExtensions(true)
+                .checkStartsWith(true)
+                .build();
         channel.pipeline()
                 .addLast(new HttpServerCodec())
                 .addLast(new HttpObjectAggregator(65536))
-                .addLast(new WebSocketServerProtocolHandler("/ws/robot", null, true))
+                .addLast(new WebSocketServerProtocolHandler(webSocketConfig))
                 .addLast(new GatewayFrameHandler(objectMapper, gatewayHub, gatewayActionService));
     }
 

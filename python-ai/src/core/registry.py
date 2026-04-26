@@ -1,9 +1,11 @@
 import asyncio
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from .context import ExecutionContext
 from .protection import runtime_protection_manager
 from .runtime import ExecutionRuntime
+from .workflow_registry import get_workflow
 
 
 class ExecutionRegistry:
@@ -25,6 +27,9 @@ class ExecutionRegistry:
                     if existing_runtime:
                         return existing_runtime
             if execution_id in self._executions:
+                existing_runtime = self._executions.get(execution_id)
+                if existing_runtime:
+                    return existing_runtime
                 raise ValueError(f"Execution already exists: {execution_id}")
 
             active_count = sum(
@@ -43,7 +48,10 @@ class ExecutionRegistry:
                 catalog = payload.get("workflow_catalog", {}) or {}
                 workflow = catalog.get(f"{workflow_code}@{workflow_version}") or {}
             if not workflow:
+                workflow = get_workflow(workflow_code, workflow_version) or {}
+            if not workflow:
                 raise ValueError(f"Workflow definition missing: {workflow_code}@{workflow_version}")
+            workflow = self._normalize_workflow_definition(workflow)
 
             provider_configs = {
                 str(item.get("provider_code")): item
@@ -100,3 +108,31 @@ class ExecutionRegistry:
             raise ValueError(f"Execution not found: {execution_id}")
         runtime.resume(form_data)
         return runtime
+
+    def _normalize_workflow_definition(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(workflow, dict):
+            return workflow
+        if "graphs" not in workflow or "main_graph_id" not in workflow:
+            return workflow
+
+        normalized = deepcopy(workflow)
+        graphs = normalized.get("graphs", {})
+        if not isinstance(graphs, dict):
+            return normalized
+
+        for graph in graphs.values():
+            if not isinstance(graph, dict):
+                continue
+            nodes = graph.get("nodes", {})
+            if not isinstance(nodes, dict):
+                continue
+            for node in nodes.values():
+                if not isinstance(node, dict):
+                    continue
+                node_type = str(node.get("type", "")).strip().lower()
+                if node_type == "coordinate":
+                    node["type"] = "coordinator"
+                elif node_type == "subflow":
+                    node["type"] = "sub_agent"
+
+        return normalized

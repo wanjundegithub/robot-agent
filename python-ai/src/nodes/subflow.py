@@ -6,14 +6,29 @@ from .base import BaseNode
 
 class SubflowNode(BaseNode):
     def __init__(self, node_id: str, data: Dict[str, Any]):
-        super().__init__(node_id, "subflow")
+        super().__init__(node_id, str(data.get("type", "subflow")))
         config = data.get("config", {})
+        self.subgraph_id = config.get("subgraph_id")
         self.subflow_code = config.get("subflow_code")
         self.subflow_version = config.get("subflow_version")
         self.input_mapping = config.get("input_mapping", data.get("input_mapping", {}))
         self.output_mapping = config.get("output_mapping", data.get("output_mapping", {}))
 
     async def execute(self, context) -> Dict[str, Any]:
+        if self.subgraph_id:
+            input_variables = self.resolve_input_mapping(self.input_mapping, context)
+            return self.prepare_output({
+                "status": "completed",
+                "enter_subgraph": {
+                    "graph_id": self.subgraph_id,
+                    "input_variables": input_variables,
+                    "output_mapping": dict(self.output_mapping),
+                },
+                "output": {
+                    "subgraph_id": self.subgraph_id,
+                },
+            })
+
         input_variables = self.resolve_input_mapping(self.input_mapping, context)
         if not input_variables:
             input_variables = dict(context.execution_variables)

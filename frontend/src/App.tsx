@@ -24,6 +24,7 @@ import type {
   SendMessageResponse,
   SocketState,
   WebSocketEnvelope,
+  WorkflowDesignerDefinitionV2,
   WorkflowEditorSelection,
   WorkflowSummary,
 } from './types'
@@ -32,9 +33,14 @@ import type { OrchestratorHandle, WorkflowSidebarState, WorkflowVersionMutation 
 interface WorkflowDraftState {
   workflowCode: string
   workflowVersion: string
-  definition: Record<string, unknown>
+  definition: WorkflowDesignerDefinitionV2
   entryRule: Record<string, unknown>
   workflowConfig: Record<string, unknown>
+}
+
+interface ChatWorkflowBinding {
+  workflowCode: string
+  workflowVersion: string
 }
 
 type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'capability-center'
@@ -113,6 +119,7 @@ const App: React.FC = () => {
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraftState | null>(null)
   const [publishedWorkflowOptions, setPublishedWorkflowOptions] = useState<WorkflowSummary[]>([])
   const [selectedPublishedWorkflowCode, setSelectedPublishedWorkflowCode] = useState('')
+  const [chatWorkflowBinding, setChatWorkflowBinding] = useState<ChatWorkflowBinding | null>(null)
   const [workflowSidebarState, setWorkflowSidebarState] = useState<WorkflowSidebarState | null>(null)
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
   const [workflowNameInput, setWorkflowNameInput] = useState('')
@@ -134,6 +141,10 @@ const App: React.FC = () => {
       setSelectedPublishedWorkflowCode((current) =>
         filteredItems.some((item) => item.workflowCode === current) ? current : ''
       )
+      setChatWorkflowBinding((current) => {
+        if (!current) return null
+        return filteredItems.some((item) => item.workflowCode === current.workflowCode) ? current : null
+      })
     } catch (error) {
       console.error('Failed to load published workflow options:', error)
     }
@@ -872,9 +883,13 @@ const App: React.FC = () => {
       const selectedPublishedWorkflow = publishedWorkflowOptions.find(
         (item) => item.workflowCode === selectedPublishedWorkflowCode
       )
+      const linkedBinding =
+        chatWorkflowBinding && chatWorkflowBinding.workflowCode === selectedPublishedWorkflowCode
+          ? chatWorkflowBinding
+          : null
       const boundWorkflowId = selectedPublishedWorkflow?.id
-      const boundWorkflowCode = selectedPublishedWorkflow?.workflowCode
-      const boundWorkflowVersion = selectedPublishedWorkflow?.currentVersion
+      const boundWorkflowCode = selectedPublishedWorkflow?.workflowCode || linkedBinding?.workflowCode
+      const boundWorkflowVersion = linkedBinding?.workflowVersion || selectedPublishedWorkflow?.currentVersion
 
       const response = (await sendGatewayAction('chat.send', {
         session_id: activeSessionId,
@@ -1101,6 +1116,37 @@ const App: React.FC = () => {
     setActivePage(page)
   }
 
+  const handleChatWorkflowSelect = (workflowCode: string) => {
+    setSelectedPublishedWorkflowCode(workflowCode)
+    if (!workflowCode) {
+      setChatWorkflowBinding(null)
+      return
+    }
+    const selected = publishedWorkflowOptions.find((item) => item.workflowCode === workflowCode)
+    if (selected?.currentVersion) {
+      setChatWorkflowBinding({
+        workflowCode: selected.workflowCode,
+        workflowVersion: selected.currentVersion,
+      })
+      return
+    }
+    setChatWorkflowBinding(null)
+  }
+
+  const handleLinkWorkflowToChat = () => {
+    const workflowCode = workflowSidebarState?.workflowCode || workflowDraft?.workflowCode
+    const workflowVersion = workflowSidebarState?.publishedVersion
+    if (!workflowCode || !workflowVersion) {
+      return
+    }
+    setSelectedPublishedWorkflowCode(workflowCode)
+    setChatWorkflowBinding({
+      workflowCode,
+      workflowVersion,
+    })
+    navigateToPage('chat')
+  }
+
   const renderPromptCards = () => (
     <>
       {pendingSwitch && (
@@ -1211,8 +1257,8 @@ const App: React.FC = () => {
   const renderPageContent = () => {
     if (activePage === 'workflow') {
       return (
-        <section className="page-grid page-grid-orchestrator">
-          <div className="page-stack">
+        <section className="page-grid page-grid-workflow" data-testid="workflow-page-layout">
+          <div className="page-stack min-w-0" data-testid="workflow-page-main">
             <Orchestrator
               ref={orchestratorRef}
               currentUserId={currentUserId}
@@ -1222,20 +1268,20 @@ const App: React.FC = () => {
               onWorkflowVersionMutation={setWorkflowVersionMutation}
             />
           </div>
-          <div className="page-stack">
+          <div className="page-stack min-w-0">
             <div className="panel-card">
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">工作流设置</div>
-                  <div className="text-xs text-slate-500">在此面板中保存、发布并校验工作流。</div>
+                  <div className="panel-title">工作流信息</div>
+                  <div className="text-xs text-slate-500">工作流页只保留名称维护与版本发布，已去掉草稿操作。</div>
                 </div>
                 {workflowSidebarState?.workflowId && (
                   <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
-                    ID {workflowSidebarState.workflowId}
+                    编号 {workflowSidebarState.workflowId}
                   </div>
                 )}
               </div>
-              <div className="panel-body space-y-3">
+              <div className="space-y-3">
                 <input
                   value={workflowNameInput}
                   onChange={(event) => {
@@ -1244,57 +1290,39 @@ const App: React.FC = () => {
                     orchestratorRef.current?.setWorkflowName(nextValue)
                   }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  data-testid="workflow-name-input"
                   placeholder="工作流名称"
                 />
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <button className="prompt-secondary" type="button" onClick={() => void orchestratorRef.current?.validateDraft()}>
-                    校验
-                  </button>
-                  <button
-                    className="prompt-secondary"
-                    type="button"
-                    onClick={() => void orchestratorRef.current?.saveDraft()}
-                    disabled={workflowSidebarState?.isSaving}
-                  >
-                    {workflowSidebarState?.isSaving ? '保存中...' : '保存草稿'}
-                  </button>
-                  <button
-                    className="prompt-primary"
-                    type="button"
-                    onClick={() => void orchestratorRef.current?.publish()}
-                    disabled={workflowSidebarState?.isPublishing}
-                  >
-                    {workflowSidebarState?.isPublishing ? '发布中...' : '发布版本'}
-                  </button>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
-                  <div>草稿版本：{workflowSidebarState?.draftVersion || 'draft'}</div>
-                  <div>当前编码：{workflowSidebarState?.workflowCode || '保存后自动生成'}</div>
+                <button
+                  className="prompt-primary w-full"
+                  type="button"
+                  onClick={() => void orchestratorRef.current?.publish()}
+                  disabled={workflowSidebarState?.isPublishing}
+                  data-testid="workflow-publish"
+                >
+                  {workflowSidebarState?.isPublishing ? '发布中...' : '发布版本'}
+                </button>
+                <button
+                  className="prompt-secondary w-full"
+                  type="button"
+                  onClick={handleLinkWorkflowToChat}
+                  disabled={!workflowSidebarState?.workflowCode || !workflowSidebarState?.publishedVersion}
+                  data-testid="workflow-link-chat"
+                >
+                  跳转聊天联调
+                </button>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-500">
                   <div>最新发布：{workflowSidebarState?.publishedVersion || '尚未发布'}</div>
-                  <div className="mt-2 text-slate-400">{workflowSidebarState?.saveStatus || '尚未保存'}</div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">设计检查</div>
-                  <ul className="space-y-1">
-                    {(workflowSidebarState?.summaryRules || []).map((rule) => (
-                      <li key={rule.label} className={`text-sm ${rule.valid ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        {rule.valid ? '通过' : '需处理'} / {rule.label}
-                      </li>
-                    ))}
-                  </ul>
+                  <div>保存状态：{workflowSidebarState?.saveStatus || '尚未保存'}</div>
                   {(workflowSidebarState?.validationIssues?.length || 0) > 0 && (
-                    <div className="mt-3 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                      {workflowSidebarState?.validationIssues.map((issue, index) => (
-                        <div key={`${issue.field}_${index}`} className="text-xs text-amber-700">
-                          {issue.node_id ? `${issue.node_id} / ` : ''}
-                          {issue.field} / {issue.message}
-                        </div>
-                      ))}
+                    <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+                      当前还有 {workflowSidebarState?.validationIssues.length || 0} 项待处理问题
                     </div>
                   )}
                 </div>
               </div>
             </div>
+
             <WorkflowPanel
               currentUserId={currentUserId}
               workflowCode={workflowSidebarState?.workflowCode || workflowDraft?.workflowCode}
@@ -1381,8 +1409,9 @@ const App: React.FC = () => {
               <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
                 <select
                   value={selectedPublishedWorkflowCode}
-                  onChange={(event) => setSelectedPublishedWorkflowCode(event.target.value)}
+                  onChange={(event) => handleChatWorkflowSelect(event.target.value)}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  data-testid="chat-workflow-select"
                 >
                   <option value="">不固定工作流</option>
                   {publishedWorkflowOptions.map((workflow) => (
@@ -1391,11 +1420,15 @@ const App: React.FC = () => {
                     </option>
                   ))}
                 </select>
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500" data-testid="chat-workflow-target">
                   当前目标：
                   {' '}
                   {selectedPublishedWorkflowCode
-                    ? `${selectedPublishedWorkflowCode} / ${publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion || '未知版本'}`
+                    ? `${selectedPublishedWorkflowCode} / ${
+                      (chatWorkflowBinding?.workflowCode === selectedPublishedWorkflowCode
+                        ? chatWorkflowBinding.workflowVersion
+                        : publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion) || '未知版本'
+                    }`
                     : '由路由自动决定'}
                 </div>
               </div>
@@ -1403,7 +1436,15 @@ const App: React.FC = () => {
             <MessageList messages={messages} isLoading={isLoading} />
             <div className="panel-footer">
               <div className="mb-2 text-xs text-slate-400">
-                用户：{displayUserLabel(currentUserId)} / 固定工作流：{selectedPublishedWorkflowCode || '无'} / 已启用流式输出
+                用户：{displayUserLabel(currentUserId)} / 固定工作流：
+                {selectedPublishedWorkflowCode
+                  ? `${selectedPublishedWorkflowCode}@${
+                    (chatWorkflowBinding?.workflowCode === selectedPublishedWorkflowCode
+                      ? chatWorkflowBinding.workflowVersion
+                      : publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion) || 'latest'
+                  }`
+                  : '无'}
+                {' '} / 已启用流式输出
               </div>
               <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
             </div>

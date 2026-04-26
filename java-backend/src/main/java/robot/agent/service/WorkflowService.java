@@ -25,6 +25,12 @@ import java.util.stream.Collectors;
 @Transactional
 public class WorkflowService {
 
+    private static final String WORKFLOW_SCHEMA_V2 = "workflow-designer/v2";
+    private static final String DEFAULT_MAIN_GRAPH_ID = "main";
+    private static final Set<String> SUPPORTED_NODE_TYPES = Set.of(
+            "start", "coordinator", "sub_agent", "tool", "message", "function", "end"
+    );
+
     private final WorkflowRepository workflowRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
     private final ObjectMapper objectMapper;
@@ -161,7 +167,7 @@ public class WorkflowService {
                 .orElseGet(WorkflowVersion::new);
         version.setWorkflowCode(workflowCode);
         version.setVersion(request.getVersion());
-        version.setDefinition(request.getDefinition());
+        version.setDefinition(normalizeDefinitionJsonForPersist(request.getDefinition()));
         version.setEntryRule(request.getEntryRule());
         version.setEditorMeta(request.getEditorMeta());
         version.setConfig(request.getConfig());
@@ -264,6 +270,80 @@ public class WorkflowService {
     }
 
     public List<Map<String, Object>> validateWorkflowDefinition(String definitionJson, String configJson) {
+        Map<String, Object> rawDefinition = parseJsonObject(definitionJson);
+        List<Map<String, Object>> issues = new ArrayList<>();
+        String rawSchemaVersion = stringValue(rawDefinition.get("schema_version"));
+        if (rawSchemaVersion != null && !WORKFLOW_SCHEMA_V2.equals(rawSchemaVersion)) {
+            issues.add(issue(null, "schema_version", "schema_version 不受支持: " + rawSchemaVersion));
+            return issues;
+        }
+
+        Map<String, Object> definition = normalizeWorkflowDefinition(rawDefinition);
+        Map<String, Object> graphs = asMap(definition.get("graphs"));
+        if (graphs.isEmpty()) {
+            issues.add(issue(null, "graphs", "至少需要一个图定义"));
+            return issues;
+        }
+
+        String mainGraphId = stringValue(definition.get("main_graph_id"));
+        if (mainGraphId == null) {
+            issues.add(issue(null, "main_graph_id", "缺少主图标识"));
+        } else if (!graphs.containsKey(mainGraphId)) {
+            issues.add(issue(null, "main_graph_id", "main_graph_id 未引用有效图"));
+        }
+
+        long mainGraphCount = graphs.values().stream()
+                .map(this::asMap)
+                .map(graph -> stringValue(graph.get("graph_type")))
+                .filter("main"::equalsIgnoreCase)
+                .count();
+        if (mainGraphCount != 1) {
+            issues.add(issue(null, "graphs.graph_type", "工作流必须且只能有一个 main 图"));
+        }
+        if (mainGraphId != null) {
+            Map<String, Object> mainGraph = asMap(graphs.get(mainGraphId));
+            String mainGraphType = stringValue(mainGraph.get("graph_type"));
+            if (mainGraphType != null && !"main".equalsIgnoreCase(mainGraphType)) {
+                issues.add(issue(null, "main_graph_id", "main_graph_id 指向的图必须是 main"));
+            }
+        }
+
+        for (Map.Entry<String, Object> graphEntry : graphs.entrySet()) {
+            String graphId = graphEntry.getKey();
+            Map<String, Object> graph = asMap(graphEntry.getValue());
+            boolean subflowGraph = isSubflowGraph(graphId, graph, mainGraphId);
+            validateGraph(graphId, graph, graphs, subflowGraph, issues);
+        }
+        return issues;
+    }
+
+    private List<Map<String, Object>> validateWorkflowDefinitionLegacyCompat(String definitionJson, String configJson) {
+        Map<String, Object> definition = normalizeWorkflowDefinition(parseJsonObject(definitionJson));
+        List<Map<String, Object>> issues = new ArrayList<>();
+
+        Map<String, Object> graphs = asMap(definition.get("graphs"));
+        if (graphs.isEmpty()) {
+            issues.add(issue(null, "graphs", "至少需要一个图定义"));
+            return issues;
+        }
+
+        String mainGraphId = stringValue(definition.get("main_graph_id"));
+        if (mainGraphId == null) {
+            issues.add(issue(null, "main_graph_id", "缺少主图标识"));
+        } else if (!graphs.containsKey(mainGraphId)) {
+            issues.add(issue(null, "main_graph_id", "main_graph_id 未引用有效图"));
+        }
+
+        for (Map.Entry<String, Object> graphEntry : graphs.entrySet()) {
+            String graphId = graphEntry.getKey();
+            Map<String, Object> graph = asMap(graphEntry.getValue());
+            boolean subflowGraph = isSubflowGraph(graphId, graph, mainGraphId);
+            validateGraph(graphId, graph, graphs, subflowGraph, issues);
+        }
+        return issues;
+    }
+
+    private List<Map<String, Object>> validateWorkflowDefinitionLegacy(String definitionJson, String configJson) {
         Map<String, Object> definition = parseJsonObject(definitionJson);
         List<Map<String, Object>> issues = new ArrayList<>();
 
@@ -341,7 +421,7 @@ public class WorkflowService {
 
         String normalizedContent = content == null ? "" : content.toLowerCase(Locale.ROOT);
         List<Map<String, Object>> workflowDefinitions = versions.stream()
-                .map(version -> parseJsonObject(version.getDefinition()))
+                .map(version -> normalizeWorkflowDefinition(parseJsonObject(version.getDefinition())))
                 .toList();
         String routingProfileCode = modelConfigService.resolveRoutingProfileCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingProfileCode);
@@ -479,12 +559,26 @@ public class WorkflowService {
 
     public RuntimeExecutionBundle buildRuntimeExecutionBundle(String workflowCode, String version) {
         WorkflowVersion workflowVersion = getWorkflowVersionEntity(workflowCode, version);
+        Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(parseJsonObject(workflowVersion.getDefinition()));
         return buildRuntimeExecutionBundle(
                 workflowCode,
                 version,
-                parseJsonObject(workflowVersion.getDefinition()),
+                normalizedDefinition,
                 parseJsonObject(workflowVersion.getEntryRule()),
                 parseJsonObject(workflowVersion.getConfig())
+        );
+    }
+
+    public RuntimeExecutionBundle buildRuntimeExecutionBundleForExplicitExecution(String workflowCode, String version) {
+        WorkflowVersion workflowVersion = getWorkflowVersionEntity(workflowCode, version);
+        Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(parseJsonObject(workflowVersion.getDefinition()));
+        return buildRuntimeExecutionBundleInternal(
+                workflowCode,
+                version,
+                normalizedDefinition,
+                parseJsonObject(workflowVersion.getEntryRule()),
+                parseJsonObject(workflowVersion.getConfig()),
+                false
         );
     }
 
@@ -495,13 +589,34 @@ public class WorkflowService {
             Map<String, Object> entryRule,
             Map<String, Object> workflowConfig
     ) {
-        Map<String, Map<String, Object>> workflowCatalog = buildWorkflowCatalog();
-        workflowCatalog.put(workflowCode + "@" + version, workflowDefinition);
+        return buildRuntimeExecutionBundleInternal(
+                workflowCode,
+                version,
+                workflowDefinition,
+                entryRule,
+                workflowConfig,
+                true
+        );
+    }
+
+    private RuntimeExecutionBundle buildRuntimeExecutionBundleInternal(
+            String workflowCode,
+            String version,
+            Map<String, Object> workflowDefinition,
+            Map<String, Object> entryRule,
+            Map<String, Object> workflowConfig,
+            boolean includePublishedCatalog
+    ) {
+        Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(workflowDefinition);
+        Map<String, Map<String, Object>> workflowCatalog = includePublishedCatalog
+                ? buildWorkflowCatalog()
+                : new LinkedHashMap<>();
+        workflowCatalog.put(workflowCode + "@" + version, normalizedDefinition);
         Collection<Map<String, Object>> workflowDefinitions = workflowCatalog.values();
         String routingProfileCode = modelConfigService.resolveRoutingProfileCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingProfileCode);
         return new RuntimeExecutionBundle(
-                workflowDefinition,
+                normalizedDefinition,
                 entryRule,
                 workflowConfig,
                 workflowCatalog,
@@ -517,6 +632,9 @@ public class WorkflowService {
             String routingProfileCode,
             ModelConfigService.RuntimeModelBundle runtimeBundle
     ) {
+        if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelProfiles().isEmpty()) {
+            return fallbackModelIntent(versions, normalizedContent, "model_config_unavailable");
+        }
         List<Map<String, Object>> candidates = versions.stream()
                 .map(version -> Map.of(
                         "workflow_code", version.getWorkflowCode(),
@@ -524,21 +642,36 @@ public class WorkflowService {
                         "entry_rule", parseJsonObject(version.getEntryRule())
                 ))
                 .toList();
-        Map<String, Object> response = pythonClient.classifyIntent(Map.of(
-                "message", normalizedContent,
-                "intent_profile_code", routingProfileCode,
-                "candidate_workflows", candidates,
-                "provider_configs", runtimeBundle.providerConfigs(),
-                "model_profiles", runtimeBundle.modelProfiles()
-        )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
+        Map<String, Object> response;
+        try {
+            response = pythonClient.classifyIntent(Map.of(
+                    "message", normalizedContent,
+                    "intent_profile_code", routingProfileCode,
+                    "candidate_workflows", candidates,
+                    "provider_configs", runtimeBundle.providerConfigs(),
+                    "model_profiles", runtimeBundle.modelProfiles()
+            )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
+        } catch (RuntimeException exception) {
+            return fallbackModelIntent(versions, normalizedContent, "intent_classification_fallback");
+        }
         String intentCode = stringValue(response.get("intent_code"));
         String workflowCode = stringValue(response.get("workflow_code"));
         double confidence = toDouble(response.get("confidence"), 0.0d);
         String reason = stringValue(response.get("reason"));
         if (workflowCode == null) {
-            throw new RuntimeException("Intent classification returned no workflow_code");
+            return fallbackModelIntent(versions, normalizedContent, "missing_workflow_code");
         }
         return new ModelIntent(intentCode == null ? workflowCode : intentCode, workflowCode, confidence, reason);
+    }
+
+    private ModelIntent fallbackModelIntent(List<WorkflowVersion> versions, String normalizedContent, String reason) {
+        WorkflowVersion preferred = versions.stream()
+                .filter(version -> "general_query".equals(version.getWorkflowCode()))
+                .findFirst()
+                .orElse(versions.get(0));
+        String intentCode = preferred.getWorkflowCode();
+        double confidence = normalizedContent.isBlank() ? 0.55d : 0.6d;
+        return new ModelIntent(intentCode, preferred.getWorkflowCode(), confidence, reason);
     }
 
     private boolean containsAny(String normalizedContent, String... keywords) {
@@ -610,7 +743,10 @@ public class WorkflowService {
         List<WorkflowVersion> versions = workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED);
         Map<String, Map<String, Object>> catalog = new LinkedHashMap<>();
         for (WorkflowVersion version : versions) {
-            catalog.put(version.getWorkflowCode() + "@" + version.getVersion(), parseJsonObject(version.getDefinition()));
+            catalog.put(
+                    version.getWorkflowCode() + "@" + version.getVersion(),
+                    normalizeWorkflowDefinition(parseJsonObject(version.getDefinition()))
+            );
         }
         return catalog;
     }
@@ -625,6 +761,406 @@ public class WorkflowService {
         } catch (Exception exception) {
             return new LinkedHashMap<>();
         }
+    }
+
+    private String normalizeDefinitionJsonForPersist(String definitionJson) {
+        Map<String, Object> parsed = parseJsonObjectStrict(definitionJson);
+        Map<String, Object> normalized = normalizeWorkflowDefinition(parsed);
+        return writeJsonObject(normalized);
+    }
+
+    private Map<String, Object> parseJsonObjectStrict(String json) {
+        if (json == null || json.isBlank()) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            JsonNode node = readJsonObject(json);
+            return objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception exception) {
+            throw new RuntimeException("Workflow definition JSON is invalid");
+        }
+    }
+
+    private String writeJsonObject(Map<String, Object> value) {
+        try {
+            return objectMapper.writeValueAsString(value == null ? new LinkedHashMap<>() : value);
+        } catch (Exception exception) {
+            throw new RuntimeException("Workflow definition serialization failed");
+        }
+    }
+
+    private Map<String, Object> normalizeWorkflowDefinition(Map<String, Object> rawDefinition) {
+        Map<String, Object> source = deepCopyMap(rawDefinition);
+        String schemaVersion = stringValue(source.get("schema_version"));
+        if (schemaVersion != null && !WORKFLOW_SCHEMA_V2.equals(schemaVersion)) {
+            throw new RuntimeException("Unsupported schema_version: " + schemaVersion);
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+
+        Map<String, Object> graphs = normalizeGraphs(source);
+        String mainGraphId = firstNonBlank(stringValue(source.get("main_graph_id")));
+        if (mainGraphId == null || !graphs.containsKey(mainGraphId)) {
+            mainGraphId = graphs.containsKey(DEFAULT_MAIN_GRAPH_ID)
+                    ? DEFAULT_MAIN_GRAPH_ID
+                    : graphs.keySet().stream().findFirst().orElse(DEFAULT_MAIN_GRAPH_ID);
+        }
+
+        Map<String, Object> variables = asMap(source.get("variables"));
+        Map<String, Object> modelBindings = asMap(source.get("model_bindings"));
+        Map<String, Object> editorMeta = asMap(source.get("editor_meta"));
+        Map<String, Object> legacyConfig = asMap(source.get("config"));
+
+        if (variables.isEmpty()
+                && (legacyConfig.get("global_variables") instanceof List<?> || legacyConfig.get("temporary_variables") instanceof List<?>)) {
+            variables = new LinkedHashMap<>();
+            variables.put("global", legacyConfig.getOrDefault("global_variables", List.of()));
+            variables.put("temporary", legacyConfig.getOrDefault("temporary_variables", List.of()));
+        }
+        if (modelBindings.isEmpty()) {
+            modelBindings = asMap(legacyConfig.get("llm_defaults"));
+        }
+        if (editorMeta.isEmpty()) {
+            editorMeta = asMap(source.get("meta"));
+        }
+
+        normalized.put("schema_version", WORKFLOW_SCHEMA_V2);
+        normalized.put("main_graph_id", mainGraphId);
+        normalized.put("graphs", graphs);
+        normalized.put("variables", variables);
+        normalized.put("model_bindings", modelBindings);
+        normalized.put("editor_meta", editorMeta);
+        normalized.put("workflow_code", source.get("workflow_code"));
+        normalized.put("workflow_name", source.get("workflow_name"));
+        if (!legacyConfig.isEmpty()) {
+            normalized.put("config", legacyConfig);
+        }
+        return normalized;
+    }
+
+    private Map<String, Object> normalizeGraphs(Map<String, Object> source) {
+        Map<String, Object> rawGraphs = asMap(source.get("graphs"));
+        Map<String, Object> normalizedGraphs = new LinkedHashMap<>();
+        if (!rawGraphs.isEmpty()) {
+            for (Map.Entry<String, Object> graphEntry : rawGraphs.entrySet()) {
+                String graphId = graphEntry.getKey();
+                Map<String, Object> rawGraph = asMap(graphEntry.getValue());
+                boolean isMain = DEFAULT_MAIN_GRAPH_ID.equals(graphId)
+                        || graphId.equals(stringValue(source.get("main_graph_id")));
+                normalizedGraphs.put(graphId, normalizeGraph(graphId, rawGraph, source, isMain));
+            }
+            return normalizedGraphs;
+        }
+
+        Map<String, Object> legacyGraph = new LinkedHashMap<>();
+        legacyGraph.put("graph_id", DEFAULT_MAIN_GRAPH_ID);
+        legacyGraph.put("graph_type", "main");
+        legacyGraph.put("entry_node_id", firstNonBlank(
+                stringValue(source.get("entry_node_id")),
+                stringValue(source.get("entry")),
+                "start"
+        ));
+        legacyGraph.put("nodes", source.getOrDefault("nodes", Map.of()));
+        legacyGraph.put("edges", normalizeEdges(source.get("edges"), source.get("transitions")));
+        normalizedGraphs.put(DEFAULT_MAIN_GRAPH_ID, normalizeGraph(DEFAULT_MAIN_GRAPH_ID, legacyGraph, source, true));
+        return normalizedGraphs;
+    }
+
+    private Map<String, Object> normalizeGraph(
+            String graphId,
+            Map<String, Object> rawGraph,
+            Map<String, Object> rootDefinition,
+            boolean mainGraph
+    ) {
+        Map<String, Object> graph = new LinkedHashMap<>();
+        graph.put("graph_id", firstNonBlank(stringValue(rawGraph.get("graph_id")), graphId));
+        graph.put("graph_type", firstNonBlank(stringValue(rawGraph.get("graph_type")), mainGraph ? "main" : "subflow"));
+        graph.put("entry_node_id", firstNonBlank(
+                stringValue(rawGraph.get("entry_node_id")),
+                stringValue(rawGraph.get("entry")),
+                mainGraph ? firstNonBlank(stringValue(rootDefinition.get("entry_node_id")), stringValue(rootDefinition.get("entry"))) : null
+        ));
+        graph.put("nodes", normalizeNodes(asMap(rawGraph.get("nodes"))));
+        graph.put("edges", normalizeEdges(rawGraph.get("edges"), rawGraph.get("transitions")));
+        return graph;
+    }
+
+    private Map<String, Object> normalizeNodes(Map<String, Object> rawNodes) {
+        Map<String, Object> normalizedNodes = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> nodeEntry : rawNodes.entrySet()) {
+            String nodeId = nodeEntry.getKey();
+            Map<String, Object> rawNode = asMap(nodeEntry.getValue());
+            Map<String, Object> node = new LinkedHashMap<>(rawNode);
+            String normalizedType = normalizeNodeType(stringValue(rawNode.get("type")));
+            if (normalizedType != null) {
+                node.put("type", normalizedType);
+            }
+            node.put("id", firstNonBlank(stringValue(rawNode.get("id")), nodeId));
+            Map<String, Object> config = new LinkedHashMap<>(asMap(rawNode.get("config")));
+            if ("sub_agent".equals(normalizedType)) {
+                String subgraphId = resolveSubgraphId(config);
+                if (subgraphId != null) {
+                    config.put("subgraph_id", subgraphId);
+                }
+            }
+            node.put("config", config);
+            normalizedNodes.put(nodeId, node);
+        }
+        return normalizedNodes;
+    }
+
+    private List<Map<String, Object>> normalizeEdges(Object rawEdges, Object rawTransitions) {
+        List<Map<String, Object>> edges = asListOfMaps(rawEdges);
+        if (edges.isEmpty()) {
+            return convertTransitionsToEdges(asMap(rawTransitions));
+        }
+        List<Map<String, Object>> normalizedEdges = new ArrayList<>();
+        int index = 0;
+        for (Map<String, Object> edge : edges) {
+            String source = firstNonBlank(stringValue(edge.get("source")), stringValue(edge.get("from")));
+            String target = firstNonBlank(stringValue(edge.get("target")), stringValue(edge.get("to")));
+            if (source == null || target == null) {
+                continue;
+            }
+            Map<String, Object> normalizedEdge = new LinkedHashMap<>(edge);
+            normalizedEdge.put("id", firstNonBlank(stringValue(edge.get("id")), source + "_to_" + target + "_" + (++index)));
+            normalizedEdge.put("source", source);
+            normalizedEdge.put("target", target);
+            normalizedEdges.add(normalizedEdge);
+        }
+        return normalizedEdges;
+    }
+
+    private List<Map<String, Object>> convertTransitionsToEdges(Map<String, Object> transitions) {
+        List<Map<String, Object>> edges = new ArrayList<>();
+        int[] index = new int[]{0};
+        for (Map.Entry<String, Object> transitionEntry : transitions.entrySet()) {
+            appendTransitionTargets(edges, transitionEntry.getKey(), transitionEntry.getValue(), index);
+        }
+        return edges;
+    }
+
+    private void appendTransitionTargets(
+            List<Map<String, Object>> edges,
+            String source,
+            Object rawTarget,
+            int[] index
+    ) {
+        if (rawTarget instanceof Map<?, ?> mapTarget) {
+            for (Object branchTarget : mapTarget.values()) {
+                appendTransitionTargets(edges, source, branchTarget, index);
+            }
+            return;
+        }
+        if (rawTarget instanceof List<?> listTarget) {
+            for (Object targetItem : listTarget) {
+                appendTransitionTargets(edges, source, targetItem, index);
+            }
+            return;
+        }
+
+        String target = stringValue(rawTarget);
+        if (source == null || source.isBlank() || target == null || target.isBlank()) {
+            return;
+        }
+        Map<String, Object> edge = new LinkedHashMap<>();
+        edge.put("id", source + "_to_" + target + "_" + (++index[0]));
+        edge.put("source", source);
+        edge.put("target", target);
+        edges.add(edge);
+    }
+
+    private void validateGraph(
+            String graphId,
+            Map<String, Object> graph,
+            Map<String, Object> allGraphs,
+            boolean subflowGraph,
+            List<Map<String, Object>> issues
+    ) {
+        Map<String, Object> nodes = asMap(graph.get("nodes"));
+        if (nodes.isEmpty()) {
+            issues.add(issue(null, "graphs." + graphId + ".nodes", "图 " + graphId + " 至少需要一个节点"));
+            return;
+        }
+
+        String entryNodeId = firstNonBlank(stringValue(graph.get("entry_node_id")), stringValue(graph.get("entry")));
+        if (entryNodeId == null) {
+            issues.add(issue(null, "graphs." + graphId + ".entry_node_id", "图 " + graphId + " 缺少入口节点"));
+        } else if (!nodes.containsKey(entryNodeId)) {
+            issues.add(issue(entryNodeId, "graphs." + graphId + ".entry_node_id", "图 " + graphId + " 的入口节点不存在"));
+        }
+
+        List<Map<String, Object>> edges = asListOfMaps(graph.get("edges"));
+        Map<String, Long> outgoingCount = edges.stream()
+                .map(edge -> stringValue(edge.get("source")))
+                .filter(Objects::nonNull)
+                .collect(Collectors.groupingBy(source -> source, Collectors.counting()));
+
+        for (Map<String, Object> edge : edges) {
+            String source = stringValue(edge.get("source"));
+            String target = stringValue(edge.get("target"));
+            if (source == null || target == null) {
+                issues.add(issue(null, "graphs." + graphId + ".edges", "图 " + graphId + " 包含无效边定义"));
+                continue;
+            }
+            if (!nodes.containsKey(source)) {
+                issues.add(issue(source, "graphs." + graphId + ".edges.source", "图 " + graphId + " 的边 source 不存在"));
+            }
+            if (!nodes.containsKey(target)) {
+                issues.add(issue(target, "graphs." + graphId + ".edges.target", "图 " + graphId + " 的边 target 不存在"));
+            }
+        }
+
+        long startCount = nodes.values().stream()
+                .filter(node -> "start".equals(normalizeNodeType(stringValue(asMap(node).get("type")))))
+                .count();
+        long endCount = nodes.values().stream()
+                .filter(node -> "end".equals(normalizeNodeType(stringValue(asMap(node).get("type")))))
+                .count();
+        boolean legacyMainGraph = !subflowGraph && (startCount > 0 || endCount > 0);
+
+        if (subflowGraph || legacyMainGraph) {
+            if (startCount != 1) {
+                issues.add(issue(null, "graphs." + graphId + ".nodes.start", "图 " + graphId + " 必须且只能有一个 start 节点"));
+            }
+            if (endCount != 1) {
+                issues.add(issue(null, "graphs." + graphId + ".nodes.end", "图 " + graphId + " 必须且只能有一个 end 节点"));
+            }
+        } else {
+            long coordinatorCount = nodes.values().stream()
+                    .filter(node -> "coordinator".equals(normalizeNodeType(stringValue(asMap(node).get("type")))))
+                    .count();
+            if (coordinatorCount < 1) {
+                issues.add(issue(null, "graphs." + graphId + ".nodes.coordinator", "主流程至少需要一个 coordinator 节点"));
+            }
+        }
+
+        for (Map.Entry<String, Object> nodeEntry : nodes.entrySet()) {
+            String nodeId = nodeEntry.getKey();
+            Map<String, Object> node = asMap(nodeEntry.getValue());
+            String type = normalizeNodeType(stringValue(node.get("type")));
+            Map<String, Object> nodeConfig = asMap(node.get("config"));
+
+            if (type == null || !SUPPORTED_NODE_TYPES.contains(type)) {
+                issues.add(issue(nodeId, "type", "节点类型不受支持"));
+                continue;
+            }
+
+            if (subflowGraph && "coordinator".equals(type)) {
+                issues.add(issue(nodeId, "type", "子流程中不允许出现 coordinator 节点"));
+            }
+            if (!subflowGraph && !legacyMainGraph && !Set.of("coordinator", "sub_agent").contains(type)) {
+                issues.add(issue(nodeId, "type", "主流程只允许 coordinator 或 sub_agent 节点"));
+            }
+
+            long outgoing = outgoingCount.getOrDefault(nodeId, 0L);
+            if (outgoing > 1 && !Set.of("coordinator", "sub_agent").contains(type)) {
+                issues.add(issue(nodeId, "edges", "只有 coordinator 或 sub_agent 节点允许存在多条出边"));
+            }
+
+            if (requiresPrompt(type)
+                    && stringValue(nodeConfig.get("prompt")) == null
+                    && stringValue(nodeConfig.get("user_prompt")) == null) {
+                issues.add(issue(nodeId, "config.prompt", "提示词节点缺少 prompt"));
+            }
+            if ("end".equals(type)) {
+                Object outputFormat = nodeConfig.get("output_format");
+                if (outputFormat != null && !(outputFormat instanceof Map<?, ?>)) {
+                    issues.add(issue(nodeId, "config.output_format", "结束节点缺少输出变量映射"));
+                }
+            }
+            if ("message".equals(type) && stringValue(nodeConfig.get("message_text")) == null) {
+                issues.add(issue(nodeId, "config.message_text", "消息节点缺少固定话术"));
+            }
+            if ("sub_agent".equals(type)) {
+                String subgraphId = resolveSubgraphId(nodeConfig);
+                if (subgraphId == null || !allGraphs.containsKey(subgraphId)) {
+                    issues.add(issue(nodeId, "config.subgraph_id", "sub_agent 节点的 subgraph_id 必须引用已存在的子图"));
+                }
+            }
+            if ("tool".equals(type)) {
+                validateToolNode(nodeId, nodeConfig, issues);
+            }
+        }
+
+        if (!subflowGraph && !legacyMainGraph) {
+            for (Map<String, Object> edge : edges) {
+                String source = stringValue(edge.get("source"));
+                String target = stringValue(edge.get("target"));
+                if (source == null || target == null || !nodes.containsKey(source) || !nodes.containsKey(target)) {
+                    continue;
+                }
+                String sourceType = normalizeNodeType(stringValue(asMap(nodes.get(source)).get("type")));
+                String targetType = normalizeNodeType(stringValue(asMap(nodes.get(target)).get("type")));
+                if (!"coordinator".equals(sourceType) || !"sub_agent".equals(targetType)) {
+                    issues.add(issue(source, "edges", "主流程中只允许 coordinator 连接到 sub_agent"));
+                }
+            }
+        }
+    }
+
+    private boolean isSubflowGraph(String graphId, Map<String, Object> graph, String mainGraphId) {
+        String graphType = stringValue(graph.get("graph_type"));
+        if ("subflow".equalsIgnoreCase(graphType)) {
+            return true;
+        }
+        return mainGraphId != null && !mainGraphId.equals(graphId);
+    }
+
+    private boolean requiresPrompt(String nodeType) {
+        return Set.of("coordinator", "sub_agent", "start", "end").contains(nodeType);
+    }
+
+    private String normalizeNodeType(String rawType) {
+        if (rawType == null) {
+            return null;
+        }
+        String normalized = rawType.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "coordinate" -> "coordinator";
+            case "subflow" -> "sub_agent";
+            default -> normalized;
+        };
+    }
+
+    private String resolveSubgraphId(Map<String, Object> config) {
+        return firstNonBlank(
+                stringValue(config.get("subgraph_id")),
+                stringValue(config.get("subgraphId")),
+                stringValue(config.get("subflow_id")),
+                stringValue(config.get("subflowId"))
+        );
+    }
+
+    private List<Map<String, Object>> asListOfMaps(Object value) {
+        if (!(value instanceof List<?> listValue)) {
+            return new ArrayList<>();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object item : listValue) {
+            if (item instanceof Map<?, ?>) {
+                result.add(asMap(item));
+            }
+        }
+        return result;
+    }
+
+    private String firstNonBlank(String... candidates) {
+        if (candidates == null) {
+            return null;
+        }
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private Map<String, Object> deepCopyMap(Map<String, Object> source) {
+        if (source == null || source.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        return objectMapper.convertValue(source, new TypeReference<Map<String, Object>>() {});
     }
 
     private Map<String, Object> asMap(Object value) {
@@ -687,12 +1223,6 @@ public class WorkflowService {
             case "capability" -> {
                 if (stringValue(nodeConfig.get("group_id")) == null && stringValue(nodeConfig.get("group_code")) == null) {
                     issues.add(issue(nodeId, "config.group_id", "Capability 调用缺少 group_id"));
-                }
-                if (stringValue(nodeConfig.get("group_snapshot_version")) == null) {
-                    issues.add(issue(nodeId, "config.group_snapshot_version", "Capability 调用缺少 group_snapshot_version"));
-                }
-                if (stringValue(nodeConfig.get("capability_type")) == null) {
-                    issues.add(issue(nodeId, "config.capability_type", "Capability 调用缺少 capability_type"));
                 }
                 if (stringValue(nodeConfig.get("capability_code")) == null) {
                     issues.add(issue(nodeId, "config.capability_code", "Capability 调用缺少 capability_code"));

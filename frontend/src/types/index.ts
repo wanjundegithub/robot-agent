@@ -273,6 +273,40 @@ export interface WorkflowEditorSelection {
   version: WorkflowVersionSummary
 }
 
+export interface WorkflowDesignerGraphDefinition {
+  graph_id: string
+  graph_type: 'MAIN' | 'SUBGRAPH' | string
+  entry_node_id: string
+  graph_name?: string
+  nodes: Record<string, unknown>
+  edges: Array<Record<string, unknown>>
+  id?: string
+  name?: string
+  entry?: string
+  transitions?: Record<string, unknown>
+}
+
+export interface WorkflowDesignerDefinitionV2 {
+  schema_version: 'workflow-designer/v2'
+  workflow_code: string
+  workflow_name: string
+  workflow_version: string
+  main_graph_id: string
+  graphs: Record<string, WorkflowDesignerGraphDefinition>
+  variables: {
+    global: unknown[]
+    temporary: unknown[]
+  }
+  model_bindings: {
+    intent_profile_ref: string
+    llm_defaults: {
+      model_profile_ref: string
+      provider_code: string
+    }
+  }
+  editor_meta: Record<string, unknown>
+}
+
 export interface SessionSummary {
   id: string
   workspaceId: number

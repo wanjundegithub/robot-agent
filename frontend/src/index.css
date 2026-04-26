@@ -78,6 +78,10 @@ body {
   grid-template-columns: minmax(0, 2.4fr) minmax(320px, 1.1fr);
 }
 
+.page-grid-workflow {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+}
+
 .page-stack,
 .page-single {
   display: grid;
@@ -231,7 +235,8 @@ body {
   .page-grid,
   .page-grid-wide,
   .page-grid-balanced,
-  .page-grid-orchestrator {
+  .page-grid-orchestrator,
+  .page-grid-workflow {
     grid-template-columns: 1fr;
   }
 

@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .context_assembler import ContextAssembler
 from .costing import budget_alert_evaluator
@@ -15,7 +15,19 @@ from .runtime import ExecutionRuntime
 from .security import InvalidOutputError
 from .state_machine import ExecutionStateMachine, TransitionEvent
 from .telemetry import workflow_telemetry
-from src.nodes import ConditionNode, EndNode, FormNode, KnowledgeNode, LLMNode, MessageNode, StartNode, SubflowNode, ToolNode
+from src.nodes import (
+    ConditionNode,
+    CoordinatorNode,
+    EndNode,
+    FormNode,
+    FunctionNode,
+    KnowledgeNode,
+    LLMNode,
+    MessageNode,
+    StartNode,
+    SubflowNode,
+    ToolNode,
+)
 
 
 class WorkflowScheduler:
@@ -71,6 +83,14 @@ class WorkflowScheduler:
         current_node_id = workflow.get("entry")
 
         try:
+            if self._is_graph_definition_v2(workflow):
+                graph_runtime_metrics = await self._run_graph_runtime_v2(runtime)
+                total_cost = float(graph_runtime_metrics.get("total_cost", 0.0))
+                total_input_tokens = int(graph_runtime_metrics.get("input_tokens", 0))
+                total_output_tokens = int(graph_runtime_metrics.get("output_tokens", 0))
+                models_used = set(graph_runtime_metrics.get("models_used", []))
+                current_node_id = None
+
             while current_node_id:
                 suspend_reason = runtime.consume_suspend_request()
                 if suspend_reason:
@@ -386,9 +406,13 @@ class WorkflowScheduler:
                 context.record_failed_node(context.current_node_id, str(exc))
             state_machine.transition(TransitionEvent.FAIL)
             if context.current_node_id:
+                node_type = self._resolve_node_type(workflow, context.current_node_id, context.current_graph_id)
+            else:
+                node_type = None
+            if node_type:
                 workflow_telemetry.record_node(
                     context.workflow_code,
-                    workflow["nodes"][context.current_node_id]["type"],
+                    node_type,
                     "failed",
                     0,
                 )
@@ -432,13 +456,488 @@ class WorkflowScheduler:
             "trace_id": context.trace_id,
         })
 
+    async def _run_graph_runtime_v2(self, runtime: ExecutionRuntime) -> Dict[str, Any]:
+        context = runtime.context
+        workflow = runtime.workflow
+        total_cost = 0.0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        models_used: set[str] = set()
+        main_graph_id = str(workflow.get("main_graph_id", "")).strip()
+        if not main_graph_id:
+            raise ValueError("workflow_definition v2 requires main_graph_id")
+
+        main_graph = self._get_graph(workflow, main_graph_id)
+        if not main_graph:
+            raise ValueError(f"Main graph not found: {main_graph_id}")
+
+        context.enter_graph(main_graph_id)
+        runtime.emit("graph.entered", {
+            "execution_id": context.execution_id,
+            "session_id": context.session_id,
+            "graph_id": main_graph_id,
+            "parent_graph_id": None,
+            "parent_node_id": None,
+            "trace_id": context.trace_id,
+        })
+
+        current_graph_id = main_graph_id
+        current_node_id = main_graph.get("entry_node_id")
+        if not current_node_id:
+            raise ValueError(f"Graph {main_graph_id} missing entry_node_id")
+
+        while True:
+            suspend_reason = runtime.consume_suspend_request()
+            if suspend_reason:
+                raise ValueError("Suspension is not supported for workflow_definition v2 baseline")
+
+            graph = self._get_graph(workflow, current_graph_id)
+            if not graph:
+                raise ValueError(f"Graph not found: {current_graph_id}")
+            node_def = graph.get("nodes", {}).get(current_node_id)
+            if not node_def:
+                raise ValueError(f"Node not found: {current_graph_id}.{current_node_id}")
+
+            context.update_node_position(current_node_id)
+            targets = self._collect_graph_targets(graph, current_node_id)
+            context.set_available_targets(targets)
+            runtime.emit("branch.candidates_prepared", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "graph_id": current_graph_id,
+                "node_id": current_node_id,
+                "node_type": node_def["type"],
+                "candidates": list(targets),
+                "trace_id": context.trace_id,
+            })
+
+            node = self._build_node(node_def)
+            runtime.emit("node.started", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "graph_id": current_graph_id,
+                "node_id": node_def["id"],
+                "node_type": node_def["type"],
+                "started_at": utc_now_iso(),
+                "trace_id": context.trace_id,
+            })
+
+            context.record_node_input_snapshot(node_def["id"], dict(context.execution_variables))
+            started_at = time.perf_counter()
+            with workflow_telemetry.span("execute_node", {
+                "node.id": node_def["id"],
+                "node.type": node_def["type"],
+                "execution.id": context.execution_id,
+                "workflow.code": context.workflow_code,
+                "graph.id": current_graph_id,
+            }):
+                result = await node.execute(context)
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+
+            for security_event in result.get("security_events", []):
+                runtime.emit(security_event["event_type"], {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    **security_event.get("data", {}),
+                    "trace_id": context.trace_id,
+                })
+            for protection_event in result.get("protection_events", []):
+                runtime.emit(protection_event["event_type"], {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    **protection_event.get("data", {}),
+                    "trace_id": context.trace_id,
+                })
+            if result.get("tool_called"):
+                called = result["tool_called"]
+                runtime.emit("tool.called", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    "tool_code": called.get("tool_code"),
+                    "params": called.get("params", {}),
+                    "group_code": called.get("group_code"),
+                    "group_snapshot_version": called.get("group_snapshot_version"),
+                    "capability_code": called.get("capability_code"),
+                    "capability_version": called.get("capability_version"),
+                    "capability_type": called.get("capability_type"),
+                    "trace_id": context.trace_id,
+                })
+            if result.get("tool_returned"):
+                returned = result["tool_returned"]
+                runtime.emit("tool.returned", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    "tool_code": returned.get("tool_code"),
+                    "params": returned.get("params", {}),
+                    "output": returned.get("output", {}),
+                    "error": returned.get("error"),
+                    "group_code": returned.get("group_code"),
+                    "group_snapshot_version": returned.get("group_snapshot_version"),
+                    "capability_code": returned.get("capability_code"),
+                    "capability_version": returned.get("capability_version"),
+                    "capability_type": returned.get("capability_type"),
+                    "status": "completed",
+                    "trace_id": context.trace_id,
+                })
+            for delta in result.get("message_deltas", []):
+                runtime.emit("message.delta", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "content": delta,
+                    "delta_type": "text",
+                    "trace_id": context.trace_id,
+                })
+
+            output = result.get("output", {})
+            output_snapshot = output if isinstance(output, dict) else {"value": output}
+            context.record_node_output_snapshot(node_def["id"], output_snapshot)
+            context.record_completed_node(node_def["id"], output if isinstance(output, dict) else {})
+            self.workflow_journal.record_execution(
+                node_def["id"],
+                "completed",
+                output if isinstance(output, dict) else {},
+            )
+            metrics = dict(result.get("metrics", {}))
+            metrics.setdefault("duration_ms", duration_ms)
+            metrics.setdefault("trace_id", context.trace_id)
+            if "cost" in metrics:
+                total_cost += float(metrics.get("cost", 0.0))
+                total_input_tokens += int(metrics.get("input_tokens", 0))
+                total_output_tokens += int(metrics.get("output_tokens", 0))
+                if metrics.get("model"):
+                    model_name = str(metrics["model"])
+                    models_used.add(model_name)
+                    workflow_telemetry.record_llm_cost(
+                        model_name,
+                        context.workflow_code,
+                        int(metrics.get("input_tokens", 0)),
+                        int(metrics.get("output_tokens", 0)),
+                        float(metrics.get("cost", 0.0)),
+                    )
+                runtime.emit("cost.recorded", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "workflow_code": context.workflow_code,
+                    "workflow_version": context.workflow_version,
+                    "experiment_id": context.experiment_id,
+                    "experiment_group": context.experiment_group,
+                    **metrics,
+                    "trace_id": context.trace_id,
+                })
+                for alert in budget_alert_evaluator.evaluate(context.workflow_code, context.user_id, total_cost):
+                    runtime.emit("budget.alert", {
+                        "execution_id": context.execution_id,
+                        "session_id": context.session_id,
+                        "scope": alert.scope,
+                        "scope_id": alert.scope_id,
+                        "total_cost": alert.total_cost,
+                        "threshold": alert.threshold,
+                        "message": alert.message,
+                        "trace_id": context.trace_id,
+                    })
+            runtime.emit("node.completed", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "graph_id": current_graph_id,
+                "node_id": node_def["id"],
+                "node_type": node_def["type"],
+                "status": "completed",
+                "output": output,
+                "metrics": metrics,
+                "trace_id": context.trace_id,
+            })
+            workflow_telemetry.record_node(context.workflow_code, node_def["type"], "completed", duration_ms)
+
+            if node_def["type"] == "function":
+                runtime.emit("function.executed", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    "operation_type": result.get("operation_type", "assign"),
+                    "output": output if isinstance(output, dict) else {},
+                    "trace_id": context.trace_id,
+                })
+
+            enter_subgraph = result.get("enter_subgraph")
+            if enter_subgraph:
+                subgraph_id = str(enter_subgraph.get("graph_id", "")).strip()
+                if not subgraph_id:
+                    raise ValueError(f"sub_agent node {node_def['id']} missing subgraph_id")
+                subgraph = self._get_graph(workflow, subgraph_id)
+                if not subgraph:
+                    raise ValueError(f"Subgraph not found: {subgraph_id}")
+                subgraph_entry = subgraph.get("entry_node_id")
+                if not subgraph_entry:
+                    raise ValueError(f"Subgraph {subgraph_id} missing entry_node_id")
+                input_variables = enter_subgraph.get("input_variables", {}) or {}
+                if not isinstance(input_variables, dict):
+                    raise ValueError("sub_agent input_variables must be an object")
+                if input_variables:
+                    context.add_execution_variables(input_variables)
+                context.enter_graph(
+                    subgraph_id,
+                    parent_graph_id=current_graph_id,
+                    parent_node_id=node_def["id"],
+                    output_mapping=enter_subgraph.get("output_mapping", {}) or {},
+                )
+                runtime.emit("graph.entered", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": subgraph_id,
+                    "parent_graph_id": current_graph_id,
+                    "parent_node_id": node_def["id"],
+                    "trace_id": context.trace_id,
+                })
+                current_graph_id = subgraph_id
+                current_node_id = subgraph_entry
+                continue
+
+            next_node_id = self._next_node_v2(graph, node_def, result, context)
+            if len(targets) > 1 or node_def["type"] in {"coordinator", "sub_agent"}:
+                runtime.emit("branch.decided", {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "graph_id": current_graph_id,
+                    "node_id": node_def["id"],
+                    "node_type": node_def["type"],
+                    "candidates": list(targets),
+                    "targetNodeId": next_node_id,
+                    "trace_id": context.trace_id,
+                })
+
+            if node_def["type"] != "end":
+                if next_node_id is None:
+                    raise ValueError(f"Node {current_graph_id}.{node_def['id']} has no next node")
+                current_node_id = next_node_id
+                continue
+
+            exited_graph_id = current_graph_id
+            frame = context.exit_graph()
+            if not frame:
+                raise ValueError(f"Graph stack underflow while exiting {exited_graph_id}")
+            runtime.emit("graph.exited", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "graph_id": exited_graph_id,
+                "parent_graph_id": frame.parent_graph_id,
+                "parent_node_id": frame.parent_node_id,
+                "trace_id": context.trace_id,
+            })
+
+            if not frame.parent_graph_id:
+                return {
+                    "total_cost": round(total_cost, 6),
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "models_used": sorted(models_used),
+                }
+
+            subflow_output = output if isinstance(output, dict) else {}
+            if frame.output_mapping:
+                self._apply_output_mapping(frame.output_mapping, subflow_output, context)
+            else:
+                for key, value in subflow_output.items():
+                    context.add_execution_variable(key, value)
+
+            parent_graph = self._get_graph(workflow, frame.parent_graph_id)
+            if not parent_graph:
+                raise ValueError(f"Parent graph not found: {frame.parent_graph_id}")
+            if not frame.parent_node_id:
+                raise ValueError(f"Parent node id missing when exiting graph {exited_graph_id}")
+            parent_node = parent_graph.get("nodes", {}).get(frame.parent_node_id)
+            if not parent_node:
+                raise ValueError(f"Parent node not found: {frame.parent_graph_id}.{frame.parent_node_id}")
+
+            current_graph_id = frame.parent_graph_id
+            current_node_id = self._next_node_v2(
+                parent_graph,
+                parent_node,
+                {"output": subflow_output},
+                context,
+            )
+            parent_targets = self._collect_graph_targets(parent_graph, frame.parent_node_id)
+            runtime.emit("branch.decided", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "graph_id": current_graph_id,
+                "node_id": frame.parent_node_id,
+                "node_type": parent_node.get("type"),
+                "candidates": list(parent_targets),
+                "targetNodeId": current_node_id,
+                "trace_id": context.trace_id,
+            })
+            if current_node_id is None:
+                if current_graph_id == str(workflow.get("main_graph_id", "")).strip():
+                    return {
+                        "total_cost": round(total_cost, 6),
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "models_used": sorted(models_used),
+                    }
+                raise ValueError(f"Node {current_graph_id}.{frame.parent_node_id} has no next node")
+
+    def _is_graph_definition_v2(self, workflow: Dict[str, Any]) -> bool:
+        return isinstance(workflow, dict) and isinstance(workflow.get("graphs"), dict) and bool(workflow.get("main_graph_id"))
+
+    def _get_graph(self, workflow: Dict[str, Any], graph_id: str) -> Optional[Dict[str, Any]]:
+        graphs = workflow.get("graphs")
+        if not isinstance(graphs, dict):
+            return None
+        graph = graphs.get(graph_id)
+        return graph if isinstance(graph, dict) else None
+
+    def _collect_graph_targets(self, graph: Dict[str, Any], node_id: str) -> List[str]:
+        edges = graph.get("edges", [])
+        targets: List[str] = []
+        if not isinstance(edges, list):
+            return targets
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if edge.get("source") != node_id:
+                continue
+            target = edge.get("target")
+            if isinstance(target, str) and target:
+                targets.append(target)
+        return targets
+
+    def _next_node_v2(
+        self,
+        graph: Dict[str, Any],
+        node_def: Dict[str, Any],
+        result: Dict[str, Any],
+        context,
+    ) -> Optional[str]:
+        targets = self._collect_graph_targets(graph, node_def["id"])
+        explicit_target = self._extract_target_node_id(result)
+
+        if explicit_target and explicit_target not in targets:
+            raise ValueError(
+                f"Invalid targetNodeId '{explicit_target}' for node {node_def['id']}; allowed: {targets}"
+            )
+
+        if not targets:
+            return None
+        if len(targets) == 1:
+            return explicit_target or targets[0]
+
+        if node_def["type"] not in {"coordinator", "sub_agent"}:
+            raise ValueError(
+                f"Node {node_def['id']} has multiple outgoing edges; only coordinator/sub_agent can decide targetNodeId"
+            )
+        if not isinstance(explicit_target, str) or not explicit_target:
+            raise ValueError(
+                f"Node {node_def['id']} must explicitly return targetNodeId for multiple outgoing edges"
+            )
+        return explicit_target
+
+    def _extract_target_node_id(self, result: Dict[str, Any]) -> Optional[str]:
+        for key in ("next_node", "targetNodeId"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                return value
+        output = result.get("output")
+        if isinstance(output, dict):
+            value = output.get("targetNodeId")
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _apply_output_mapping(self, mapping: Dict[str, Any], source: Dict[str, Any], context) -> None:
+        for target, reference in mapping.items():
+            value = self._resolve_mapping_reference(str(reference), source, context)
+            self._assign_mapping_target(str(target), value, context)
+
+    def _resolve_mapping_reference(self, reference: str, source: Dict[str, Any], context) -> Any:
+        if reference.startswith("$execution."):
+            return self._read_nested(context.execution_variables, reference[len("$execution."):])
+        if reference.startswith("$session."):
+            return self._read_nested(context.session_variables, reference[len("$session."):])
+        if reference.startswith("$subflow.output."):
+            return self._read_nested(source, reference[len("$subflow.output."):])
+        if reference.startswith("$node.output."):
+            return self._read_nested(source, reference[len("$node.output."):])
+        return None
+
+    def _assign_mapping_target(self, target: str, value: Any, context) -> None:
+        if target.startswith("$execution."):
+            context.add_execution_variable(target[len("$execution."):], value)
+            return
+        if target.startswith("$session."):
+            context.add_session_variable(target[len("$session."):], value)
+
+    def _read_nested(self, source: Any, path: str) -> Any:
+        current = source
+        for segment in path.split("."):
+            if not segment:
+                continue
+            if isinstance(current, dict):
+                current = current.get(segment)
+                continue
+            if isinstance(current, list) and segment.isdigit():
+                index = int(segment)
+                current = current[index] if 0 <= index < len(current) else None
+                continue
+            return None
+        return current
+
+    def _resolve_node_type(
+        self,
+        workflow: Dict[str, Any],
+        node_id: Optional[str],
+        graph_id: Optional[str] = None,
+    ) -> Optional[str]:
+        if not node_id:
+            return None
+        if self._is_graph_definition_v2(workflow):
+            if graph_id:
+                graph = self._get_graph(workflow, graph_id)
+                if graph:
+                    node = graph.get("nodes", {}).get(node_id)
+                    if isinstance(node, dict):
+                        node_type = node.get("type")
+                        return str(node_type) if node_type else None
+            graphs = workflow.get("graphs", {})
+            for graph in graphs.values():
+                if not isinstance(graph, dict):
+                    continue
+                node = graph.get("nodes", {}).get(node_id)
+                if isinstance(node, dict):
+                    node_type = node.get("type")
+                    return str(node_type) if node_type else None
+            return None
+        node = workflow.get("nodes", {}).get(node_id)
+        if isinstance(node, dict):
+            node_type = node.get("type")
+            return str(node_type) if node_type else None
+        return None
+
     def _build_node(self, node_def: Dict[str, Any]):
         node_type = node_def["type"]
         if node_type == "start":
             return StartNode(node_def["id"], node_def)
         if node_type == "end":
             return EndNode(node_def["id"], node_def)
-        if node_type in {"llm", "coordinate", "sub_agent", "planner"}:
+        if node_type == "coordinator":
+            return CoordinatorNode(node_def["id"], node_def)
+        if node_type == "sub_agent":
+            config = node_def.get("config", {})
+            if config.get("subgraph_id") or config.get("subflow_code"):
+                return SubflowNode(node_def["id"], node_def)
+            return LLMNode(node_def["id"], node_def)
+        if node_type == "function":
+            return FunctionNode(node_def["id"], node_def)
+        if node_type in {"llm", "coordinate", "planner"}:
             return LLMNode(node_def["id"], node_def)
         if node_type == "condition":
             return ConditionNode(node_def["id"], node_def)

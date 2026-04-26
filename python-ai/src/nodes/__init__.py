@@ -8,6 +8,8 @@ from .message import MessageNode
 from .tool import ToolNode
 from .knowledge import KnowledgeNode
 from .subflow import SubflowNode
+from .coordinator import CoordinatorNode
+from .function import FunctionNode
 
 __all__ = [
     "BaseNode",
@@ -20,4 +22,6 @@ __all__ = [
     "ToolNode",
     "KnowledgeNode",
     "SubflowNode",
+    "CoordinatorNode",
+    "FunctionNode",
 ]

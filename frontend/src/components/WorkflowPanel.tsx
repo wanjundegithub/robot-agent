@@ -59,7 +59,9 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
       const versionGroups = await Promise.all(
         orderedWorkflows.map(async (workflow) => ({
           workflow,
-          versions: await getWorkflowVersions(workflow.workflowCode),
+          versions: (await getWorkflowVersions(workflow.workflowCode)).filter(
+            (version) => String(version.status || '').toLowerCase() !== 'draft'
+          ),
         }))
       )
 
@@ -132,7 +134,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
   }
 
   return (
-    <div className="panel-card h-full flex flex-col">
+    <div className="panel-card h-full flex flex-col" data-testid="workflow-version-panel">
       <div className="panel-header">
         <div>
           <div className="panel-title">工作流版本</div>
@@ -147,7 +149,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
       <div className="panel-body space-y-3">
         {workflowCode ? (
           <div className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2 text-xs text-sky-700">
-            正在编辑工作流：{workflowCode}
+            正在查看当前工作流的版本记录
           </div>
         ) : (
           <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-xs text-slate-500">
@@ -174,10 +176,10 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">
-                      {group.workflow.name || group.workflow.workflowCode}
+                      {group.workflow.name || '未命名工作流'}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
-                      {group.workflow.workflowCode} / 共 {group.versions.length} 个版本
+                      共 {group.versions.length} 个版本
                       {group.workflow.currentVersion
                         ? ` / 当前发布 ${group.workflow.currentVersion}`
                         : ''}

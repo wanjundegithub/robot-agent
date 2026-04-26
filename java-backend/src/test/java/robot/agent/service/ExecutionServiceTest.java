@@ -11,6 +11,7 @@ import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.response.SendMessageResponse;
 import robot.agent.model.Execution;
 import robot.agent.model.Session;
+import robot.agent.model.WorkflowVersion;
 import robot.agent.repository.ExecutionNodeLogRepository;
 import robot.agent.repository.ExecutionRepository;
 
@@ -240,5 +241,105 @@ class ExecutionServiceTest {
         ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
         verify(pythonClient).execute(requestCaptor.capture());
         assertThat(requestCaptor.getValue().getWorkflowDefinition()).isEqualTo(resolvedDefinition);
+    }
+
+    @Test
+    void startExecution_explicitWorkflowDispatchesPublishedV2Snapshot() {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        Session session = new Session("session-1", 1L, "user-1");
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-explicit",
+                        "message", "执行显式工作流",
+                        "user_id", "user-1",
+                        "workflow_code", "travel_assistant",
+                        "workflow_version", "v20260426",
+                        "workflow_definition", Map.of("entry", "legacy")
+                ),
+                SendMessageRequest.class
+        );
+
+        Map<String, Object> publishedDefinition = Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "graphs", Map.of(
+                        "main", Map.of(
+                                "graph_id", "main",
+                                "graph_type", "main",
+                                "entry_node_id", "start",
+                                "nodes", Map.of(
+                                        "start", Map.of("id", "start", "type", "start", "config", Map.of("prompt", "开始")),
+                                        "end", Map.of("id", "end", "type", "end", "config", Map.of("prompt", "结束", "output_format", Map.of()))
+                                ),
+                                "edges", List.of(Map.of("id", "e1", "source", "start", "target", "end"))
+                        )
+                )
+        );
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = new WorkflowService.RuntimeExecutionBundle(
+                publishedDefinition,
+                Map.of(),
+                Map.of("legacy", true),
+                Map.of("travel_assistant@v20260426", publishedDefinition),
+                List.of(),
+                List.of(),
+                "routing-default"
+        );
+
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(executionRepository.findBySessionIdAndClientMessageId("session-1", "msg-explicit")).thenReturn(Optional.empty());
+        when(executionRepository.findBySessionIdOrderByCreatedAtDesc("session-1")).thenReturn(List.of());
+        when(workflowService.requirePublishedWorkflowVersion("travel_assistant", "v20260426")).thenReturn(new WorkflowVersion());
+        when(accessControlService.evaluateExecutionAccess("user-1", 1L, "travel_assistant", null, "user-1"))
+                .thenReturn(new AccessControlService.AuthorizationDecision(true, "allow", "policy_allow_execution", java.util.Set.of("viewer"), Map.of()));
+        when(confirmationService.resolveRequestedToolCode(null, "执行显式工作流")).thenReturn(null);
+        when(confirmationService.evaluate("session-1", "user-1", "执行显式工作流", null, null, false))
+                .thenReturn(new ConfirmationService.ConfirmationEvaluation("approved", null, null, null, null));
+        when(entryProtectionService.evaluateExecutionStart("user-1", "session-1", "travel_assistant", null))
+                .thenReturn(new EntryProtectionService.ProtectionDecision(true, "allowed", null, null, null));
+        when(workflowService.buildRuntimeExecutionBundleForExplicitExecution("travel_assistant", "v20260426")).thenReturn(runtimeBundle);
+        when(capabilityRuntimeResolver.resolveWorkflowDefinition(publishedDefinition)).thenReturn(publishedDefinition);
+        when(executionRepository.save(any(Execution.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionService.updateCurrentExecutionId(eq(session), any(String.class))).thenAnswer(invocation -> {
+            session.setCurrentExecutionId(invocation.getArgument(1));
+            return session;
+        });
+        when(pythonClient.execute(any())).thenReturn(Flux.<ServerSentEvent<String>>empty());
+
+        executionService.startExecution("session-1", request);
+
+        ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
+        verify(pythonClient).execute(requestCaptor.capture());
+        verify(workflowService).buildRuntimeExecutionBundleForExplicitExecution("travel_assistant", "v20260426");
+        assertThat(requestCaptor.getValue().getWorkflowCode()).isEqualTo("travel_assistant");
+        assertThat(requestCaptor.getValue().getWorkflowDefinition()).containsEntry("schema_version", "workflow-designer/v2");
+        assertThat(requestCaptor.getValue().getWorkflowDefinition()).containsKey("graphs");
     }
 }

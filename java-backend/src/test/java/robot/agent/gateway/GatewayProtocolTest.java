@@ -15,6 +15,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class GatewayProtocolTest {
@@ -60,6 +61,7 @@ class GatewayProtocolTest {
                 (WebSocketServerProtocolConfig) ReflectionTestUtils.getField(webSocketHandler, "serverConfig");
         assertNotNull(serverConfig);
         assertEquals("/ws/robot", serverConfig.websocketPath());
+        assertTrue(serverConfig.checkStartsWith(), "Handshake requests with query parameters must match /ws/robot");
         channel.finishAndReleaseAll();
     }
 }
