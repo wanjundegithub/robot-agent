@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,6 +35,7 @@ class UnifiedModelServiceTest {
     private final UnifiedModelService unifiedModelService = new UnifiedModelService(modelRecordRepository, providerRepository);
 
     private HttpServer server;
+    private final AtomicReference<String> handlerFailure = new AtomicReference<>();
 
     @AfterEach
     void tearDown() {
@@ -61,6 +63,7 @@ class UnifiedModelServiceTest {
                 null,
                 false
         ));
+        assertThat(handlerFailure.get()).as("provider request assertions").isNull();
 
         assertThat(result.text()).isEqualTo("connectivity ok");
         Object totalTokens = result.usage().get("total_tokens");
@@ -81,33 +84,44 @@ class UnifiedModelServiceTest {
                 false
         )))
                 .isInstanceOf(ResponseStatusException.class)
-                .satisfies(error -> assertThat(((ResponseStatusException) error).getReason())
-                        .contains("MODEL_NOT_FOUND"));
+                .satisfies(error -> {
+                    ResponseStatusException exception = (ResponseStatusException) error;
+                    assertThat(exception.getStatusCode().is4xxClientError()).isTrue();
+                    assertThat(exception.getReason()).contains("MODEL_NOT_FOUND");
+                });
     }
 
     private void stubProviderResponse(String jsonBody) {
+        handlerFailure.set(null);
         try {
             server = HttpServer.create(new InetSocketAddress(0), 0);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to start local stub provider server for UnifiedModelServiceTest", exception);
         }
         server.createContext("/chat/completions", exchange -> {
-            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                throw new AssertionError("Expected POST request but got: " + exchange.getRequestMethod());
+            try {
+                if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    handlerFailure.compareAndSet(null, "Expected POST request but got: " + exchange.getRequestMethod());
+                }
+                if (!"/chat/completions".equals(exchange.getRequestURI().getPath())) {
+                    handlerFailure.compareAndSet(null, "Unexpected request path: " + exchange.getRequestURI().getPath());
+                }
+                String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+                if (authorization == null || authorization.isBlank() || !authorization.startsWith("Bearer ")) {
+                    handlerFailure.compareAndSet(null, "Expected Bearer Authorization header but got: " + authorization);
+                }
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                Map<?, ?> requestJson = OBJECT_MAPPER.readValue(requestBody, Map.class);
+                Object model = requestJson.get("model");
+                if (model == null || String.valueOf(model).isBlank()) {
+                    handlerFailure.compareAndSet(null, "Expected non-empty model field in request payload: " + requestBody);
+                }
+                if (!(requestJson.get("messages") instanceof List<?> messages) || messages.isEmpty()) {
+                    handlerFailure.compareAndSet(null, "Expected non-empty messages field in request payload: " + requestBody);
+                }
+            } catch (Exception exception) {
+                handlerFailure.compareAndSet(null, "Handler validation failed: " + exception.getMessage());
             }
-            if (!"/chat/completions".equals(exchange.getRequestURI().getPath())) {
-                throw new AssertionError("Unexpected request path: " + exchange.getRequestURI().getPath());
-            }
-            String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            Map<?, ?> requestJson = OBJECT_MAPPER.readValue(requestBody, Map.class);
-            Object model = requestJson.get("model");
-            if (model == null || String.valueOf(model).isBlank()) {
-                throw new AssertionError("Expected non-empty model field in request payload: " + requestBody);
-            }
-            if (!(requestJson.get("messages") instanceof List<?> messages) || messages.isEmpty()) {
-                throw new AssertionError("Expected non-empty messages field in request payload: " + requestBody);
-            }
-
             byte[] payload = jsonBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, payload.length);

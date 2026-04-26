@@ -55,7 +55,7 @@ class ModelConfigServiceTest {
     }
 
     @Test
-    void listModelRecordsReturnsPagedRowsSortedByUpdatedAtDesc() {
+    void listModelRecordsRequestsUpdatedAtDescSortAndReturnsPageEnvelope() {
         PageRequest repositoryPageFixture = PageRequest.of(0, 10, Sort.by(Sort.Order.desc("updatedAt")));
         when(modelRecordRepository.search("doubao", "provider-a", true, any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(modelRecord("chat-main", "Doubao Chat")), repositoryPageFixture, 1));
@@ -67,7 +67,9 @@ class ModelConfigServiceTest {
 
         assertThat(page.get("page")).isEqualTo(0);
         assertThat(page.get("page_size")).isEqualTo(10);
-        assertThat(page.get("total")).isEqualTo(1L);
+        Object total = page.get("total");
+        assertThat(total).isInstanceOf(Number.class);
+        assertThat(((Number) total).longValue()).isEqualTo(1L);
         assertThat(pageable.getPageNumber()).isEqualTo(0);
         assertThat(pageable.getPageSize()).isEqualTo(10);
         assertThat(pageable.getSort().getOrderFor("updatedAt")).isNotNull();
@@ -86,8 +88,11 @@ class ModelConfigServiceTest {
 
         assertThatThrownBy(() -> modelConfigService.deleteProviderConfig("demo-admin", "provider-a"))
                 .isInstanceOf(ResponseStatusException.class)
-                .satisfies(error -> assertThat(((ResponseStatusException) error).getReason())
-                        .contains("provider is still referenced"));
+                .satisfies(error -> {
+                    ResponseStatusException exception = (ResponseStatusException) error;
+                    assertThat(exception.getStatusCode().is4xxClientError()).isTrue();
+                    assertThat(exception.getReason()).contains("provider is still referenced");
+                });
     }
 
     private LlmModelRecord modelRecord(String modelCode, String modelName) {
