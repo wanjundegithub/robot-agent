@@ -13,7 +13,6 @@ public class ValidateModelProviderRequest {
     private String apiKeySecretRef;
     @JsonProperty("model_code")
     private String modelCode;
-    private String purpose;
     @JsonProperty("system_prompt")
     private String systemPrompt;
     private String message;
@@ -31,9 +30,6 @@ public class ValidateModelProviderRequest {
 
     public String getModelCode() { return modelCode; }
     public void setModelCode(String modelCode) { this.modelCode = modelCode; }
-
-    public String getPurpose() { return purpose; }
-    public void setPurpose(String purpose) { this.purpose = purpose; }
 
     public String getSystemPrompt() { return systemPrompt; }
     public void setSystemPrompt(String systemPrompt) { this.systemPrompt = systemPrompt; }

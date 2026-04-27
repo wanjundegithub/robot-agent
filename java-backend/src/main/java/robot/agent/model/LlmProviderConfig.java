@@ -24,9 +24,6 @@ public class LlmProviderConfig {
     @Column(name = "base_url", length = 256, nullable = false)
     private String baseUrl;
 
-    @Transient
-    private String defaultModelCode;
-
     @Column(name = "api_key_secret_ref", length = 256)
     private String apiKeySecretRef;
 
@@ -56,9 +53,6 @@ public class LlmProviderConfig {
 
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
-
-    public String getDefaultModelCode() { return defaultModelCode; }
-    public void setDefaultModelCode(String defaultModelCode) { this.defaultModelCode = defaultModelCode; }
 
     public String getApiKeySecretRef() { return apiKeySecretRef; }
     public void setApiKeySecretRef(String apiKeySecretRef) { this.apiKeySecretRef = apiKeySecretRef; }

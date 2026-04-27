@@ -82,7 +82,7 @@ class ExecutionRuntime:
             "threshold_source": self.context.threshold_source,
             "requested_tool_code": self.context.requested_tool_code,
             "confirmed_tool_codes": list(self.context.confirmed_tool_codes),
-            "intent_profile_code": self.context.intent_profile_code,
+            "routing_model_code": self.context.routing_model_code,
             "variables": dict(self.context.execution_variables),
             "runtime_metrics": dict(self.context.runtime_metrics),
             "plan_round": self.context.plan_round,

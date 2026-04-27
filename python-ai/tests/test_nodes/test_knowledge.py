@@ -20,11 +20,11 @@ async def test_knowledge_node_retrieves_documents_and_updates_context(monkeypatc
                 "base_url": "https://llm.example.com/v1",
             }
         },
-        model_profiles={
+        model_records={
             "knowledge-answer-v1": {
-                "profile_code": "knowledge-answer-v1",
+                "model_code": "knowledge-answer-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "qwen-plus",
+                "upstream_model_code": "qwen-plus",
             }
         },
     )
@@ -36,7 +36,7 @@ async def test_knowledge_node_retrieves_documents_and_updates_context(monkeypatc
             "kb_version": "1.0.0",
             "retrieval_mode": "hybrid",
             "top_k": 2,
-            "answer_generation": {"enabled": True, "model_profile_ref": "knowledge-answer-v1"},
+            "answer_generation": {"enabled": True, "model_code": "knowledge-answer-v1"},
         }
     })
 
@@ -54,7 +54,7 @@ async def test_knowledge_node_retrieves_documents_and_updates_context(monkeypatc
         return "根据知识库，支持改签。"
 
     monkeypatch.setattr("src.nodes.knowledge.get_knowledge_store", lambda: StubKnowledgeStore())
-    monkeypatch.setattr("src.nodes.knowledge.execute_profile_completion", fake_completion)
+    monkeypatch.setattr("src.nodes.knowledge.execute_model_completion", fake_completion)
 
     result = await node.execute(context)
 

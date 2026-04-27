@@ -3,6 +3,7 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -15,10 +16,18 @@ import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.dto.request.ValidateModelProviderRequest;
+import robot.agent.model.CapabilityAuthConfig;
+import robot.agent.model.CapabilityGroupSnapshot;
+import robot.agent.model.CapabilityItem;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
+import robot.agent.model.WorkflowVersion;
+import robot.agent.repository.CapabilityAuthConfigRepository;
+import robot.agent.repository.CapabilityGroupSnapshotRepository;
+import robot.agent.repository.CapabilityItemRepository;
 import robot.agent.repository.LlmModelRecordRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
+import robot.agent.repository.WorkflowVersionRepository;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -40,14 +49,23 @@ public class ModelConfigService {
 
     private final LlmProviderConfigRepository providerRepository;
     private final LlmModelRecordRepository modelRecordRepository;
+    private final WorkflowVersionRepository workflowVersionRepository;
+    private final CapabilityItemRepository capabilityItemRepository;
+    private final CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository;
+    private final CapabilityAuthConfigRepository capabilityAuthConfigRepository;
     private final ObjectMapper objectMapper;
     private final AccessControlService accessControlService;
     private final AuditService auditService;
     private final UnifiedModelService unifiedModelService;
 
+    @Autowired
     public ModelConfigService(
             LlmProviderConfigRepository providerRepository,
             LlmModelRecordRepository modelRecordRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            CapabilityItemRepository capabilityItemRepository,
+            CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository,
+            CapabilityAuthConfigRepository capabilityAuthConfigRepository,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             AuditService auditService,
@@ -55,6 +73,10 @@ public class ModelConfigService {
     ) {
         this.providerRepository = providerRepository;
         this.modelRecordRepository = modelRecordRepository;
+        this.workflowVersionRepository = workflowVersionRepository;
+        this.capabilityItemRepository = capabilityItemRepository;
+        this.capabilityGroupSnapshotRepository = capabilityGroupSnapshotRepository;
+        this.capabilityAuthConfigRepository = capabilityAuthConfigRepository;
         this.objectMapper = objectMapper;
         this.accessControlService = accessControlService;
         this.auditService = auditService;
@@ -64,6 +86,10 @@ public class ModelConfigService {
     public ModelConfigService(
             LlmProviderConfigRepository providerRepository,
             LlmModelRecordRepository modelRecordRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            CapabilityItemRepository capabilityItemRepository,
+            CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository,
+            CapabilityAuthConfigRepository capabilityAuthConfigRepository,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             AuditService auditService
@@ -71,6 +97,10 @@ public class ModelConfigService {
         this(
                 providerRepository,
                 modelRecordRepository,
+                workflowVersionRepository,
+                capabilityItemRepository,
+                capabilityGroupSnapshotRepository,
+                capabilityAuthConfigRepository,
                 objectMapper,
                 accessControlService,
                 auditService,
@@ -143,6 +173,12 @@ public class ModelConfigService {
                 .map(modelRecord -> modelRecordToResponseMap(modelRecord, providersByCode.get(modelRecord.getProviderCode())))
                 .toList());
         return envelope;
+    }
+
+    public Map<String, Object> getModelRecord(String modelCode) {
+        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
+                .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
+        return modelRecordToResponseMap(modelRecord, requireProvider(modelRecord.getProviderCode()));
     }
 
     @Transactional
@@ -242,6 +278,13 @@ public class ModelConfigService {
         requireAdmin(userId, "model.record.delete");
         LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
                 .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
+        if (modelRecord.isEnabled()) {
+            throw badRequest("model record must be disabled before delete");
+        }
+        List<String> references = collectModelRecordReferences(modelCode);
+        if (!references.isEmpty()) {
+            throw badRequest("model record is still referenced: " + String.join(", ", references));
+        }
         modelRecordRepository.delete(modelRecord);
         auditService.logAction(1L, normalizeUserId(userId), "model.record.delete", "llm_model_record", modelCode, null, 200);
     }
@@ -304,7 +347,7 @@ public class ModelConfigService {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
                 if (entry.getKey() != null) {
                     String key = String.valueOf(entry.getKey());
-                    if (("model_code".equals(key) || "routing_model_code".equals(key) || key.endsWith("_profile_ref"))
+                    if (("model_code".equals(key) || "routing_model_code".equals(key))
                             && entry.getValue() != null
                             && !String.valueOf(entry.getValue()).isBlank()) {
                         refs.add(String.valueOf(entry.getValue()));
@@ -326,7 +369,7 @@ public class ModelConfigService {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
                 if (entry.getKey() != null) {
                     String key = String.valueOf(entry.getKey());
-                    if (("routing_model_code".equals(key) || "intent_profile_ref".equals(key))
+                    if ("routing_model_code".equals(key)
                             && entry.getValue() != null
                             && !String.valueOf(entry.getValue()).isBlank()) {
                         return String.valueOf(entry.getValue());
@@ -484,6 +527,84 @@ public class ModelConfigService {
         } catch (Exception exception) {
             throw badRequest("Invalid JSON payload");
         }
+    }
+
+    private List<String> collectModelRecordReferences(String modelCode) {
+        Set<String> references = new LinkedHashSet<>();
+
+        for (WorkflowVersion workflowVersion : workflowVersionRepository.findAll()) {
+            if (jsonContainsModelReference(workflowVersion.getDefinition(), modelCode)) {
+                references.add("workflow_definition:" + workflowVersion.getWorkflowCode() + "@" + workflowVersion.getVersion());
+            }
+            if (jsonContainsModelReference(workflowVersion.getConfig(), modelCode)) {
+                references.add("workflow_config:" + workflowVersion.getWorkflowCode() + "@" + workflowVersion.getVersion());
+            }
+        }
+        for (CapabilityItem capabilityItem : capabilityItemRepository.findAll()) {
+            if (jsonContainsModelReference(capabilityItem.getDefinitionJson(), modelCode)) {
+                references.add("capability_definition:" + capabilityItem.getGroupCode() + "/" + capabilityItem.getCapabilityCode());
+            }
+        }
+        for (CapabilityGroupSnapshot snapshot : capabilityGroupSnapshotRepository.findAll()) {
+            if (jsonContainsModelReference(snapshot.getSnapshotPayload(), modelCode)) {
+                references.add("capability_snapshot:" + snapshot.getGroupCode() + "@" + snapshot.getSnapshotVersion());
+            }
+        }
+        for (CapabilityAuthConfig authConfig : capabilityAuthConfigRepository.findAll()) {
+            if (jsonContainsModelReference(authConfig.getConfigJson(), modelCode)) {
+                references.add("capability_auth_config:" + authConfig.getGroupCode());
+            }
+        }
+        return new ArrayList<>(references);
+    }
+
+    private boolean jsonContainsModelReference(String json, String modelCode) {
+        if (json == null || json.isBlank() || modelCode == null || modelCode.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(json);
+            if (node.isTextual()) {
+                node = objectMapper.readTree(node.asText());
+            }
+            return nodeContainsModelReference(node, null, modelCode);
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    private boolean nodeContainsModelReference(JsonNode node, String currentKey, String modelCode) {
+        if (node == null || node.isNull()) {
+            return false;
+        }
+        if (node.isObject()) {
+            java.util.Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                if (isModelReferenceKey(field.getKey())
+                        && field.getValue().isValueNode()
+                        && modelCode.equals(field.getValue().asText())) {
+                    return true;
+                }
+                if (nodeContainsModelReference(field.getValue(), field.getKey(), modelCode)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                if (nodeContainsModelReference(item, currentKey, modelCode)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return isModelReferenceKey(currentKey) && modelCode.equals(node.asText());
+    }
+
+    private boolean isModelReferenceKey(String key) {
+        return "model_code".equals(key) || "routing_model_code".equals(key);
     }
 
     private void requireAdmin(String userId, String action) {

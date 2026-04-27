@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from urllib.parse import quote
 from typing import Any, Dict, List
+from urllib.parse import quote
 
 import httpx
 
@@ -60,19 +60,43 @@ def resolve_provider(provider_configs: Dict[str, Dict[str, Any]], provider_code:
     return provider
 
 
-def resolve_profile(model_profiles: Dict[str, Dict[str, Any]], profile_code: str) -> Dict[str, Any]:
-    profile = model_profiles.get(profile_code)
-    if not profile:
-        raise ModelConfigError(f"Model profile not found: {profile_code}")
-    return profile
+def resolve_model_record(model_records: Dict[str, Dict[str, Any]], model_code: str) -> Dict[str, Any]:
+    model_record = model_records.get(model_code)
+    if not model_record:
+        raise ModelConfigError(f"Model record not found: {model_code}")
+    return model_record
 
 
-async def classify_intent_with_profile(
+def _model_default_options(model_record: Dict[str, Any]) -> Dict[str, Any]:
+    raw_options = model_record.get("default_options")
+    if isinstance(raw_options, dict):
+        return raw_options
+
+    raw_json = model_record.get("default_options_json")
+    if isinstance(raw_json, dict):
+        return raw_json
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _model_option(model_record: Dict[str, Any], option_key: str, default_value: Any) -> Any:
+    options = _model_default_options(model_record)
+    if option_key in options and options.get(option_key) is not None:
+        return options.get(option_key)
+    return default_value
+
+
+async def classify_intent_with_model_code(
     message: str,
     candidate_workflows: List[Dict[str, Any]],
-    intent_profile_code: str,
+    routing_model_code: str,
     provider_configs: Dict[str, Dict[str, Any]],
-    model_profiles: Dict[str, Dict[str, Any]],
+    model_records: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     prompt = {
         "task": "intent_routing",
@@ -80,11 +104,11 @@ async def classify_intent_with_profile(
         "candidate_workflows": candidate_workflows,
         "required_fields": ["intent_code", "workflow_code", "confidence", "reason"],
     }
-    content = await execute_profile_completion(
-        profile_code=intent_profile_code,
+    content = await execute_model_completion(
+        model_code=routing_model_code,
         provider_configs=provider_configs,
-        model_profiles=model_profiles,
-        system_prompt="你是服务机器人路由引擎，只能从候选工作流中选择最合适的 workflow_code，并返回 JSON。",
+        model_records=model_records,
+        system_prompt="You are an intent router. Choose the best workflow_code from candidates and return JSON only.",
         user_prompt=json.dumps(prompt, ensure_ascii=False),
         response_format={"type": "json_object"},
     )
@@ -97,23 +121,23 @@ async def classify_intent_with_profile(
     return parsed
 
 
-async def execute_profile_completion(
-    profile_code: str,
+async def execute_model_completion(
+    model_code: str,
     provider_configs: Dict[str, Dict[str, Any]],
-    model_profiles: Dict[str, Dict[str, Any]],
-    system_prompt: str,
+    model_records: Dict[str, Dict[str, Any]],
+    system_prompt: str | None,
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
 ) -> str:
-    profile = resolve_profile(model_profiles, profile_code)
-    provider = resolve_provider(provider_configs, str(profile.get("provider_code")))
-    return await _invoke_provider(provider, profile, system_prompt, user_prompt, response_format)
+    model_record = resolve_model_record(model_records, model_code)
+    provider = resolve_provider(provider_configs, str(model_record.get("provider_code")))
+    return await _invoke_provider(provider, model_record, system_prompt, user_prompt, response_format)
 
 
 async def _invoke_provider(
     provider: Dict[str, Any],
-    profile: Dict[str, Any],
-    system_prompt: str,
+    model_record: Dict[str, Any],
+    system_prompt: str | None,
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
 ) -> str:
@@ -139,23 +163,32 @@ async def _invoke_provider(
     if provider.get("organization_id"):
         headers["OpenAI-Organization"] = str(provider["organization_id"])
 
+    resolved_system_prompt = str(system_prompt or model_record.get("default_system_prompt", ""))
+    upstream_model_code = str(model_record.get("upstream_model_code") or model_record.get("model_code") or "").strip()
+    if not upstream_model_code:
+        raise ModelConfigError("Model upstream_model_code is required")
+
+    temperature = float(_model_option(model_record, "temperature", 0.3))
+    top_p = float(_model_option(model_record, "top_p", 1.0))
+    max_tokens = int(_model_option(model_record, "max_tokens", 1024))
+    timeout = float(_model_option(model_record, "timeout_sec", 30))
+
     body: Dict[str, Any]
     request_url: str
-    model_code = str(profile.get("model_code"))
     if protocol in {"openai", "openai_compatible", "deepseek", "qwen"}:
         auth_header = str(meta.get("auth_header", "Authorization"))
         auth_scheme = str(meta.get("auth_scheme", "Bearer")).strip()
         if api_key:
             headers[auth_header] = api_key if auth_scheme.lower() == "raw" else f"{auth_scheme} {api_key}".strip()
         body = {
-            "model": model_code,
+            "model": upstream_model_code,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": resolved_system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": float(profile.get("temperature", 0.3)),
-            "top_p": float(profile.get("top_p", 1.0)),
-            "max_tokens": int(profile.get("max_tokens", 1024)),
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
         }
         if response_format is not None:
             body["response_format"] = response_format
@@ -166,15 +199,15 @@ async def _invoke_provider(
         if api_key:
             headers[auth_header] = api_key if auth_scheme.lower() == "raw" else f"{auth_scheme} {api_key}".strip()
         body = {
-            "model": model_code,
-            "instructions": system_prompt,
+            "model": upstream_model_code,
+            "instructions": resolved_system_prompt,
             "input": [
                 {
                     "role": "user",
                     "content": [{"type": "input_text", "text": user_prompt}],
                 }
             ],
-            "max_output_tokens": int(profile.get("max_tokens", 1024)),
+            "max_output_tokens": max_tokens,
         }
         if response_format is not None:
             body["text"] = {"format": response_format}
@@ -184,29 +217,28 @@ async def _invoke_provider(
         headers[str(meta.get("auth_header", "x-api-key"))] = api_key
         headers["anthropic-version"] = str(meta.get("anthropic_version", "2023-06-01"))
         body = {
-            "model": model_code,
-            "system": system_prompt,
+            "model": upstream_model_code,
+            "system": resolved_system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
-            "temperature": float(profile.get("temperature", 0.3)),
-            "max_tokens": int(profile.get("max_tokens", 1024)),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         request_url = _join_url(base_url, str(meta.get("chat_path", "/messages")))
     else:
         headers.pop("Authorization", None)
         query_auth_name = str(meta.get("auth_query_name", "key"))
         body = {
-            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "system_instruction": {"parts": [{"text": resolved_system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": {
-                "temperature": float(profile.get("temperature", 0.3)),
-                "topP": float(profile.get("top_p", 1.0)),
-                "maxOutputTokens": int(profile.get("max_tokens", 1024)),
+                "temperature": temperature,
+                "topP": top_p,
+                "maxOutputTokens": max_tokens,
             },
         }
-        gemini_path = str(meta.get("chat_path", "/models/{model}:generateContent")).replace("{model}", quote(model_code, safe=""))
+        gemini_path = str(meta.get("chat_path", "/models/{model}:generateContent")).replace("{model}", quote(upstream_model_code, safe=""))
         request_url = f"{_join_url(base_url, gemini_path)}?{quote(query_auth_name, safe='')}={quote(api_key, safe='')}"
 
-    timeout = float(profile.get("timeout_sec", 30))
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(request_url, headers=headers, json=body)
         response.raise_for_status()

@@ -810,7 +810,7 @@ public class WorkflowService {
         }
 
         Map<String, Object> variables = asMap(source.get("variables"));
-        Map<String, Object> modelBindings = normalizeLegacyModelReferences(asMap(source.get("model_bindings")));
+        Map<String, Object> modelBindings = normalizeModelReferences(asMap(source.get("model_bindings")));
         Map<String, Object> editorMeta = asMap(source.get("editor_meta"));
         Map<String, Object> legacyConfig = normalizeWorkflowConfig(asMap(source.get("config")));
 
@@ -821,7 +821,7 @@ public class WorkflowService {
             variables.put("temporary", legacyConfig.getOrDefault("temporary_variables", List.of()));
         }
         if (modelBindings.isEmpty()) {
-            modelBindings = normalizeLegacyModelReferences(asMap(legacyConfig.get("llm_defaults")));
+            modelBindings = normalizeModelReferences(asMap(legacyConfig.get("llm_defaults")));
         }
         if (editorMeta.isEmpty()) {
             editorMeta = asMap(source.get("meta"));
@@ -838,7 +838,7 @@ public class WorkflowService {
         if (!legacyConfig.isEmpty()) {
             normalized.put("config", legacyConfig);
         }
-        return normalizeLegacyModelReferences(normalized);
+        return normalizeModelReferences(normalized);
     }
 
     private Map<String, Object> normalizeGraphs(Map<String, Object> source) {
@@ -899,7 +899,7 @@ public class WorkflowService {
                 node.put("type", normalizedType);
             }
             node.put("id", firstNonBlank(stringValue(rawNode.get("id")), nodeId));
-            Map<String, Object> config = normalizeLegacyModelReferences(new LinkedHashMap<>(asMap(rawNode.get("config"))));
+            Map<String, Object> config = normalizeModelReferences(new LinkedHashMap<>(asMap(rawNode.get("config"))));
             if ("sub_agent".equals(normalizedType)) {
                 String subgraphId = resolveSubgraphId(config);
                 if (subgraphId != null) {
@@ -955,48 +955,43 @@ public class WorkflowService {
     }
 
     private Map<String, Object> normalizeWorkflowConfig(Map<String, Object> workflowConfig) {
-        Map<String, Object> normalized = normalizeLegacyModelReferences(workflowConfig);
+        Map<String, Object> normalized = normalizeModelReferences(workflowConfig);
         if (normalized.isEmpty()) {
             return normalized;
         }
-        String routingModelCode = firstNonBlank(
-                stringValue(normalized.get("routing_model_code")),
-                stringValue(normalized.get("intent_profile_ref"))
-        );
+        String routingModelCode = firstNonBlank(stringValue(normalized.get("routing_model_code")));
         if (routingModelCode != null) {
             normalized.put("routing_model_code", routingModelCode);
-            normalized.remove("intent_profile_ref");
+        } else {
+            normalized.remove("routing_model_code");
         }
         Object llmDefaults = normalized.get("llm_defaults");
         if (llmDefaults instanceof Map<?, ?>) {
-            normalized.put("llm_defaults", normalizeLegacyModelReferences(asMap(llmDefaults)));
+            normalized.put("llm_defaults", normalizeModelReferences(asMap(llmDefaults)));
         }
         return normalized;
     }
 
-    private Map<String, Object> normalizeLegacyModelReferences(Map<String, Object> source) {
+    private Map<String, Object> normalizeModelReferences(Map<String, Object> source) {
         Map<String, Object> normalized = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : source.entrySet()) {
             String key = entry.getKey();
-            Object value = normalizeLegacyModelReferenceValue(entry.getValue());
-            String normalizedKey = switch (key) {
-                case "intent_profile_ref" -> "routing_model_code";
-                case "model_profile_ref" -> "model_code";
-                default -> key;
-            };
-            normalized.put(normalizedKey, value);
+            if (key == null) {
+                continue;
+            }
+            normalized.put(key, normalizeModelReferenceValue(entry.getValue()));
         }
         return normalized;
     }
 
-    private Object normalizeLegacyModelReferenceValue(Object value) {
+    private Object normalizeModelReferenceValue(Object value) {
         if (value instanceof Map<?, ?> mapValue) {
-            return normalizeLegacyModelReferences(asMap(mapValue));
+            return normalizeModelReferences(asMap(mapValue));
         }
         if (value instanceof List<?> listValue) {
             List<Object> normalized = new ArrayList<>();
             for (Object item : listValue) {
-                normalized.add(normalizeLegacyModelReferenceValue(item));
+                normalized.add(normalizeModelReferenceValue(item));
             }
             return normalized;
         }

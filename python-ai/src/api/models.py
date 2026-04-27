@@ -26,8 +26,8 @@ class ExecuteRequest(BaseModel):
     workflow_config: Dict[str, Any] = Field(default_factory=dict)
     workflow_catalog: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
-    model_profiles: list[Dict[str, Any]] = Field(default_factory=list)
-    intent_profile_code: Optional[str] = Field(default=None)
+    model_records: list[Dict[str, Any]] = Field(default_factory=list)
+    routing_model_code: Optional[str] = Field(default=None)
     input_variables: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -73,5 +73,5 @@ class IntentClassificationRequest(BaseModel):
     message: str
     candidate_workflows: list[Dict[str, Any]] = Field(default_factory=list)
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
-    model_profiles: list[Dict[str, Any]] = Field(default_factory=list)
-    intent_profile_code: str
+    model_records: list[Dict[str, Any]] = Field(default_factory=list)
+    routing_model_code: str

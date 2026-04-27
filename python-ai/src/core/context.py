@@ -36,8 +36,8 @@ class ExecutionContext:
     workflow_config: Dict[str, Any] = field(default_factory=dict)
     workflow_catalog: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     provider_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    model_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    intent_profile_code: Optional[str] = None
+    model_records: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    routing_model_code: Optional[str] = None
 
     current_node_id: Optional[str] = None
     status: str = "pending"

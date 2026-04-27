@@ -70,10 +70,9 @@ interface WorkflowGraphState {
 }
 
 interface ModelBindingsState {
-  intent_profile_ref: string
+  routing_model_code: string
   llm_defaults: {
-    model_profile_ref: string
-    provider_code: string
+    model_code: string
   }
 }
 
@@ -151,10 +150,9 @@ const WORKFLOW_SCHEMA_VERSION = 'workflow-designer/v2'
 const MAIN_GRAPH_ID = 'main'
 
 const defaultModelBindings: ModelBindingsState = {
-  intent_profile_ref: 'intent-router-v1',
+  routing_model_code: 'intent-router',
   llm_defaults: {
-    model_profile_ref: 'general-chat-v1',
-    provider_code: 'openai-compatible-prod',
+    model_code: 'general-chat',
   },
 }
 
@@ -1768,44 +1766,32 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
 function resolveModelBindings(definition: Record<string, unknown>, versionConfig: Record<string, unknown>): ModelBindingsState {
   const definitionBindings = asRecord(definition.model_bindings)
   if (Object.keys(definitionBindings).length > 0) {
+    const definitionDefaults = asRecord(definitionBindings.llm_defaults)
     return {
-      intent_profile_ref: String(definitionBindings.intent_profile_ref || defaultModelBindings.intent_profile_ref),
+      routing_model_code: String(definitionBindings.routing_model_code || defaultModelBindings.routing_model_code),
       llm_defaults: {
-        model_profile_ref: String(
-          asRecord(definitionBindings.llm_defaults).model_profile_ref || defaultModelBindings.llm_defaults.model_profile_ref
-        ),
-        provider_code: String(
-          asRecord(definitionBindings.llm_defaults).provider_code || defaultModelBindings.llm_defaults.provider_code
-        ),
+        model_code: String(definitionDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
       },
     }
   }
 
   const configBindings = asRecord(versionConfig.model_bindings)
   if (Object.keys(configBindings).length > 0) {
+    const configDefaults = asRecord(configBindings.llm_defaults)
     return {
-      intent_profile_ref: String(configBindings.intent_profile_ref || defaultModelBindings.intent_profile_ref),
+      routing_model_code: String(configBindings.routing_model_code || defaultModelBindings.routing_model_code),
       llm_defaults: {
-        model_profile_ref: String(
-          asRecord(configBindings.llm_defaults).model_profile_ref || defaultModelBindings.llm_defaults.model_profile_ref
-        ),
-        provider_code: String(
-          asRecord(configBindings.llm_defaults).provider_code || defaultModelBindings.llm_defaults.provider_code
-        ),
+        model_code: String(configDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
       },
     }
   }
 
   const definitionConfig = asRecord(definition.config)
+  const definitionConfigDefaults = asRecord(definitionConfig.llm_defaults)
   return {
-    intent_profile_ref: String(definitionConfig.intent_profile_ref || defaultModelBindings.intent_profile_ref),
+    routing_model_code: String(definitionConfig.routing_model_code || defaultModelBindings.routing_model_code),
     llm_defaults: {
-      model_profile_ref: String(
-        asRecord(definitionConfig.llm_defaults).model_profile_ref || defaultModelBindings.llm_defaults.model_profile_ref
-      ),
-      provider_code: String(
-        asRecord(definitionConfig.llm_defaults).provider_code || defaultModelBindings.llm_defaults.provider_code
-      ),
+      model_code: String(definitionConfigDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
     },
   }
 }

@@ -298,10 +298,9 @@ export interface WorkflowDesignerDefinitionV2 {
     temporary: unknown[]
   }
   model_bindings: {
-    intent_profile_ref: string
+    routing_model_code: string
     llm_defaults: {
-      model_profile_ref: string
-      provider_code: string
+      model_code: string
     }
   }
   editor_meta: Record<string, unknown>
@@ -328,7 +327,7 @@ export interface ModelProviderConfig {
   provider_name?: string | null
   provider_type: string
   base_url: string
-  default_model_code: string
+  api_key_secret_ref?: string
   enabled: boolean
   api_key_mode?: string
   api_key_configured?: boolean
@@ -338,28 +337,26 @@ export interface ModelProviderConfig {
   updated_at?: string
 }
 
-export interface ProviderPreset {
-  value: string
-  label: string
-  base_url: string
-  placeholder_model: string
-  protocol: string
-}
-
-export interface ModelProfileConfig {
-  profile_code: string
-  provider_code: string
+export interface ModelRecordConfig {
   model_code: string
-  purpose: string
-  temperature?: number
-  top_p?: number
-  max_tokens?: number
-  timeout_sec?: number
-  response_format?: Record<string, unknown>
-  fallback_profile_code?: string | null
+  model_name: string
+  provider_code: string
+  provider_name?: string | null
+  provider_type?: string | null
+  upstream_model_code: string
+  capabilities: string[]
+  default_system_prompt?: string | null
+  default_options?: Record<string, unknown> | null
   enabled: boolean
   created_at?: string
   updated_at?: string
+}
+
+export interface PagedModelRecordResponse {
+  items: ModelRecordConfig[]
+  page: number
+  page_size: number
+  total: number
 }
 
 export interface ProviderValidationResult {
@@ -368,14 +365,6 @@ export interface ProviderValidationResult {
   message: string
   status_code?: number
   tested_model_code?: string
-}
-
-export interface ModelChatTestResult {
-  ok: boolean
-  profile_code: string
-  provider_code: string
-  model_code: string
-  answer: string
 }
 
 export type SocketState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

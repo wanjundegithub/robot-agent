@@ -1,7 +1,7 @@
 from typing import Any, Dict
 
 from src.core.knowledge_store import get_knowledge_store
-from src.core.model_runtime import execute_profile_completion
+from src.core.model_runtime import execute_model_completion
 from src.core.protection import vector_access_optimizer
 from .base import BaseNode
 
@@ -23,13 +23,13 @@ class KnowledgeNode(BaseNode):
         query = context.get_variable("user_message", "")
         retrieval_query = query
         if self.query_rewrite.get("enabled"):
-            profile_code = self.query_rewrite.get("model_profile_ref")
-            if not profile_code:
-                raise ValueError(f"Knowledge query rewrite missing model_profile_ref for node {self.node_id}")
-            retrieval_query = await execute_profile_completion(
-                profile_code=str(profile_code),
+            model_code = self.query_rewrite.get("model_code")
+            if not model_code:
+                raise ValueError(f"Knowledge query rewrite missing model_code for node {self.node_id}")
+            retrieval_query = await execute_model_completion(
+                model_code=str(model_code),
                 provider_configs=context.provider_configs,
-                model_profiles=context.model_profiles,
+                model_records=context.model_records,
                 system_prompt="你是知识检索查询改写器，请输出更适合知识库检索的查询文本。",
                 user_prompt=query,
             )
@@ -52,13 +52,13 @@ class KnowledgeNode(BaseNode):
         answer = None
         citations = [{"doc_id": item.get("doc_id")} for item in documents[:3]]
         if self.answer_generation.get("enabled"):
-            profile_code = self.answer_generation.get("model_profile_ref")
-            if not profile_code:
-                raise ValueError(f"Knowledge answer generation missing model_profile_ref for node {self.node_id}")
-            answer = await execute_profile_completion(
-                profile_code=str(profile_code),
+            model_code = self.answer_generation.get("model_code")
+            if not model_code:
+                raise ValueError(f"Knowledge answer generation missing model_code for node {self.node_id}")
+            answer = await execute_model_completion(
+                model_code=str(model_code),
                 provider_configs=context.provider_configs,
-                model_profiles=context.model_profiles,
+                model_records=context.model_records,
                 system_prompt="你是知识库问答助手，请基于给定文档回答用户问题。",
                 user_prompt=str({
                     "question": query,

@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.core.model_runtime import classify_intent_with_profile, execute_profile_completion
+from src.core.model_runtime import classify_intent_with_model_code, execute_model_completion
 
 
 @pytest.mark.asyncio
-async def test_execute_profile_completion_calls_openai_compatible_provider():
+async def test_execute_model_completion_calls_openai_compatible_provider():
     provider_configs = {
         "openai-compatible-prod": {
             "provider_code": "openai-compatible-prod",
@@ -15,15 +15,18 @@ async def test_execute_profile_completion_calls_openai_compatible_provider():
             "base_url": "https://llm.example.com/v1",
         }
     }
-    model_profiles = {
+    model_records = {
         "general-chat-v1": {
-            "profile_code": "general-chat-v1",
+            "model_code": "general-chat-v1",
             "provider_code": "openai-compatible-prod",
-            "model_code": "qwen-plus",
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "max_tokens": 256,
-            "timeout_sec": 10,
+            "upstream_model_code": "qwen-plus",
+            "default_system_prompt": "你是测试助手。",
+            "default_options": {
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "max_tokens": 256,
+                "timeout_sec": 10,
+            },
         }
     }
 
@@ -40,19 +43,25 @@ async def test_execute_profile_completion_calls_openai_compatible_provider():
         mock_instance.post.return_value = mock_response
         mock_client.return_value = mock_instance
 
-        result = await execute_profile_completion(
-            profile_code="general-chat-v1",
+        result = await execute_model_completion(
+            model_code="general-chat-v1",
             provider_configs=provider_configs,
-            model_profiles=model_profiles,
-            system_prompt="system",
+            model_records=model_records,
+            system_prompt=None,
             user_prompt="user",
         )
 
     assert result == "结构化输出"
+    body = mock_instance.post.call_args.kwargs["json"]
+    assert body["model"] == "qwen-plus"
+    assert body["messages"][0]["content"] == "你是测试助手。"
+    assert body["temperature"] == 0.2
+    assert body["top_p"] == 0.9
+    assert body["max_tokens"] == 256
 
 
 @pytest.mark.asyncio
-async def test_execute_profile_completion_supports_custom_claude_protocol():
+async def test_execute_model_completion_supports_custom_claude_protocol():
     provider_configs = {
         "custom-claude": {
             "provider_code": "custom-claude",
@@ -68,14 +77,16 @@ async def test_execute_profile_completion_supports_custom_claude_protocol():
             },
         }
     }
-    model_profiles = {
+    model_records = {
         "custom-claude-v1": {
-            "profile_code": "custom-claude-v1",
+            "model_code": "custom-claude-v1",
             "provider_code": "custom-claude",
-            "model_code": "claude-3-5-sonnet-latest",
-            "temperature": 0.2,
-            "max_tokens": 256,
-            "timeout_sec": 10,
+            "upstream_model_code": "claude-3-5-sonnet-latest",
+            "default_options": {
+                "temperature": 0.2,
+                "max_tokens": 256,
+                "timeout_sec": 10,
+            },
         }
     }
 
@@ -92,10 +103,10 @@ async def test_execute_profile_completion_supports_custom_claude_protocol():
         mock_instance.post.return_value = mock_response
         mock_client.return_value = mock_instance
 
-        result = await execute_profile_completion(
-            profile_code="custom-claude-v1",
+        result = await execute_model_completion(
+            model_code="custom-claude-v1",
             provider_configs=provider_configs,
-            model_profiles=model_profiles,
+            model_records=model_records,
             system_prompt="system",
             user_prompt="user",
         )
@@ -107,7 +118,7 @@ async def test_execute_profile_completion_supports_custom_claude_protocol():
 
 
 @pytest.mark.asyncio
-async def test_classify_intent_with_profile_parses_json_payload():
+async def test_classify_intent_with_model_code_parses_json_payload():
     provider_configs = {
         "openai-compatible-prod": {
             "provider_code": "openai-compatible-prod",
@@ -115,15 +126,17 @@ async def test_classify_intent_with_profile_parses_json_payload():
             "base_url": "https://llm.example.com/v1",
         }
     }
-    model_profiles = {
+    model_records = {
         "intent-router-v1": {
-            "profile_code": "intent-router-v1",
+            "model_code": "intent-router-v1",
             "provider_code": "openai-compatible-prod",
-            "model_code": "qwen-plus",
-            "temperature": 0.1,
-            "top_p": 0.8,
-            "max_tokens": 256,
-            "timeout_sec": 10,
+            "upstream_model_code": "qwen-plus",
+            "default_options": {
+                "temperature": 0.1,
+                "top_p": 0.8,
+                "max_tokens": 256,
+                "timeout_sec": 10,
+            },
         }
     }
 
@@ -149,12 +162,12 @@ async def test_classify_intent_with_profile_parses_json_payload():
         mock_instance.post.return_value = mock_response
         mock_client.return_value = mock_instance
 
-        result = await classify_intent_with_profile(
+        result = await classify_intent_with_model_code(
             message="我要订机票",
             candidate_workflows=[{"workflow_code": "flight_booking"}],
-            intent_profile_code="intent-router-v1",
+            routing_model_code="intent-router-v1",
             provider_configs=provider_configs,
-            model_profiles=model_profiles,
+            model_records=model_records,
         )
 
     assert result["workflow_code"] == "flight_booking"

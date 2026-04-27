@@ -1358,7 +1358,7 @@ const App: React.FC = () => {
 
     if (activePage === 'models') {
       return (
-        <section className="page-single">
+        <section className="page-model-config" data-testid="models-page-layout">
           <ModelConfigPanel currentUserId={currentUserId} />
         </section>
       )

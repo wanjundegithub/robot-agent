@@ -24,7 +24,7 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
-from src.core.model_runtime import classify_intent_with_profile
+from src.core.model_runtime import classify_intent_with_model_code
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
 from src.core.protection import ProtectionError, runtime_protection_manager
 from src.core.registry import ExecutionRegistry
@@ -162,17 +162,17 @@ async def classify_intent(request: IntentClassificationRequest):
         for item in request.provider_configs
         if item.get("provider_code")
     }
-    model_profiles = {
-        str(item.get("profile_code")): item
-        for item in request.model_profiles
-        if item.get("profile_code")
+    model_records = {
+        str(item.get("model_code")): item
+        for item in request.model_records
+        if item.get("model_code")
     }
-    return await classify_intent_with_profile(
+    return await classify_intent_with_model_code(
         message=request.message,
         candidate_workflows=request.candidate_workflows,
-        intent_profile_code=request.intent_profile_code,
+        routing_model_code=request.routing_model_code,
         provider_configs=provider_configs,
-        model_profiles=model_profiles,
+        model_records=model_records,
     )
 
 

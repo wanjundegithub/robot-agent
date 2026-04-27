@@ -28,7 +28,7 @@ async def test_coordinate_node_executes_prompt_only(monkeypatch):
         session_id="sess_coordinate",
         workflow_code="agent_workflow",
         workflow_version="1.0.0",
-        workflow_config={"llm_defaults": {"model_profile_ref": "general-chat-v1"}},
+        workflow_config={"llm_defaults": {"model_code": "general-chat-v1"}},
         provider_configs={
             "openai-compatible-prod": {
                 "provider_code": "openai-compatible-prod",
@@ -36,11 +36,11 @@ async def test_coordinate_node_executes_prompt_only(monkeypatch):
                 "base_url": "https://llm.example.com/v1",
             }
         },
-        model_profiles={
+        model_records={
             "general-chat-v1": {
-                "profile_code": "general-chat-v1",
+                "model_code": "general-chat-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "qwen-plus",
+                "upstream_model_code": "qwen-plus",
             }
         },
     )
@@ -53,7 +53,7 @@ async def test_coordinate_node_executes_prompt_only(monkeypatch):
             "user_prompt": "请协调 sub-agent 处理：{user_message}",
         },
     })
-    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result("协调完成，请继续处理。"))
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", async_result("协调完成，请继续处理。"))
 
     result = await node.execute(context)
 

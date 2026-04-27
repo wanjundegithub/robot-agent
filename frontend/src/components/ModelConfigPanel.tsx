@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  getModelProfiles,
+  deleteModelProvider,
+  deleteModelRecord,
   getModelProviders,
-  saveModelProfile,
+  getModelRecords,
   saveModelProvider,
-  testModelProfileChat,
-  validateModelProvider,
+  saveModelRecord,
   validateModelProviderDraft,
 } from '../services/api'
-import type { ModelProfileConfig, ModelProviderConfig, ProviderPreset } from '../types'
+import type { ModelProviderConfig, ModelRecordConfig } from '../types'
 
 interface ModelConfigPanelProps {
   currentUserId: string
@@ -19,329 +19,232 @@ type ProviderFormState = {
   provider_name: string
   provider_type: string
   base_url: string
-  default_model_code: string
   api_key_secret_ref: string
   enabled: boolean
 }
 
-type PurposeDef = {
-  code: string
-  label: string
-  description: string
-  defaultProfileCode: string
-}
-
-type PurposeFormState = {
-  profile_code: string
+type ModelRecordFormState = {
+  model_code: string
+  model_name: string
   provider_code: string
+  upstream_model_code: string
+  capabilities_text: string
+  default_system_prompt: string
+  default_options_text: string
   enabled: boolean
 }
 
-const providerPresets: ProviderPreset[] = [
-  { value: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', placeholder_model: 'gpt-4o-mini', protocol: 'openai' },
-  { value: 'gemini', label: 'Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta', placeholder_model: 'gemini-1.5-flash', protocol: 'gemini' },
-  { value: 'claude', label: 'Claude', base_url: 'https://api.anthropic.com/v1', placeholder_model: 'claude-3-5-sonnet-latest', protocol: 'claude' },
-  { value: 'qwen', label: 'Qwen / 通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', placeholder_model: 'qwen-plus', protocol: 'openai' },
-  { value: 'deepseek', label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', placeholder_model: 'deepseek-chat', protocol: 'openai' },
-  { value: 'doubao', label: '豆包', base_url: 'https://ark.cn-beijing.volces.com/api/v3', placeholder_model: 'doubao-seed-2-0-pro-260215', protocol: 'openai' },
-  { value: 'custom', label: '自定义厂商', base_url: '', placeholder_model: 'custom-model', protocol: 'openai' },
-]
-
-const purposeDefs: PurposeDef[] = [
-  { code: 'intent_routing', label: '意图识别', description: '用于工作流路由、意图识别。', defaultProfileCode: 'intent-router-v1' },
-  { code: 'knowledge_query_rewrite', label: '知识检索改写', description: '用于知识库检索前的问题改写。', defaultProfileCode: 'knowledge-query-rewrite-v1' },
-  { code: 'knowledge_answer', label: '知识答案', description: '用于知识库答案生成与总结。', defaultProfileCode: 'knowledge-answer-v1' },
-  { code: 'general_llm', label: '通用对话', description: '用于普通对话、兜底回复。', defaultProfileCode: 'general-chat-v1' },
-  { code: 'structured_extraction', label: '结构化抽取', description: '用于槽位提取、结构化解析。', defaultProfileCode: 'structured-extraction-v1' },
-]
-
-const providerPresetByType = (providerType: string) => providerPresets.find((item) => item.value === providerType)
-
-const providerLabel = (providerName: string | undefined | null, providerType: string, defaultModelCode: string) => {
-  const normalizedName = providerName?.trim()
-  if (normalizedName) {
-    return normalizedName
-  }
-  const preset = providerPresetByType(providerType)
-  const vendor = preset?.label || providerType || '未命名厂商'
-  const model = defaultModelCode.trim()
-  return model ? `${vendor} / ${model}` : vendor
+type ModelEditorState = {
+  mode: 'create' | 'edit'
+  originalModelCode?: string
+  form: ModelRecordFormState
 }
 
-const defaultRequestBody = (providerType: string, modelCode: string) => {
-  switch (providerType) {
-    case 'doubao':
-      return JSON.stringify(
-        {
-          model: modelCode,
-          input: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'input_image',
-                  image_url: 'https://ark-project.tos-cn-beijing.volces.com/doc_image/ark_demo_img_1.png',
-                },
-                {
-                  type: 'input_text',
-                  text: '你看见了什么？',
-                },
-              ],
-            },
-          ],
-        },
-        null,
-        2
-      )
-    case 'gemini':
-      return JSON.stringify(
-        {
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: '请回复：连接测试成功' }],
-            },
-          ],
-        },
-        null,
-        2
-      )
-    case 'claude':
-      return JSON.stringify(
-        {
-          model: modelCode,
-          max_tokens: 32,
-          messages: [{ role: 'user', content: '请回复：连接测试成功' }],
-        },
-        null,
-        2
-      )
-    default:
-      return JSON.stringify(
-        {
-          model: modelCode,
-          messages: [{ role: 'user', content: '请回复：连接测试成功' }],
-          max_tokens: 32,
-        },
-        null,
-        2
-      )
-  }
+type ModelFilters = {
+  keyword: string
+  providerCode: string
+  enabled?: boolean
 }
 
-const emptyProviderForm = (): ProviderFormState => ({
-  provider_code: '',
-  provider_name: 'OpenAI',
-  provider_type: 'openai',
-  base_url: 'https://api.openai.com/v1',
-  default_model_code: 'gpt-4o-mini',
+const providerTypeOptions = [
+  'openai',
+  'openai_compatible',
+  'doubao',
+  'gemini',
+  'claude',
+  'qwen',
+  'deepseek',
+  'custom',
+]
+
+const createProviderCode = (providerType: string) => `${providerType || 'provider'}-${Date.now().toString().slice(-6)}`
+
+const createEmptyProviderForm = (): ProviderFormState => ({
+  provider_code: createProviderCode('provider'),
+  provider_name: '',
+  provider_type: 'openai_compatible',
+  base_url: '',
   api_key_secret_ref: '',
   enabled: true,
 })
 
-const providerToForm = (provider?: ModelProviderConfig): ProviderFormState => {
-  if (!provider) return emptyProviderForm()
-  return {
-    provider_code: provider.provider_code,
-    provider_name: provider.provider_name || '',
-    provider_type: provider.provider_type,
-    base_url: provider.base_url,
-    default_model_code: provider.default_model_code,
-    api_key_secret_ref: '',
-    enabled: provider.enabled,
+const providerToForm = (provider: ModelProviderConfig): ProviderFormState => ({
+  provider_code: provider.provider_code,
+  provider_name: provider.provider_name || '',
+  provider_type: provider.provider_type || 'openai_compatible',
+  base_url: provider.base_url || '',
+  api_key_secret_ref: '',
+  enabled: provider.enabled,
+})
+
+const normalizeCapabilities = (value: string) =>
+  value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+
+const parseJsonObject = (text: string): Record<string, unknown> | undefined => {
+  if (!text.trim()) {
+    return undefined
   }
+  const parsed = JSON.parse(text)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('默认参数必须是 JSON 对象')
+  }
+  return parsed as Record<string, unknown>
 }
 
-const emptyPurposeForm = (purpose: PurposeDef, providerCode = ''): PurposeFormState => ({
-  profile_code: purpose.defaultProfileCode,
+const modelToForm = (record: ModelRecordConfig): ModelRecordFormState => ({
+  model_code: record.model_code,
+  model_name: record.model_name,
+  provider_code: record.provider_code,
+  upstream_model_code: record.upstream_model_code,
+  capabilities_text: (record.capabilities || []).join(','),
+  default_system_prompt: record.default_system_prompt || '',
+  default_options_text: record.default_options ? JSON.stringify(record.default_options, null, 2) : '',
+  enabled: record.enabled,
+})
+
+const createEmptyModelForm = (providerCode: string): ModelRecordFormState => ({
+  model_code: '',
+  model_name: '',
   provider_code: providerCode,
+  upstream_model_code: '',
+  capabilities_text: '',
+  default_system_prompt: '',
+  default_options_text: '',
   enabled: true,
 })
 
-const purposeFormFromProfile = (profile: ModelProfileConfig): PurposeFormState => ({
-  profile_code: profile.profile_code,
-  provider_code: profile.provider_code,
-  enabled: profile.enabled,
-})
-
-const providerCodeFromType = (providerType: string) => `${providerType}-${Date.now().toString().slice(-6)}`
-
 const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) => {
   const [providers, setProviders] = useState<ModelProviderConfig[]>([])
-  const [profiles, setProfiles] = useState<ModelProfileConfig[]>([])
+  const [providerForm, setProviderForm] = useState<ProviderFormState>(createEmptyProviderForm())
   const [selectedProviderCode, setSelectedProviderCode] = useState('')
-  const [providerForm, setProviderForm] = useState<ProviderFormState>(emptyProviderForm())
-  const [purposeForms, setPurposeForms] = useState<Record<string, PurposeFormState>>({})
-  const [selectedPurposeCode, setSelectedPurposeCode] = useState(purposeDefs[0].code)
-  const [requestBodyText, setRequestBodyText] = useState(defaultRequestBody('openai', 'gpt-4o-mini'))
-  const [testMessage, setTestMessage] = useState('请用一句话回复：模型测试成功。')
-  const [chatAnswer, setChatAnswer] = useState<Record<string, string>>({})
+
+  const [records, setRecords] = useState<ModelRecordConfig[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
+  const [pageSize] = useState(10)
+  const [filters, setFilters] = useState<ModelFilters>({
+    keyword: '',
+    providerCode: '',
+    enabled: undefined,
+  })
+  const [keywordInput, setKeywordInput] = useState('')
+  const [providerFilterInput, setProviderFilterInput] = useState('')
+  const [enabledFilterInput, setEnabledFilterInput] = useState<'all' | 'true' | 'false'>('all')
+
+  const [modelEditor, setModelEditor] = useState<ModelEditorState | null>(null)
   const [status, setStatus] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingProviders, setIsLoadingProviders] = useState(false)
+  const [isLoadingRecords, setIsLoadingRecords] = useState(false)
   const [isSavingProvider, setIsSavingProvider] = useState(false)
-  const [isValidatingProvider, setIsValidatingProvider] = useState(false)
-  const [lastValidatedProviderFingerprint, setLastValidatedProviderFingerprint] = useState('')
+  const [isSavingRecord, setIsSavingRecord] = useState(false)
 
-  const requiresAdmin = currentUserId !== 'demo-admin'
-  const selectedProvider = useMemo(() => providers.find((item) => item.provider_code === selectedProviderCode) || null, [providers, selectedProviderCode])
-  const selectedPurpose = useMemo(() => purposeDefs.find((item) => item.code === selectedPurposeCode) || purposeDefs[0], [selectedPurposeCode])
-  const activePurposeForm = purposeForms[selectedPurpose.code] || emptyPurposeForm(selectedPurpose)
-  const activePurposeProvider = providers.find((item) => item.provider_code === activePurposeForm.provider_code) || null
+  const totalPages = useMemo(() => Math.max(Math.ceil(total / pageSize), 1), [pageSize, total])
 
-  const currentProviderFingerprint = useMemo(
-    () =>
-      JSON.stringify({
-        provider_type: providerForm.provider_type.trim(),
-        base_url: providerForm.base_url.trim(),
-        default_model_code: providerForm.default_model_code.trim(),
-        api_key_secret_ref: providerForm.api_key_secret_ref.trim() ? `provided:${providerForm.api_key_secret_ref.trim()}` : '',
-        request_body: requestBodyText.trim(),
-      }),
-    [providerForm, requestBodyText]
-  )
+  const loadProviders = async () => {
+    setIsLoadingProviders(true)
+    try {
+      const items = await getModelProviders()
+      setProviders(items)
+      if (items.length === 0) {
+        setSelectedProviderCode('')
+        setProviderForm(createEmptyProviderForm())
+        return
+      }
 
-  const providerValidationPassed = lastValidatedProviderFingerprint !== '' && lastValidatedProviderFingerprint === currentProviderFingerprint
-
-  const rebuildPurposeForms = (providerItems: ModelProviderConfig[], profileItems: ModelProfileConfig[]) => {
-    const fallbackProviderCode = providerItems[0]?.provider_code || ''
-    const nextForms: Record<string, PurposeFormState> = {}
-    for (const purpose of purposeDefs) {
-      const existing = profileItems.find((item) => item.purpose === purpose.code)
-      nextForms[purpose.code] = existing ? purposeFormFromProfile(existing) : emptyPurposeForm(purpose, fallbackProviderCode)
+      const selected = items.find((item) => item.provider_code === selectedProviderCode) || items[0]
+      setSelectedProviderCode(selected.provider_code)
+      setProviderForm(providerToForm(selected))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '加载服务商失败')
+    } finally {
+      setIsLoadingProviders(false)
     }
-    return nextForms
   }
 
-  const load = async () => {
-    setIsLoading(true)
+  const loadModelRecords = async () => {
+    setIsLoadingRecords(true)
     try {
-      const [providerItems, profileItems] = await Promise.all([getModelProviders(), getModelProfiles()])
-      setProviders(providerItems)
-      setProfiles(profileItems)
-      const activeProvider = providerItems.find((item) => item.provider_code === selectedProviderCode) || providerItems[0]
-      if (activeProvider) {
-        setSelectedProviderCode(activeProvider.provider_code)
-        setProviderForm(providerToForm(activeProvider))
-        setRequestBodyText(defaultRequestBody(activeProvider.provider_type, activeProvider.default_model_code))
-      } else {
-        setSelectedProviderCode('')
-        setProviderForm(emptyProviderForm())
-        setRequestBodyText(defaultRequestBody('openai', 'gpt-4o-mini'))
-      }
-      setPurposeForms(rebuildPurposeForms(providerItems, profileItems))
-      setLastValidatedProviderFingerprint('')
-      setStatus('服务商配置负责厂商连接和默认模型，业务模型按用途绑定已配置服务商。')
+      const result = await getModelRecords({
+        page,
+        pageSize,
+        keyword: filters.keyword || undefined,
+        providerCode: filters.providerCode || undefined,
+        enabled: filters.enabled,
+      })
+      setRecords(result.items || [])
+      setTotal(result.total || 0)
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '加载模型配置失败')
+      setStatus(error instanceof Error ? error.message : '加载模型记录失败')
     } finally {
-      setIsLoading(false)
+      setIsLoadingRecords(false)
     }
   }
 
   useEffect(() => {
-    void load()
+    void loadProviders()
   }, [])
 
-  const updateProviderForm = (patch: Partial<ProviderFormState>) => {
-    setProviderForm((prev) => ({ ...prev, ...patch }))
-  }
+  useEffect(() => {
+    void loadModelRecords()
+  }, [page, pageSize, filters])
 
-  const updatePurposeForm = (purposeCode: string, patch: Partial<PurposeFormState>) => {
-    setPurposeForms((prev) => ({
-      ...prev,
-      [purposeCode]: {
-        ...prev[purposeCode],
-        ...patch,
-      },
-    }))
-  }
-
-  const parseJsonText = (text: string) => {
-    if (!text.trim()) return undefined
-    const parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('请求体必须是 JSON 对象')
+  const handleProviderSelect = (providerCode: string) => {
+    setSelectedProviderCode(providerCode)
+    const selected = providers.find((item) => item.provider_code === providerCode)
+    if (selected) {
+      setProviderForm(providerToForm(selected))
     }
-    return parsed as Record<string, unknown>
-  }
-
-  const handleProviderTypeChange = (nextType: string) => {
-    const preset = providerPresetByType(nextType)
-    const nextModel = preset?.placeholder_model || 'gpt-4o-mini'
-    setProviderForm((prev) => ({
-      ...prev,
-      provider_type: nextType,
-      provider_name: prev.provider_name.trim() ? prev.provider_name : preset?.label || nextType,
-      base_url: preset?.base_url || '',
-      default_model_code: nextModel,
-      provider_code: selectedProviderCode ? prev.provider_code : providerCodeFromType(nextType),
-    }))
-    setRequestBodyText(defaultRequestBody(nextType, nextModel))
   }
 
   const handleCreateProvider = () => {
-    const preset = providerPresets[0]
+    const next = createEmptyProviderForm()
     setSelectedProviderCode('')
-    setProviderForm({
-      provider_code: providerCodeFromType(preset.value),
-      provider_name: preset.label,
-      provider_type: preset.value,
-      base_url: preset.base_url,
-      default_model_code: preset.placeholder_model,
-      api_key_secret_ref: '',
-      enabled: true,
-    })
-    setRequestBodyText(defaultRequestBody(preset.value, preset.placeholder_model))
-    setLastValidatedProviderFingerprint('')
-    setStatus('已切换到新建服务商草稿，请先测试连通性，通过后才能保存。')
+    setProviderForm(next)
+    setStatus('已切换到新建服务商草稿')
   }
 
   const handleValidateProvider = async () => {
     try {
-      setIsValidatingProvider(true)
       const result = await validateModelProviderDraft(
         {
           provider_type: providerForm.provider_type.trim(),
           base_url: providerForm.base_url.trim(),
-          default_model_code: providerForm.default_model_code.trim(),
           api_key_secret_ref: providerForm.api_key_secret_ref.trim() || undefined,
-          request_body: parseJsonText(requestBodyText),
+          request_body: {
+            model: 'connectivity-check',
+            messages: [{ role: 'user', content: 'ping' }],
+          },
         },
         currentUserId
       )
-      setLastValidatedProviderFingerprint(currentProviderFingerprint)
-      setStatus(`HTTP ${result.status_code || 200}，模型 ${result.tested_model_code || providerForm.default_model_code.trim()}，${result.message}`)
+      setStatus(`服务商连通性验证通过：HTTP ${result.status_code || 200}`)
     } catch (error) {
-      setLastValidatedProviderFingerprint('')
-      setStatus(error instanceof Error ? error.message : '连通性测试失败')
-    } finally {
-      setIsValidatingProvider(false)
+      setStatus(error instanceof Error ? error.message : '服务商连通性测试失败')
     }
   }
 
   const handleSaveProvider = async () => {
-    if (!providerValidationPassed) {
-      setStatus('请先完成连通性测试并通过后，再保存服务商。')
-      return
-    }
     try {
       setIsSavingProvider(true)
-      const draftProviderCode = providerForm.provider_code.trim() || providerCodeFromType(providerForm.provider_type.trim() || 'openai')
       const payload = {
-        provider_code: draftProviderCode,
+        provider_code: providerForm.provider_code.trim(),
         provider_name: providerForm.provider_name.trim(),
         provider_type: providerForm.provider_type.trim(),
         base_url: providerForm.base_url.trim(),
-        default_model_code: providerForm.default_model_code.trim(),
         api_key_secret_ref: providerForm.api_key_secret_ref.trim() || undefined,
         enabled: providerForm.enabled,
       }
+      if (!payload.provider_code || !payload.provider_name || !payload.provider_type || !payload.base_url) {
+        setStatus('请完整填写服务商编码、名称、类型和地址')
+        return
+      }
       const saved = await saveModelProvider(payload, currentUserId, selectedProviderCode || undefined)
-      await load()
       setSelectedProviderCode(saved.provider_code)
       setProviderForm(providerToForm(saved))
-      setRequestBodyText(defaultRequestBody(saved.provider_type, saved.default_model_code))
-      setLastValidatedProviderFingerprint('')
+      await loadProviders()
       setStatus('服务商已保存')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '保存服务商失败')
@@ -350,234 +253,454 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     }
   }
 
-  const handleSavePurpose = async (purpose: PurposeDef) => {
-    const form = purposeForms[purpose.code]
-    const provider = providers.find((item) => item.provider_code === form.provider_code)
-    if (!provider) {
-      setStatus(`请先为${purpose.label}选择已配置服务商`)
+  const handleDeleteProvider = async () => {
+    const providerCode = selectedProviderCode || providerForm.provider_code.trim()
+    if (!providerCode) {
+      setStatus('请先选择要删除的服务商')
       return
     }
     try {
-      const existing = profiles.find((item) => item.profile_code === form.profile_code)
-      await saveModelProfile(
+      await deleteModelProvider(providerCode, currentUserId)
+      setStatus('服务商已删除')
+      await loadProviders()
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '删除服务商失败')
+    }
+  }
+
+  const openCreateModel = () => {
+    const fallbackProviderCode = providerFilterInput || selectedProviderCode || providers[0]?.provider_code || ''
+    setModelEditor({
+      mode: 'create',
+      form: createEmptyModelForm(fallbackProviderCode),
+    })
+  }
+
+  const openEditModel = (record: ModelRecordConfig) => {
+    setModelEditor({
+      mode: 'edit',
+      originalModelCode: record.model_code,
+      form: modelToForm(record),
+    })
+  }
+
+  const handleSaveModelRecord = async () => {
+    if (!modelEditor) return
+    const form = modelEditor.form
+    if (!form.model_code.trim() || !form.model_name.trim() || !form.provider_code.trim() || !form.upstream_model_code.trim()) {
+      setStatus('请完整填写模型编码、名称、服务商和上游模型编码')
+      return
+    }
+    try {
+      setIsSavingRecord(true)
+      const payload = {
+        model_code: form.model_code.trim(),
+        model_name: form.model_name.trim(),
+        provider_code: form.provider_code.trim(),
+        upstream_model_code: form.upstream_model_code.trim(),
+        capabilities: normalizeCapabilities(form.capabilities_text),
+        default_system_prompt: form.default_system_prompt.trim() || undefined,
+        default_options: parseJsonObject(form.default_options_text),
+        enabled: form.enabled,
+      }
+      await saveModelRecord(payload, currentUserId, modelEditor.mode === 'edit' ? modelEditor.originalModelCode : undefined)
+      setStatus(modelEditor.mode === 'edit' ? '模型记录已更新' : '模型记录已创建')
+      setModelEditor(null)
+      if (modelEditor.mode === 'create') {
+        setPage(0)
+      }
+      await loadModelRecords()
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '保存模型记录失败')
+    } finally {
+      setIsSavingRecord(false)
+    }
+  }
+
+  const handleToggleModelEnabled = async (record: ModelRecordConfig) => {
+    try {
+      await saveModelRecord(
         {
-          profile_code: form.profile_code.trim(),
-          provider_code: form.provider_code.trim(),
-          purpose: purpose.code,
-          response_format: {},
-          enabled: form.enabled,
+          model_code: record.model_code,
+          model_name: record.model_name,
+          provider_code: record.provider_code,
+          upstream_model_code: record.upstream_model_code,
+          capabilities: record.capabilities || [],
+          default_system_prompt: record.default_system_prompt || undefined,
+          default_options: record.default_options || undefined,
+          enabled: !record.enabled,
         },
         currentUserId,
-        existing?.profile_code
+        record.model_code
       )
-      await load()
-      setStatus(`${purpose.label}配置已保存`)
+      await loadModelRecords()
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '保存业务模型配置失败')
+      setStatus(error instanceof Error ? error.message : '切换模型启用状态失败')
     }
   }
 
-  const handlePurposeValidate = async (purpose: PurposeDef) => {
-    const form = purposeForms[purpose.code]
-    const provider = providers.find((item) => item.provider_code === form.provider_code)
-    if (!provider) {
-      setStatus(`请先为${purpose.label}选择已配置服务商`)
-      return
-    }
+  const handleDeleteModel = async (record: ModelRecordConfig) => {
     try {
-      const result = await validateModelProvider(
-        provider.provider_code,
-        {
-          purpose: purpose.code,
-          model_code: provider.default_model_code,
-        },
-        currentUserId
-      )
-      setStatus(`HTTP ${result.status_code || 200}，模型 ${result.tested_model_code || provider.default_model_code}，${purpose.label}${result.message}`)
+      await deleteModelRecord(record.model_code, currentUserId)
+      setStatus(`模型 ${record.model_code} 已删除`)
+      await loadModelRecords()
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '连通性测试失败')
+      setStatus(error instanceof Error ? error.message : '删除模型记录失败')
     }
   }
 
-  const handlePurposeChatTest = async (purpose: PurposeDef) => {
-    const form = purposeForms[purpose.code]
-    if (!form?.profile_code) {
-      setStatus(`请先保存${purpose.label}配置，再测试会话`)
-      return
-    }
-    try {
-      const result = await testModelProfileChat(
-        form.profile_code,
-        {
-          system_prompt: '你是一个简洁可靠的机器人助手。',
-          message: testMessage.trim() || '请用一句话回复：模型测试成功。',
-        },
-        currentUserId
-      )
-      setChatAnswer((prev) => ({ ...prev, [purpose.code]: result.answer }))
-      setStatus(`${purpose.label}会话测试成功`)
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : '会话测试失败')
-    }
+  const applyFilters = () => {
+    setPage(0)
+    setFilters({
+      keyword: keywordInput.trim(),
+      providerCode: providerFilterInput,
+      enabled: enabledFilterInput === 'all' ? undefined : enabledFilterInput === 'true',
+    })
   }
 
   return (
-    <div className="panel-card h-full flex flex-col">
-      <div className="panel-header">
-        <div>
-          <div className="panel-title">模型配置</div>
-          <div className="text-xs text-slate-500">服务商配置包含厂商、接口地址、密钥和默认模型；业务模型按用途绑定已配置服务商</div>
-        </div>
-        <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
-          刷新
-        </button>
-      </div>
-
-      <div className="panel-body space-y-4">
-        {isLoading && <div className="text-sm text-slate-500">加载中...</div>}
-        {status && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">{status}</div>}
-        {requiresAdmin && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">当前身份是 {currentUserId}。保存和测试接口需要“演示管理员”权限。</div>}
-
-        <section className="space-y-3 rounded-xl border border-slate-200 bg-white/60 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-slate-800">服务商配置</div>
-              <div className="text-xs text-slate-500">直接编辑当前服务商草稿，不再提供顶部服务商选择控件。</div>
-            </div>
-            <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={handleCreateProvider}>
-              新建服务商
-            </button>
+    <div className="panel-card h-full min-h-0 overflow-hidden p-0" data-testid="model-config-layout">
+      <div className="flex h-full min-h-0">
+        <section className="flex h-full min-h-0 w-[360px] flex-col border-r border-slate-200 bg-white" data-testid="model-provider-panel">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <div className="panel-title">服务商配置</div>
+            <div className="mt-1 text-xs text-slate-500">维护 provider_code / type / base_url / api_key_secret_ref</div>
           </div>
-
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            当前草稿: {providerLabel(providerForm.provider_name, providerForm.provider_type, providerForm.default_model_code)}
-          </div>
-
-          <input
-            value={providerForm.provider_name}
-            onChange={(event) => updateProviderForm({ provider_name: event.target.value })}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder="服务商名称，例如 豆包生产环境"
-          />
-
-          <select value={providerForm.provider_type} onChange={(event) => handleProviderTypeChange(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
-            {providerPresets.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-
-          <input value={providerForm.base_url} onChange={(event) => updateProviderForm({ base_url: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="接口地址" />
-          <input
-            value={providerForm.default_model_code}
-            onChange={(event) => {
-              updateProviderForm({ default_model_code: event.target.value })
-              setRequestBodyText(defaultRequestBody(providerForm.provider_type, event.target.value))
-            }}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder="默认模型，例如 doubao-seed-2-0-pro-260215"
-          />
-          <input
-            type="password"
-            value={providerForm.api_key_secret_ref}
-            onChange={(event) => updateProviderForm({ api_key_secret_ref: event.target.value })}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder={selectedProvider?.api_key_configured ? selectedProvider.api_key_masked || '请输入可用访问密钥' : '请输入可用访问密钥'}
-          />
-
-          {selectedProvider?.api_key_error && !providerForm.api_key_secret_ref.trim() && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              {selectedProvider.api_key_error}。请直接输入当前厂商可用的访问密钥。
-            </div>
-          )}
-
-          <textarea value={requestBodyText} onChange={(event) => setRequestBodyText(event.target.value)} className="min-h-[180px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs" placeholder="连通性测试请求体 JSON" />
-
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={providerForm.enabled} onChange={(event) => updateProviderForm({ enabled: event.target.checked })} />
-            启用服务商
-          </label>
-
-          {providerValidationPassed && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">当前草稿已通过连通测试，可以保存。</div>}
-
-          <div className="flex items-center gap-2">
-            <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void handleValidateProvider()} disabled={isValidatingProvider}>
-              {isValidatingProvider ? '测试中...' : '测试连通性'}
-            </button>
-            <button
-              className="rounded-md bg-slate-900 px-3 py-2 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => void handleSaveProvider()}
-              disabled={!providerValidationPassed || isSavingProvider || isValidatingProvider}
-            >
-              {isSavingProvider ? '保存中...' : '保存服务商'}
-            </button>
-          </div>
-        </section>
-
-        <section className="space-y-3 rounded-xl border border-slate-200 bg-white/60 p-4">
-          <div>
-            <div className="text-sm font-medium text-slate-800">业务模型配置</div>
-            <div className="text-xs text-slate-500">按业务用途逐个选择已配置服务商，不再平铺所有用途。</div>
-          </div>
-
-          <select value={selectedPurposeCode} onChange={(event) => setSelectedPurposeCode(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-            {purposeDefs.map((purpose) => (
-              <option key={purpose.code} value={purpose.code}>
-                {purpose.label}
-              </option>
-            ))}
-          </select>
-
-          <textarea value={testMessage} onChange={(event) => setTestMessage(event.target.value)} className="min-h-[88px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="会话测试消息" />
-
-          <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-            <div>
-              <div className="text-sm font-medium text-slate-800">{selectedPurpose.label}</div>
-              <div className="text-xs text-slate-500">{selectedPurpose.description}</div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-4">
+            {status && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">{status}</div>}
+            <div className="grid gap-2">
+              <select
+                value={selectedProviderCode}
+                onChange={(event) => handleProviderSelect(event.target.value)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              >
+                {providers.length === 0 && <option value="">暂无服务商</option>}
+                {providers.map((provider) => (
+                  <option key={provider.provider_code} value={provider.provider_code}>
+                    {provider.provider_name || provider.provider_code}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="prompt-secondary" onClick={handleCreateProvider}>
+                新建服务商
+              </button>
             </div>
 
             <input
-              value={activePurposeForm.profile_code}
-              onChange={(event) => updatePurposeForm(selectedPurpose.code, { profile_code: event.target.value })}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              placeholder="配置编码"
+              value={providerForm.provider_code}
+              onChange={(event) => setProviderForm((prev) => ({ ...prev, provider_code: event.target.value }))}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              placeholder="provider_code"
             />
-
+            <input
+              value={providerForm.provider_name}
+              onChange={(event) => setProviderForm((prev) => ({ ...prev, provider_name: event.target.value }))}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              placeholder="provider_name"
+            />
             <select
-              value={activePurposeForm.provider_code}
-              onChange={(event) => updatePurposeForm(selectedPurpose.code, { provider_code: event.target.value })}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              value={providerForm.provider_type}
+              onChange={(event) => {
+                const providerType = event.target.value
+                setProviderForm((prev) => ({
+                  ...prev,
+                  provider_type: providerType,
+                  provider_code: selectedProviderCode ? prev.provider_code : createProviderCode(providerType),
+                }))
+              }}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="">选择已配置服务商</option>
-              {providers.map((item) => (
-                <option key={item.provider_code} value={item.provider_code}>
-                  {providerLabel(item.provider_name, item.provider_type, item.default_model_code)}
+              {providerTypeOptions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
                 </option>
               ))}
             </select>
-
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">当前模型：{activePurposeProvider?.default_model_code || '未选择服务商'}</div>
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">采样参数、输出长度和超时阈值由后端按用途统一控制，前台不再编辑。</div>
-
+            <input
+              value={providerForm.base_url}
+              onChange={(event) => setProviderForm((prev) => ({ ...prev, base_url: event.target.value }))}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              placeholder="base_url"
+            />
+            <input
+              value={providerForm.api_key_secret_ref}
+              onChange={(event) => setProviderForm((prev) => ({ ...prev, api_key_secret_ref: event.target.value }))}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              placeholder="api_key_secret_ref (可选)"
+              type="password"
+            />
             <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={activePurposeForm.enabled} onChange={(event) => updatePurposeForm(selectedPurpose.code, { enabled: event.target.checked })} />
-              启用
+              <input
+                type="checkbox"
+                checked={providerForm.enabled}
+                onChange={(event) => setProviderForm((prev) => ({ ...prev, enabled: event.target.checked }))}
+              />
+              启用服务商
             </label>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="rounded-md bg-slate-900 px-3 py-2 text-xs text-white" onClick={() => void handleSavePurpose(selectedPurpose)}>
-                保存
+            <div className="flex items-center gap-2">
+              <button type="button" className="prompt-secondary" onClick={() => void handleValidateProvider()}>
+                测试连通性
               </button>
-              <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={() => void handlePurposeValidate(selectedPurpose)}>
-                连通测试
+              <button
+                type="button"
+                className="prompt-primary"
+                onClick={() => void handleSaveProvider()}
+                disabled={isSavingProvider}
+              >
+                {isSavingProvider ? '保存中...' : '保存服务商'}
               </button>
-              <button className="rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700" onClick={() => void handlePurposeChatTest(selectedPurpose)}>
-                会话测试
+              <button type="button" className="prompt-secondary" onClick={() => void handleDeleteProvider()}>
+                删除
               </button>
             </div>
+            {isLoadingProviders && <div className="text-xs text-slate-500">服务商加载中...</div>}
+          </div>
+        </section>
 
-            {chatAnswer[selectedPurpose.code] && <div className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">{chatAnswer[selectedPurpose.code]}</div>}
+        <section className="flex min-h-0 flex-1 flex-col bg-white">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-3">
+            <input
+              data-testid="model-record-search-input"
+              value={keywordInput}
+              onChange={(event) => setKeywordInput(event.target.value)}
+              className="min-w-[200px] flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              placeholder="搜索 model_code / model_name / upstream_model_code"
+            />
+            <select
+              data-testid="model-record-provider-filter"
+              value={providerFilterInput}
+              onChange={(event) => setProviderFilterInput(event.target.value)}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">全部服务商</option>
+              {providers.map((provider) => (
+                <option key={provider.provider_code} value={provider.provider_code}>
+                  {provider.provider_name || provider.provider_code}
+                </option>
+              ))}
+            </select>
+            <select
+              data-testid="model-record-enabled-filter"
+              value={enabledFilterInput}
+              onChange={(event) => setEnabledFilterInput(event.target.value as 'all' | 'true' | 'false')}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="all">全部状态</option>
+              <option value="true">仅启用</option>
+              <option value="false">仅禁用</option>
+            </select>
+            <button data-testid="model-record-search-apply" type="button" className="prompt-secondary" onClick={applyFilters}>
+              应用筛选
+            </button>
+            <button data-testid="model-record-create" type="button" className="prompt-primary" onClick={openCreateModel}>
+              新建模型记录
+            </button>
+          </div>
+
+          {modelEditor && (
+            <div className="grid gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs font-semibold text-slate-500">{modelEditor.mode === 'edit' ? '编辑模型记录' : '新建模型记录'}</div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <input
+                  data-testid="model-record-form-model-code"
+                  value={modelEditor.form.model_code}
+                  onChange={(event) =>
+                    setModelEditor((prev) =>
+                      prev
+                        ? { ...prev, form: { ...prev.form, model_code: event.target.value } }
+                        : prev
+                    )
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="model_code"
+                />
+                <input
+                  data-testid="model-record-form-model-name"
+                  value={modelEditor.form.model_name}
+                  onChange={(event) =>
+                    setModelEditor((prev) =>
+                      prev
+                        ? { ...prev, form: { ...prev.form, model_name: event.target.value } }
+                        : prev
+                    )
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="model_name"
+                />
+                <select
+                  data-testid="model-record-form-provider-code"
+                  value={modelEditor.form.provider_code}
+                  onChange={(event) =>
+                    setModelEditor((prev) =>
+                      prev
+                        ? { ...prev, form: { ...prev.form, provider_code: event.target.value } }
+                        : prev
+                    )
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="">选择 provider_code</option>
+                  {providers.map((provider) => (
+                    <option key={provider.provider_code} value={provider.provider_code}>
+                      {provider.provider_name || provider.provider_code}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  data-testid="model-record-form-upstream-code"
+                  value={modelEditor.form.upstream_model_code}
+                  onChange={(event) =>
+                    setModelEditor((prev) =>
+                      prev
+                        ? { ...prev, form: { ...prev.form, upstream_model_code: event.target.value } }
+                        : prev
+                    )
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="upstream_model_code"
+                />
+              </div>
+              <input
+                data-testid="model-record-form-capabilities"
+                value={modelEditor.form.capabilities_text}
+                onChange={(event) =>
+                  setModelEditor((prev) =>
+                    prev
+                      ? { ...prev, form: { ...prev.form, capabilities_text: event.target.value } }
+                      : prev
+                  )
+                }
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                placeholder="capabilities，逗号分隔，如 text,stream,json"
+              />
+              <textarea
+                value={modelEditor.form.default_system_prompt}
+                onChange={(event) =>
+                  setModelEditor((prev) =>
+                    prev
+                      ? { ...prev, form: { ...prev.form, default_system_prompt: event.target.value } }
+                      : prev
+                  )
+                }
+                className="min-h-[72px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                placeholder="default_system_prompt（可选）"
+              />
+              <textarea
+                value={modelEditor.form.default_options_text}
+                onChange={(event) =>
+                  setModelEditor((prev) =>
+                    prev
+                      ? { ...prev, form: { ...prev.form, default_options_text: event.target.value } }
+                      : prev
+                  )
+                }
+                className="min-h-[90px] rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
+                placeholder="default_options JSON（可选）"
+              />
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={modelEditor.form.enabled}
+                  onChange={(event) =>
+                    setModelEditor((prev) =>
+                      prev
+                        ? { ...prev, form: { ...prev.form, enabled: event.target.checked } }
+                        : prev
+                    )
+                  }
+                />
+                启用模型
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  data-testid="model-record-form-save"
+                  type="button"
+                  className="prompt-primary"
+                  onClick={() => void handleSaveModelRecord()}
+                  disabled={isSavingRecord}
+                >
+                  {isSavingRecord ? '保存中...' : '保存模型记录'}
+                </button>
+                <button type="button" className="prompt-secondary" onClick={() => setModelEditor(null)}>
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="min-h-0 flex-1 overflow-auto" data-testid="model-record-list">
+            {isLoadingRecords && <div className="px-4 py-3 text-sm text-slate-500">模型记录加载中...</div>}
+            {!isLoadingRecords && records.length === 0 && <div className="px-4 py-6 text-sm text-slate-500">暂无模型记录</div>}
+            {!isLoadingRecords &&
+              records.map((record) => (
+                <button
+                  key={record.model_code}
+                  type="button"
+                  data-testid={`model-record-row-${record.model_code}`}
+                  className="flex w-full items-start justify-between border-b border-slate-100 px-4 py-3 text-left hover:bg-slate-50"
+                  onClick={() => openEditModel(record)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-slate-800">{record.model_name}</span>
+                      <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">
+                        {record.enabled ? '启用' : '禁用'}
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-slate-500">
+                      {record.model_code} · {record.provider_code} · {record.upstream_model_code}
+                    </div>
+                  </div>
+                  <div className="ml-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid={`model-record-toggle-${record.model_code}`}
+                      className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleToggleModelEnabled(record)
+                      }}
+                    >
+                      {record.enabled ? '禁用' : '启用'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`model-record-delete-${record.model_code}`}
+                      className="rounded-md border border-rose-200 px-2 py-1 text-xs text-rose-700"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleDeleteModel(record)
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </button>
+              ))}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-xs text-slate-600" data-testid="model-record-pagination">
+            <div>
+              第 {Math.min(page + 1, totalPages)} / {totalPages} 页，共 {total} 条
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={page <= 0}
+                onClick={() => setPage((current) => Math.max(current - 1, 0))}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={(page + 1) * pageSize >= total}
+                onClick={() => setPage((current) => current + 1)}
+              >
+                下一页
+              </button>
+            </div>
           </div>
         </section>
       </div>

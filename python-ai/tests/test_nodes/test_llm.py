@@ -17,7 +17,7 @@ async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
         session_id="sess_test",
         workflow_code="flight_booking",
         workflow_version="1.0.0",
-        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        workflow_config={"llm_defaults": {"model_code": "structured-extraction-v1"}},
         provider_configs={
             "openai-compatible-prod": {
                 "provider_code": "openai-compatible-prod",
@@ -25,11 +25,11 @@ async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
                 "base_url": "https://llm.example.com/v1",
             }
         },
-        model_profiles={
+        model_records={
             "structured-extraction-v1": {
-                "profile_code": "structured-extraction-v1",
+                "model_code": "structured-extraction-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "qwen-plus",
+                "upstream_model_code": "qwen-plus",
             }
         },
     )
@@ -52,7 +52,7 @@ async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
             },
         },
     })
-    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"北京","arrival_city":"上海","departure_date":"2026-04-12","passengers":2}'))
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", async_result('{"departure_city":"北京","arrival_city":"上海","departure_date":"2026-04-12","passengers":2}'))
 
     result = await node.execute(context)
 
@@ -69,7 +69,7 @@ async def test_llm_node_extracts_english_route_and_date(monkeypatch):
         session_id="sess_test",
         workflow_code="flight_booking",
         workflow_version="1.0.0",
-        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        workflow_config={"llm_defaults": {"model_code": "structured-extraction-v1"}},
         provider_configs={
             "openai-compatible-prod": {
                 "provider_code": "openai-compatible-prod",
@@ -77,11 +77,11 @@ async def test_llm_node_extracts_english_route_and_date(monkeypatch):
                 "base_url": "https://llm.example.com/v1",
             }
         },
-        model_profiles={
+        model_records={
             "structured-extraction-v1": {
-                "profile_code": "structured-extraction-v1",
+                "model_code": "structured-extraction-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "qwen-plus",
+                "upstream_model_code": "qwen-plus",
             }
         },
     )
@@ -107,7 +107,7 @@ async def test_llm_node_extracts_english_route_and_date(monkeypatch):
             },
         },
     })
-    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08","passengers":3}'))
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08","passengers":3}'))
 
     result = await node.execute(context)
 
@@ -124,7 +124,7 @@ async def test_llm_node_sanitizes_injection_like_prompt_input(monkeypatch):
         session_id="sess_test",
         workflow_code="flight_booking",
         workflow_version="2.0.0",
-        workflow_config={"llm_defaults": {"model_profile_ref": "structured-extraction-v1"}},
+        workflow_config={"llm_defaults": {"model_code": "structured-extraction-v1"}},
         provider_configs={
             "openai-compatible-prod": {
                 "provider_code": "openai-compatible-prod",
@@ -132,11 +132,11 @@ async def test_llm_node_sanitizes_injection_like_prompt_input(monkeypatch):
                 "base_url": "https://llm.example.com/v1",
             }
         },
-        model_profiles={
+        model_records={
             "structured-extraction-v1": {
-                "profile_code": "structured-extraction-v1",
+                "model_code": "structured-extraction-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "qwen-plus",
+                "upstream_model_code": "qwen-plus",
             }
         },
     )
@@ -161,9 +161,54 @@ async def test_llm_node_sanitizes_injection_like_prompt_input(monkeypatch):
             },
         },
     })
-    monkeypatch.setattr("src.nodes.llm.execute_profile_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08"}'))
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", async_result('{"departure_city":"Beijing","arrival_city":"Shanghai","departure_date":"2026-04-08"}'))
 
     result = await node.execute(context)
 
     assert result["output"]["departure_city"] == "Beijing"
     assert any(event["event_type"] == "security.prompt_sanitized" for event in result["security_events"])
+
+
+@pytest.mark.asyncio
+async def test_llm_node_prefers_explicit_model_code_over_workflow_default(monkeypatch):
+    captured = {}
+
+    async def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return '{"text":"ok"}'
+
+    context = ExecutionContext(
+        execution_id="exec_test_explicit",
+        session_id="sess_test_explicit",
+        workflow_code="flight_booking",
+        workflow_version="1.0.0",
+        workflow_config={"llm_defaults": {"model_code": "default-llm-v1"}},
+        provider_configs={},
+        model_records={
+            "explicit-llm-v1": {
+                "model_code": "explicit-llm-v1",
+                "provider_code": "openai-compatible-prod",
+                "upstream_model_code": "qwen-plus",
+            },
+            "default-llm-v1": {
+                "model_code": "default-llm-v1",
+                "provider_code": "openai-compatible-prod",
+                "upstream_model_code": "qwen-turbo",
+            },
+        },
+    )
+    context.add_execution_variable("user_message", "hello")
+    node = LLMNode(
+        "extract_slots",
+        {
+            "config": {
+                "model_code": "explicit-llm-v1",
+                "structured_output": {"enabled": True, "schema": {"type": "object"}},
+            }
+        },
+    )
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", fake_completion)
+
+    await node.execute(context)
+
+    assert captured["model_code"] == "explicit-llm-v1"

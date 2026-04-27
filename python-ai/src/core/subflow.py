@@ -47,8 +47,8 @@ async def run_subflow(
         workflow_catalog=parent_context.workflow_catalog,
         workflow_config={},
         provider_configs=parent_context.provider_configs,
-        model_profiles=parent_context.model_profiles,
-        intent_profile_code=parent_context.intent_profile_code,
+        model_records=parent_context.model_records,
+        routing_model_code=parent_context.routing_model_code,
     )
     context.add_execution_variables(input_variables)
 

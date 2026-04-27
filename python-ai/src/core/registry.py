@@ -58,10 +58,10 @@ class ExecutionRegistry:
                 for item in payload.get("provider_configs", [])
                 if item.get("provider_code")
             }
-            model_profiles = {
-                str(item.get("profile_code")): item
-                for item in payload.get("model_profiles", [])
-                if item.get("profile_code")
+            model_records = {
+                str(item.get("model_code")): item
+                for item in payload.get("model_records", [])
+                if item.get("model_code")
             }
 
             context = ExecutionContext(
@@ -84,8 +84,8 @@ class ExecutionRegistry:
                 workflow_config=dict(payload.get("workflow_config", {}) or {}),
                 workflow_catalog=dict(payload.get("workflow_catalog", {}) or {}),
                 provider_configs=provider_configs,
-                model_profiles=model_profiles,
-                intent_profile_code=payload.get("intent_profile_code"),
+                model_records=model_records,
+                routing_model_code=payload.get("routing_model_code"),
             )
             context.add_execution_variables(payload.get("input_variables", {}))
             if context.confirmed_tool_codes:

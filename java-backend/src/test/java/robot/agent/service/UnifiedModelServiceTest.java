@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.web.server.ResponseStatusException;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
@@ -21,6 +22,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -42,6 +44,19 @@ class UnifiedModelServiceTest {
         if (server != null) {
             server.stop(0);
             server = null;
+        }
+    }
+
+    @Test
+    void springContextCanInstantiateUnifiedModelServiceBean() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(LlmModelRecordRepository.class, () -> modelRecordRepository);
+            context.registerBean(LlmProviderConfigRepository.class, () -> providerRepository);
+            context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
+            context.registerBean(UnifiedModelService.class);
+
+            assertThatCode(context::refresh).doesNotThrowAnyException();
+            assertThat(context.getBean(UnifiedModelService.class)).isNotNull();
         }
     }
 
@@ -149,7 +164,6 @@ class UnifiedModelServiceTest {
         provider.setProviderType(providerType);
         provider.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
         provider.setApiKeySecretRef("test-api-key");
-        provider.setDefaultModelCode("gpt-4o-mini");
         provider.setEnabled(true);
         return provider;
     }

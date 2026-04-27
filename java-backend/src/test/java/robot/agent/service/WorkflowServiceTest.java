@@ -325,6 +325,74 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void buildRuntimeExecutionBundlePreservesExplicitRuntimeModelKeys() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED))
+                .thenReturn(List.of());
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection()))
+                .thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        Map<String, Object> legacyDefinition = Map.of(
+                "entry", "start",
+                "nodes", Map.of(
+                        "start", Map.of("id", "start", "type", "start", "config", Map.of("prompt", "start")),
+                        "chat", Map.of("id", "chat", "type", "sub_agent", "config", Map.of("model_code", "chat-main")),
+                        "end", Map.of("id", "end", "type", "end", "config", Map.of("prompt", "done", "output_format", Map.of()))
+                ),
+                "transitions", Map.of(
+                        "start", "chat",
+                        "chat", "end"
+                )
+        );
+        Map<String, Object> workflowConfig = Map.of(
+                "routing_model_code", "router-main",
+                "llm_defaults", Map.of("model_code", "default-chat")
+        );
+
+        WorkflowService.RuntimeExecutionBundle bundle = workflowService.buildRuntimeExecutionBundle(
+                "legacy_flow",
+                "1.0.0",
+                legacyDefinition,
+                Map.of(),
+                workflowConfig
+        );
+
+        assertThat(bundle.workflowConfig()).containsEntry("routing_model_code", "router-main");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> llmDefaults = (Map<String, Object>) bundle.workflowConfig().get("llm_defaults");
+        assertThat(llmDefaults).containsEntry("model_code", "default-chat");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> graphs = (Map<String, Object>) bundle.workflowDefinition().get("graphs");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> main = (Map<String, Object>) graphs.get("main");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> nodes = (Map<String, Object>) main.get("nodes");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> chat = (Map<String, Object>) nodes.get("chat");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> chatConfig = (Map<String, Object>) chat.get("config");
+        assertThat(chatConfig).containsEntry("model_code", "chat-main");
+    }
+
+    @Test
     void validateWorkflowDefinitionSupportsLegacyCoordinateBranchingCompatibility() {
         WorkflowService workflowService = newWorkflowService();
         String definition = """

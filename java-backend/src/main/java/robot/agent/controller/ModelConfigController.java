@@ -80,13 +80,20 @@ public class ModelConfigController {
 
     @GetMapping("/models")
     public ResponseEntity<Map<String, Object>> getModels(
-            @RequestParam(value = "q", required = false) String keyword,
-            @RequestParam(value = "provider_code", required = false) String providerCode,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "providerCode", required = false) String providerCode,
             @RequestParam(value = "enabled", required = false) Boolean enabled,
             @RequestParam(value = "page", defaultValue = "0") int page,
-            @RequestParam(value = "page_size", defaultValue = "20") int pageSize
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
     ) {
         return ResponseEntity.ok(modelConfigService.getModelRecords(keyword, providerCode, enabled, page, pageSize));
+    }
+
+    @GetMapping("/models/{modelCode}")
+    public ResponseEntity<Map<String, Object>> getModel(
+            @PathVariable String modelCode
+    ) {
+        return ResponseEntity.ok(modelConfigService.getModelRecord(modelCode));
     }
 
     @PostMapping("/models")

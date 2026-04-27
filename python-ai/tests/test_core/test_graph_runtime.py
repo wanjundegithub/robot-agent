@@ -471,7 +471,7 @@ async def test_v2_runtime_emits_cost_chain_and_completion_metrics(monkeypatch):
         },
     }
     monkeypatch.setattr(
-        "src.nodes.llm.execute_profile_completion",
+        "src.nodes.llm.execute_model_completion",
         async_result('{"intent":"book_flight"}'),
     )
     monkeypatch.setattr(
@@ -494,7 +494,7 @@ async def test_v2_runtime_emits_cost_chain_and_completion_metrics(monkeypatch):
         "workflow_version": "v20260426",
         "workflow_definition": workflow,
         "workflow_config": {
-            "llm_defaults": {"model_profile_ref": "general-chat-v1"},
+            "llm_defaults": {"model_code": "general-chat-v1"},
         },
         "provider_configs": [
             {
@@ -503,11 +503,11 @@ async def test_v2_runtime_emits_cost_chain_and_completion_metrics(monkeypatch):
                 "base_url": "https://llm.example.com/v1",
             },
         ],
-        "model_profiles": [
+        "model_records": [
             {
-                "profile_code": "general-chat-v1",
+                "model_code": "general-chat-v1",
                 "provider_code": "openai-compatible-prod",
-                "model_code": "gpt-4.1-mini",
+                "upstream_model_code": "gpt-4.1-mini",
             },
         ],
         "input_variables": {"user_message": "我要从北京去上海"},

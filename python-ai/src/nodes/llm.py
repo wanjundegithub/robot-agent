@@ -3,12 +3,12 @@ from typing import Any, Dict, List
 
 from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
-from src.core.model_runtime import execute_profile_completion
+from src.core.model_runtime import execute_model_completion
 from src.core.security import PromptSanitizer, StructuredOutputValidator
 
 
 class LLMNode(BaseNode):
-    """LLM node backed by configured provider + model profiles."""
+    """LLM node backed by configured provider + model records."""
 
     def __init__(self, node_id: str, data: Dict[str, Any]):
         super().__init__(node_id, "llm")
@@ -17,8 +17,7 @@ class LLMNode(BaseNode):
         self.structured_output = config.get("structured_output", {})
         self.system_prompt = config.get("system_prompt", "")
         self.user_prompt = config.get("user_prompt", "")
-        self.model_profile_ref = config.get("model_profile_ref")
-        self.fallback_model_profile_ref = config.get("fallback_model_profile_ref")
+        self.model_code = config.get("model_code")
 
     async def execute(self, context) -> Dict[str, Any]:
         original_message = context.get_variable("user_message", "")
@@ -34,14 +33,14 @@ class LLMNode(BaseNode):
                 },
             })
 
-        profile_code = self._resolve_profile_code(context)
+        model_code = self._resolve_model_code(context)
         if self.prompt == "knowledge_answer":
             answer = context.get_variable("knowledge_answer")
             if not answer:
-                answer = await execute_profile_completion(
-                    profile_code=profile_code,
+                answer = await execute_model_completion(
+                    model_code=model_code,
                     provider_configs=context.provider_configs,
-                    model_profiles=context.model_profiles,
+                    model_records=context.model_records,
                     system_prompt="你是服务机器人知识问答助手，请基于提供的知识片段回答用户问题。",
                     user_prompt=self._knowledge_prompt(message, context.get_variable("retrieved_docs", []) or []),
                 )
@@ -49,7 +48,7 @@ class LLMNode(BaseNode):
             input_tokens = estimate_tokens(message)
             output_tokens = estimate_tokens(answer)
             cost_metrics = cost_tracker.build_cost_payload(
-                model=self._resolve_model_code(profile_code, context),
+                model=self._resolve_upstream_model_code(model_code, context),
                 workflow_code=context.workflow_code,
                 workflow_version=context.workflow_version,
                 execution_id=context.execution_id,
@@ -66,10 +65,10 @@ class LLMNode(BaseNode):
                 "metrics": cost_metrics,
             })
 
-        completion = await execute_profile_completion(
-            profile_code=profile_code,
+        completion = await execute_model_completion(
+            model_code=model_code,
             provider_configs=context.provider_configs,
-            model_profiles=context.model_profiles,
+            model_records=context.model_records,
             system_prompt=self._build_system_prompt(),
             user_prompt=self._build_user_prompt(message, context),
             response_format={"type": "json_object"} if self.structured_output.get("enabled") else None,
@@ -83,7 +82,7 @@ class LLMNode(BaseNode):
         output_tokens = estimate_tokens(json.dumps(extracted, ensure_ascii=False))
         input_tokens = estimate_tokens(message)
         cost_metrics = cost_tracker.build_cost_payload(
-            model=self._resolve_model_code(profile_code, context),
+            model=self._resolve_upstream_model_code(model_code, context),
             workflow_code=context.workflow_code,
             workflow_version=context.workflow_version,
             execution_id=context.execution_id,
@@ -101,16 +100,16 @@ class LLMNode(BaseNode):
             "metrics": cost_metrics,
         })
 
-    def _resolve_profile_code(self, context) -> str:
+    def _resolve_model_code(self, context) -> str:
         workflow_defaults = context.workflow_config.get("llm_defaults", {}) if isinstance(context.workflow_config, dict) else {}
-        profile_code = self.model_profile_ref or workflow_defaults.get("model_profile_ref") or self.fallback_model_profile_ref
-        if not profile_code:
-            raise ValueError(f"Model profile ref is required for node {self.node_id}")
-        return str(profile_code)
+        model_code = self.model_code or workflow_defaults.get("model_code")
+        if not model_code:
+            raise ValueError(f"Model code is required for node {self.node_id}")
+        return str(model_code)
 
-    def _resolve_model_code(self, profile_code: str, context) -> str:
-        profile = context.model_profiles.get(profile_code, {})
-        return str(profile.get("model_code", profile_code))
+    def _resolve_upstream_model_code(self, model_code: str, context) -> str:
+        model_record = context.model_records.get(model_code, {})
+        return str(model_record.get("upstream_model_code", model_code))
 
     def _build_system_prompt(self) -> str:
         if self.system_prompt:

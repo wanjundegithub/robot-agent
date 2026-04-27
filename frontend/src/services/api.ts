@@ -17,9 +17,9 @@ import type {
   SendMessageResponse,
   SubflowRecommendationResponse,
   OperationalReadiness,
-  ModelChatTestResult,
-  ModelProfileConfig,
+  ModelRecordConfig,
   ModelProviderConfig,
+  PagedModelRecordResponse,
   ProviderValidationResult,
   SessionSummary,
   WorkflowDraftValidationResponse,
@@ -294,7 +294,6 @@ export async function saveModelProvider(
     provider_name: string
     provider_type: string
     base_url: string
-    default_model_code: string
     api_key_secret_ref?: string
     enabled: boolean
   },
@@ -319,37 +318,23 @@ export async function saveModelProvider(
   return await response.json()
 }
 
-export async function validateModelProvider(
-  providerCode: string,
-  payload: {
-    model_code?: string
-    purpose?: string
-    request_body?: Record<string, unknown>
-  },
-  currentUserId: string
-): Promise<ProviderValidationResult> {
-  const response = await fetch(`${API_BASE_URL}/model-config/providers/${providerCode}/validate`, {
-    method: 'POST',
+export async function deleteModelProvider(providerCode: string, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/model-config/providers/${encodeURIComponent(providerCode)}`, {
+    method: 'DELETE',
     headers: {
-      'Content-Type': 'application/json',
       'X-User-Id': currentUserId,
     },
-    body: JSON.stringify(payload),
   })
   if (!response.ok) {
     await parseApiError(response)
   }
-  return await response.json()
 }
 
 export async function validateModelProviderDraft(
   payload: {
     provider_type: string
     base_url: string
-    default_model_code: string
     api_key_secret_ref?: string
-    model_code?: string
-    purpose?: string
     request_body?: Record<string, unknown>
   },
   currentUserId: string
@@ -368,34 +353,60 @@ export async function validateModelProviderDraft(
   return await response.json()
 }
 
-export async function getModelProfiles(): Promise<ModelProfileConfig[]> {
-  const response = await fetch(`${API_BASE_URL}/model-config/profiles`)
+export async function getModelRecords(params: {
+  page: number
+  pageSize: number
+  keyword?: string
+  providerCode?: string
+  enabled?: boolean
+}): Promise<PagedModelRecordResponse> {
+  const query = new URLSearchParams()
+  query.set('page', String(params.page))
+  query.set('pageSize', String(params.pageSize))
+  query.set('page_size', String(params.pageSize))
+  if (params.keyword && params.keyword.trim()) {
+    query.set('keyword', params.keyword.trim())
+    query.set('q', params.keyword.trim())
+  }
+  if (params.providerCode && params.providerCode.trim()) {
+    query.set('providerCode', params.providerCode.trim())
+    query.set('provider_code', params.providerCode.trim())
+  }
+  if (typeof params.enabled === 'boolean') {
+    query.set('enabled', String(params.enabled))
+  }
+  const response = await fetch(`${API_BASE_URL}/model-config/models?${query.toString()}`)
   if (!response.ok) {
     await parseApiError(response)
   }
   return await response.json()
 }
 
-export async function saveModelProfile(
+export async function getModelRecord(modelCode: string): Promise<ModelRecordConfig> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveModelRecord(
   payload: {
-    profile_code: string
+    model_code: string
+    model_name: string
     provider_code: string
-    purpose: string
-    model_code?: string
-    temperature?: number
-    top_p?: number
-    max_tokens?: number
-    timeout_sec?: number
-    response_format?: Record<string, unknown>
-    fallback_profile_code?: string
+    upstream_model_code: string
+    capabilities: string[]
+    default_system_prompt?: string
+    default_options?: Record<string, unknown>
     enabled: boolean
   },
   currentUserId: string,
-  existingProfileCode?: string
-): Promise<ModelProfileConfig> {
-  const isUpdate = Boolean(existingProfileCode)
+  existingModelCode?: string
+): Promise<ModelRecordConfig> {
+  const isUpdate = Boolean(existingModelCode)
   const response = await fetch(
-    isUpdate ? `${API_BASE_URL}/model-config/profiles/${existingProfileCode}` : `${API_BASE_URL}/model-config/profiles`,
+    isUpdate ? `${API_BASE_URL}/model-config/models/${encodeURIComponent(existingModelCode || '')}` : `${API_BASE_URL}/model-config/models`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -411,15 +422,41 @@ export async function saveModelProfile(
   return await response.json()
 }
 
-export async function testModelProfileChat(
-  profileCode: string,
+export async function deleteModelRecord(modelCode: string, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
+export async function validateModelRecord(modelCode: string, currentUserId: string): Promise<ProviderValidationResult> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}/validate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function testModelRecordChat(
+  modelCode: string,
   payload: {
     system_prompt?: string
     message: string
   },
   currentUserId: string
-): Promise<ModelChatTestResult> {
-  const response = await fetch(`${API_BASE_URL}/model-config/profiles/${profileCode}/test-chat`, {
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}/test-chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
