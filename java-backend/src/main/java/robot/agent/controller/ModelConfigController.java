@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.dto.request.ValidateModelProviderRequest;
@@ -81,19 +80,17 @@ public class ModelConfigController {
     @GetMapping("/models")
     public ResponseEntity<Map<String, Object>> getModels(
             @RequestParam(value = "keyword", required = false) String keyword,
-            @RequestParam(value = "providerCode", required = false) String providerCode,
-            @RequestParam(value = "enabled", required = false) Boolean enabled,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
     ) {
-        return ResponseEntity.ok(modelConfigService.getModelRecords(keyword, providerCode, enabled, page, pageSize));
+        return ResponseEntity.ok(modelConfigService.getModelRecords(keyword, null, null, page, pageSize));
     }
 
-    @GetMapping("/models/{modelCode}")
+    @GetMapping("/models/{id}")
     public ResponseEntity<Map<String, Object>> getModel(
-            @PathVariable String modelCode
+            @PathVariable Long id
     ) {
-        return ResponseEntity.ok(modelConfigService.getModelRecord(modelCode));
+        return ResponseEntity.ok(modelConfigService.getModelRecord(id));
     }
 
     @PostMapping("/models")
@@ -104,38 +101,29 @@ public class ModelConfigController {
         return ResponseEntity.ok(modelConfigService.saveModelRecord(userId, request));
     }
 
-    @PutMapping("/models/{modelCode}")
-    public ResponseEntity<Map<String, Object>> updateModelRecord(
+    @PostMapping("/models/test")
+    public ResponseEntity<Map<String, Object>> testModelConnection(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String modelCode,
             @RequestBody UpsertModelRecordRequest request
     ) {
-        return ResponseEntity.ok(modelConfigService.updateModelRecord(userId, modelCode, request));
+        return ResponseEntity.ok(modelConfigService.testSimpleModelConnection(userId, request));
     }
 
-    @DeleteMapping("/models/{modelCode}")
+    @PutMapping("/models/{id}")
+    public ResponseEntity<Map<String, Object>> updateModelRecord(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable Long id,
+            @RequestBody UpsertModelRecordRequest request
+    ) {
+        return ResponseEntity.ok(modelConfigService.updateModelRecord(userId, id, request));
+    }
+
+    @DeleteMapping("/models/{id}")
     public ResponseEntity<Void> deleteModelRecord(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String modelCode
+            @PathVariable Long id
     ) {
-        modelConfigService.deleteModelRecord(userId, modelCode);
+        modelConfigService.deleteModelRecord(userId, id);
         return ResponseEntity.noContent().build();
-    }
-
-    @PostMapping("/models/{modelCode}/validate")
-    public ResponseEntity<Map<String, Object>> validateModelRecord(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String modelCode
-    ) {
-        return ResponseEntity.ok(modelConfigService.validateModelRecord(userId, modelCode));
-    }
-
-    @PostMapping("/models/{modelCode}/test-chat")
-    public ResponseEntity<Map<String, Object>> testModelRecord(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String modelCode,
-            @RequestBody TestModelRecordRequest request
-    ) {
-        return ResponseEntity.ok(modelConfigService.testModelRecordChat(userId, modelCode, request));
     }
 }

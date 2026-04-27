@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
 
 class UnifiedModelServiceTest {
 
-    private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 26, 10, 30, 0);
+    private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 27, 10, 30, 0);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final LlmModelRecordRepository modelRecordRepository = mock(LlmModelRecordRepository.class);
@@ -61,12 +61,12 @@ class UnifiedModelServiceTest {
     }
 
     @Test
-    void invokeChatUsesModelRecordAndExtractsOpenAiText() {
+    void invokeChatUsesSavedModelRecordAndExtractsOpenAiText() {
         stubProviderResponse("""
                 {"choices":[{"message":{"content":"connectivity ok"}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}
                 """);
         when(modelRecordRepository.findByModelCode("general-chat"))
-                .thenReturn(Optional.of(modelRecord("general-chat", "General Chat")));
+                .thenReturn(Optional.of(modelRecord("general-chat", "通用对话模型", "gpt-4o-mini")));
         when(providerRepository.findByProviderCode("provider-a"))
                 .thenReturn(Optional.of(provider("provider-a", "openai")));
 
@@ -81,9 +81,28 @@ class UnifiedModelServiceTest {
         assertThat(handlerFailure.get()).as("provider request assertions").isNull();
 
         assertThat(result.text()).isEqualTo("connectivity ok");
-        Object totalTokens = result.usage().get("total_tokens");
-        assertThat(totalTokens).isInstanceOf(Number.class);
-        assertThat(((Number) totalTokens).intValue()).isEqualTo(20);
+        assertThat(((Number) result.usage().get("total_tokens")).intValue()).isEqualTo(20);
+    }
+
+    @Test
+    void invokeDirectChatUsesDraftPayloadAndExtractsOpenAiText() {
+        stubProviderResponse("""
+                {"choices":[{"message":{"content":"draft ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}
+                """);
+
+        UnifiedModelResult result = unifiedModelService.invokeDirectChat(
+                "openai",
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                "test-api-key",
+                "gpt-4o-mini",
+                List.of(Map.of("role", "user", "content", "ping")),
+                Map.of()
+        );
+        assertThat(handlerFailure.get()).as("provider request assertions").isNull();
+
+        assertThat(result.text()).isEqualTo("draft ok");
+        assertThat(result.upstreamModelCode()).isEqualTo("gpt-4o-mini");
+        assertThat(((Number) result.usage().get("total_tokens")).intValue()).isEqualTo(14);
     }
 
     @Test
@@ -147,12 +166,15 @@ class UnifiedModelServiceTest {
         server.start();
     }
 
-    private LlmModelRecord modelRecord(String modelCode, String modelName) {
+    private LlmModelRecord modelRecord(String modelCode, String customModelName, String actualModelName) {
         LlmModelRecord record = new LlmModelRecord();
         record.setModelCode(modelCode);
-        record.setModelName(modelName);
+        record.setModelName(customModelName);
         record.setProviderCode("provider-a");
-        record.setProviderModelCode(modelCode);
+        record.setProviderType("openai");
+        record.setUpstreamModelCode(actualModelName);
+        record.setApiKey("test-api-key");
+        record.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
         record.setEnabled(true);
         record.setUpdatedAt(FIXED_UPDATED_AT);
         return record;

@@ -5,11 +5,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.server.ResponseStatusException;
+import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.model.CapabilityAuthConfig;
 import robot.agent.model.CapabilityGroupSnapshot;
 import robot.agent.model.CapabilityItem;
@@ -27,6 +28,7 @@ import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -43,7 +45,7 @@ import static org.mockito.Mockito.when;
 
 class ModelConfigServiceTest {
 
-    private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 26, 10, 30, 0);
+    private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 27, 10, 30, 0);
 
     private final LlmProviderConfigRepository providerRepository = mock(LlmProviderConfigRepository.class);
     private final LlmModelRecordRepository modelRecordRepository = mock(LlmModelRecordRepository.class);
@@ -53,6 +55,7 @@ class ModelConfigServiceTest {
     private final CapabilityAuthConfigRepository capabilityAuthConfigRepository = mock(CapabilityAuthConfigRepository.class);
     private final AccessControlService accessControlService = mock(AccessControlService.class);
     private final AuditService auditService = mock(AuditService.class);
+    private final UnifiedModelService unifiedModelService = mock(UnifiedModelService.class);
     private final ModelConfigService modelConfigService = new ModelConfigService(
             providerRepository,
             modelRecordRepository,
@@ -62,7 +65,8 @@ class ModelConfigServiceTest {
             capabilityAuthConfigRepository,
             new ObjectMapper(),
             accessControlService,
-            auditService
+            auditService,
+            unifiedModelService
     );
 
     @BeforeEach
@@ -87,7 +91,7 @@ class ModelConfigServiceTest {
             context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
             context.registerBean(AccessControlService.class, () -> accessControlService);
             context.registerBean(AuditService.class, () -> auditService);
-            context.registerBean(UnifiedModelService.class, () -> mock(UnifiedModelService.class));
+            context.registerBean(UnifiedModelService.class, () -> unifiedModelService);
             context.registerBean(ModelConfigService.class);
 
             assertThatCode(context::refresh).doesNotThrowAnyException();
@@ -96,35 +100,69 @@ class ModelConfigServiceTest {
     }
 
     @Test
-    void listModelRecordsRequestsUpdatedAtDescSortAndReturnsPageEnvelope() {
+    void listModelRecordsRequestsUpdatedAtDescSortAndReturnsSimplifiedEnvelope() {
         PageRequest repositoryPageFixture = PageRequest.of(0, 10, Sort.by(Sort.Order.desc("updatedAt")));
-        when(modelRecordRepository.search(eq("doubao"), eq("provider-a"), eq(true), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(modelRecord("chat-main", "Doubao Chat")), repositoryPageFixture, 1));
+        when(modelRecordRepository.search(eq("gpt-4o"), eq(null), eq(null), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(modelRecord(1L, "chat-main", "通用对话模型", "openai", "gpt-4o-mini")), repositoryPageFixture, 1));
 
-        Map<String, Object> page = modelConfigService.getModelRecords("doubao", "provider-a", true, 0, 10);
+        Map<String, Object> page = modelConfigService.getModelRecords("gpt-4o", null, null, 0, 10);
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(modelRecordRepository).search(eq("doubao"), eq("provider-a"), eq(true), pageableCaptor.capture());
+        verify(modelRecordRepository).search(eq("gpt-4o"), eq(null), eq(null), pageableCaptor.capture());
         Pageable pageable = pageableCaptor.getValue();
 
         assertThat(page.get("page")).isEqualTo(0);
         assertThat(page.get("page_size")).isEqualTo(10);
-        Object total = page.get("total");
-        assertThat(total).isInstanceOf(Number.class);
-        assertThat(((Number) total).longValue()).isEqualTo(1L);
-        assertThat(pageable.getPageNumber()).isEqualTo(0);
-        assertThat(pageable.getPageSize()).isEqualTo(10);
+        assertThat(((Number) page.get("total")).longValue()).isEqualTo(1L);
         assertThat(pageable.getSort().getOrderFor("updatedAt")).isNotNull();
         assertThat(pageable.getSort().getOrderFor("updatedAt").getDirection()).isEqualTo(Sort.Direction.DESC);
         assertThat((List<?>) page.get("items")).hasSize(1);
+
         @SuppressWarnings("unchecked")
         Map<String, Object> first = (Map<String, Object>) ((List<?>) page.get("items")).get(0);
-        assertThat(first.get("model_code")).isEqualTo("chat-main");
-        assertThat(first.get("model_name")).isEqualTo("Doubao Chat");
+        assertThat(first.get("id")).isEqualTo(1L);
+        assertThat(first.get("custom_model_name")).isEqualTo("通用对话模型");
+        assertThat(first.get("provider")).isEqualTo("openai");
+        assertThat(first.get("model_name")).isEqualTo("gpt-4o-mini");
+        assertThat(first.get("base_url")).isEqualTo("https://api.example.com/v1");
+        assertThat(first).doesNotContainKeys("model_code", "provider_code", "upstream_model_code", "capabilities", "default_system_prompt", "default_options", "enabled");
+    }
+
+    @Test
+    void testSimpleModelConnectionDelegatesToDirectHttpCall() {
+        UpsertModelRecordRequest request = new UpsertModelRecordRequest();
+        request.setCustomModelName("通用对话模型");
+        request.setProvider("openai");
+        request.setModelName("gpt-4o-mini");
+        request.setApiKey("sk-demo");
+        request.setBaseUrl("https://api.example.com/v1");
+
+        when(unifiedModelService.invokeDirectChat(
+                eq("openai"),
+                eq("https://api.example.com/v1"),
+                eq("sk-demo"),
+                eq("gpt-4o-mini"),
+                any(),
+                eq(Map.of())
+        )).thenReturn(new UnifiedModelResult(
+                "draft-general-chat",
+                "draft-provider",
+                "gpt-4o-mini",
+                "connectivity ok",
+                Map.of("total_tokens", 20),
+                Map.of()
+        ));
+
+        Map<String, Object> result = modelConfigService.testSimpleModelConnection("demo-admin", request);
+
+        assertThat(result.get("ok")).isEqualTo(true);
+        assertThat(result.get("provider")).isEqualTo("openai");
+        assertThat(result.get("model_name")).isEqualTo("gpt-4o-mini");
+        assertThat(result.get("answer")).isEqualTo("connectivity ok");
     }
 
     @Test
     void deleteProviderRejectsWhenModelRecordsStillReferenceIt() {
-        when(providerRepository.findByProviderCode("provider-a")).thenReturn(java.util.Optional.of(provider("provider-a")));
+        when(providerRepository.findByProviderCode("provider-a")).thenReturn(Optional.of(provider("provider-a")));
         when(modelRecordRepository.countByProviderCode("provider-a")).thenReturn(2L);
 
         assertThatThrownBy(() -> modelConfigService.deleteProviderConfig("demo-admin", "provider-a"))
@@ -157,9 +195,7 @@ class ModelConfigServiceTest {
                         ),
                         "nodes", Map.of(
                                 "chat-node", Map.of(
-                                        "config", Map.of(
-                                                "model_code", "chat-main"
-                                        )
+                                        "config", Map.of("model_code", "chat-main")
                                 )
                         )
                 )
@@ -168,30 +204,13 @@ class ModelConfigServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Collection<String>> modelCodeCaptor = ArgumentCaptor.forClass(Collection.class);
         verify(modelRecordRepository).findByModelCodeIn(modelCodeCaptor.capture());
-        assertThat(modelCodeCaptor.getValue())
-                .contains("router-main", "default-chat", "chat-main");
+        assertThat(modelCodeCaptor.getValue()).contains("router-main", "default-chat", "chat-main");
     }
 
     @Test
-    void deleteModelRecordRequiresDisabledBeforeHardDelete() {
-        LlmModelRecord enabledRecord = modelRecord("chat-main", "Chat Main");
-        enabledRecord.setEnabled(true);
-        when(modelRecordRepository.findByModelCode("chat-main")).thenReturn(java.util.Optional.of(enabledRecord));
-
-        assertThatThrownBy(() -> modelConfigService.deleteModelRecord("demo-admin", "chat-main"))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(error -> {
-                    ResponseStatusException exception = (ResponseStatusException) error;
-                    assertThat(exception.getStatusCode().is4xxClientError()).isTrue();
-                    assertThat(exception.getReason()).contains("disabled");
-                });
-    }
-
-    @Test
-    void deleteModelRecordRejectsWhenWorkflowStillReferencesModelCode() {
-        LlmModelRecord disabledRecord = modelRecord("chat-main", "Chat Main");
-        disabledRecord.setEnabled(false);
-        when(modelRecordRepository.findByModelCode("chat-main")).thenReturn(java.util.Optional.of(disabledRecord));
+    void deleteModelRecordRejectsWhenWorkflowStillReferencesHiddenModelCode() {
+        LlmModelRecord record = modelRecord(10L, "chat-main", "通用对话模型", "openai", "gpt-4o-mini");
+        when(modelRecordRepository.findById(10L)).thenReturn(Optional.of(record));
         when(workflowVersionRepository.findAll()).thenReturn(List.of(workflowVersion(
                 "travel_assistant",
                 "v1",
@@ -201,7 +220,7 @@ class ModelConfigServiceTest {
                 "{}"
         )));
 
-        assertThatThrownBy(() -> modelConfigService.deleteModelRecord("demo-admin", "chat-main"))
+        assertThatThrownBy(() -> modelConfigService.deleteModelRecord("demo-admin", 10L))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(error -> {
                     ResponseStatusException exception = (ResponseStatusException) error;
@@ -211,10 +230,9 @@ class ModelConfigServiceTest {
     }
 
     @Test
-    void deleteModelRecordRejectsWhenCapabilityConfigStillReferencesModelCode() {
-        LlmModelRecord disabledRecord = modelRecord("chat-main", "Chat Main");
-        disabledRecord.setEnabled(false);
-        when(modelRecordRepository.findByModelCode("chat-main")).thenReturn(java.util.Optional.of(disabledRecord));
+    void deleteModelRecordRejectsWhenCapabilityConfigStillReferencesHiddenModelCode() {
+        LlmModelRecord record = modelRecord(10L, "chat-main", "通用对话模型", "openai", "gpt-4o-mini");
+        when(modelRecordRepository.findById(10L)).thenReturn(Optional.of(record));
         when(capabilityItemRepository.findAll()).thenReturn(List.of(capabilityItem(
                 "ops",
                 "search",
@@ -236,7 +254,7 @@ class ModelConfigServiceTest {
                         """
         )));
 
-        assertThatThrownBy(() -> modelConfigService.deleteModelRecord("demo-admin", "chat-main"))
+        assertThatThrownBy(() -> modelConfigService.deleteModelRecord("demo-admin", 10L))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(error -> {
                     ResponseStatusException exception = (ResponseStatusException) error;
@@ -247,12 +265,16 @@ class ModelConfigServiceTest {
                 });
     }
 
-    private LlmModelRecord modelRecord(String modelCode, String modelName) {
+    private LlmModelRecord modelRecord(Long id, String modelCode, String customModelName, String provider, String modelName) {
         LlmModelRecord record = new LlmModelRecord();
+        record.setId(id);
         record.setModelCode(modelCode);
-        record.setModelName(modelName);
+        record.setModelName(customModelName);
         record.setProviderCode("provider-a");
-        record.setProviderType("doubao");
+        record.setProviderType(provider);
+        record.setUpstreamModelCode(modelName);
+        record.setApiKey("sk-demo");
+        record.setBaseUrl("https://api.example.com/v1");
         record.setEnabled(true);
         record.setUpdatedAt(FIXED_UPDATED_AT);
         return record;

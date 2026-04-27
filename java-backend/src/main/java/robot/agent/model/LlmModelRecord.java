@@ -24,11 +24,20 @@ public class LlmModelRecord {
     @Column(name = "model_name", length = 128, nullable = false)
     private String modelName;
 
+    @Column(name = "provider", length = 64)
+    private String provider;
+
     @Column(name = "provider_code", length = 64, nullable = false)
     private String providerCode;
 
     @Column(name = "upstream_model_code", length = 128)
     private String upstreamModelCode;
+
+    @Column(name = "api_key", length = 512)
+    private String apiKey;
+
+    @Column(name = "base_url", length = 256)
+    private String baseUrl;
 
     @Column(name = "capabilities_json", columnDefinition = "JSON")
     private String capabilitiesJson;
@@ -63,11 +72,20 @@ public class LlmModelRecord {
     public String getModelName() { return modelName; }
     public void setModelName(String modelName) { this.modelName = modelName; }
 
+    public String getProvider() { return provider; }
+    public void setProvider(String provider) { this.provider = provider; }
+
     public String getProviderCode() { return providerCode; }
     public void setProviderCode(String providerCode) { this.providerCode = providerCode; }
 
     public String getUpstreamModelCode() { return upstreamModelCode; }
     public void setUpstreamModelCode(String upstreamModelCode) { this.upstreamModelCode = upstreamModelCode; }
+
+    public String getApiKey() { return apiKey; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+
+    public String getBaseUrl() { return baseUrl; }
+    public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
 
     public String getCapabilitiesJson() { return capabilitiesJson; }
     public void setCapabilitiesJson(String capabilitiesJson) { this.capabilitiesJson = capabilitiesJson; }

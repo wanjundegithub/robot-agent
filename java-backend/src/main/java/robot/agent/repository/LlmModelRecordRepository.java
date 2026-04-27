@@ -29,6 +29,7 @@ public interface LlmModelRecordRepository extends JpaRepository<LlmModelRecord, 
             where (:keyword is null
                 or lower(modelRecord.modelCode) like lower(concat('%', :keyword, '%'))
                 or lower(modelRecord.modelName) like lower(concat('%', :keyword, '%'))
+                or lower(modelRecord.upstreamModelCode) like lower(concat('%', :keyword, '%'))
                 or lower(provider.providerType) like lower(concat('%', :keyword, '%')))
               and (:providerCode is null or modelRecord.providerCode = :providerCode)
               and (:enabled is null or modelRecord.enabled = :enabled)

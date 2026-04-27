@@ -40,6 +40,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 @Transactional(readOnly = true)
@@ -170,15 +171,15 @@ public class ModelConfigService {
         envelope.put("page_size", modelPage.getSize());
         envelope.put("total", modelPage.getTotalElements());
         envelope.put("items", modelPage.getContent().stream()
-                .map(modelRecord -> modelRecordToResponseMap(modelRecord, providersByCode.get(modelRecord.getProviderCode())))
+                .map(modelRecord -> modelRecordToAdminResponseMap(modelRecord, providersByCode.get(modelRecord.getProviderCode())))
                 .toList());
         return envelope;
     }
 
-    public Map<String, Object> getModelRecord(String modelCode) {
-        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
-                .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
-        return modelRecordToResponseMap(modelRecord, requireProvider(modelRecord.getProviderCode()));
+    public Map<String, Object> getModelRecord(Long id) {
+        LlmModelRecord modelRecord = modelRecordRepository.findById(id)
+                .orElseThrow(() -> badRequest("Model record not found: " + id));
+        return modelRecordToAdminResponseMap(modelRecord, findProviderSnapshot(modelRecord));
     }
 
     @Transactional
@@ -247,46 +248,45 @@ public class ModelConfigService {
     @Transactional
     public Map<String, Object> saveModelRecord(String userId, UpsertModelRecordRequest request) {
         requireAdmin(userId, "model.record.create");
-        String modelCode = required(request.getModelCode(), "model_code");
-        if (modelRecordRepository.findByModelCode(modelCode).isPresent()) {
-            throw badRequest("Model record already exists: " + modelCode);
-        }
         LlmModelRecord modelRecord = new LlmModelRecord();
+        String modelCode = generateHiddenModelCode();
+        modelRecord.setModelCode(modelCode);
+        modelRecord.setProviderCode(providerCodeFor(modelCode));
         applyModelRecordRequest(modelRecord, request, true);
         modelRecord.setCreatedBy(normalizeUserId(userId));
         modelRecord.setCreatedAt(LocalDateTime.now());
         modelRecord.setUpdatedAt(LocalDateTime.now());
         LlmModelRecord saved = modelRecordRepository.save(modelRecord);
+        upsertInternalProvider(saved, userId);
         auditService.logAction(1L, normalizeUserId(userId), "model.record.create", "llm_model_record", modelCode, null, 200);
-        return modelRecordToResponseMap(saved, requireProvider(saved.getProviderCode()));
+        return modelRecordToAdminResponseMap(saved, findProviderSnapshot(saved));
     }
 
     @Transactional
-    public Map<String, Object> updateModelRecord(String userId, String modelCode, UpsertModelRecordRequest request) {
+    public Map<String, Object> updateModelRecord(String userId, Long id, UpsertModelRecordRequest request) {
         requireAdmin(userId, "model.record.update");
-        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
-                .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
+        LlmModelRecord modelRecord = modelRecordRepository.findById(id)
+                .orElseThrow(() -> badRequest("Model record not found: " + id));
         applyModelRecordRequest(modelRecord, request, false);
         modelRecord.setUpdatedAt(LocalDateTime.now());
         LlmModelRecord saved = modelRecordRepository.save(modelRecord);
-        auditService.logAction(1L, normalizeUserId(userId), "model.record.update", "llm_model_record", modelCode, null, 200);
-        return modelRecordToResponseMap(saved, requireProvider(saved.getProviderCode()));
+        upsertInternalProvider(saved, userId);
+        auditService.logAction(1L, normalizeUserId(userId), "model.record.update", "llm_model_record", saved.getModelCode(), null, 200);
+        return modelRecordToAdminResponseMap(saved, findProviderSnapshot(saved));
     }
 
     @Transactional
-    public void deleteModelRecord(String userId, String modelCode) {
+    public void deleteModelRecord(String userId, Long id) {
         requireAdmin(userId, "model.record.delete");
-        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
-                .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
-        if (modelRecord.isEnabled()) {
-            throw badRequest("model record must be disabled before delete");
-        }
-        List<String> references = collectModelRecordReferences(modelCode);
+        LlmModelRecord modelRecord = modelRecordRepository.findById(id)
+                .orElseThrow(() -> badRequest("Model record not found: " + id));
+        List<String> references = collectModelRecordReferences(modelRecord.getModelCode());
         if (!references.isEmpty()) {
             throw badRequest("model record is still referenced: " + String.join(", ", references));
         }
+        providerRepository.findByProviderCode(modelRecord.getProviderCode()).ifPresent(providerRepository::delete);
         modelRecordRepository.delete(modelRecord);
-        auditService.logAction(1L, normalizeUserId(userId), "model.record.delete", "llm_model_record", modelCode, null, 200);
+        auditService.logAction(1L, normalizeUserId(userId), "model.record.delete", "llm_model_record", modelRecord.getModelCode(), null, 200);
     }
 
     public Map<String, Object> validateModelRecord(String userId, String modelCode) {
@@ -321,6 +321,25 @@ public class ModelConfigService {
         response.put("model_code", result.modelCode());
         response.put("provider_code", result.providerCode());
         response.put("upstream_model_code", result.upstreamModelCode());
+        response.put("answer", result.text());
+        response.put("usage", result.usage());
+        return response;
+    }
+
+    public Map<String, Object> testSimpleModelConnection(String userId, UpsertModelRecordRequest request) {
+        requireAdmin(userId, "model.record.test_chat");
+        UnifiedModelResult result = unifiedModelService.invokeDirectChat(
+                required(firstNonBlank(request.getProvider(), request.getProviderCode()), "provider"),
+                required(request.getBaseUrl(), "base_url").replaceAll("/+$", ""),
+                required(request.getApiKey(), "api_key"),
+                required(request.getModelName(), "model_name"),
+                List.of(Map.of("role", "user", "content", "ping")),
+                Map.of()
+        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("ok", true);
+        response.put("provider", request.getProvider());
+        response.put("model_name", request.getModelName());
         response.put("answer", result.text());
         response.put("usage", result.usage());
         return response;
@@ -419,20 +438,46 @@ public class ModelConfigService {
     }
 
     private void applyModelRecordRequest(LlmModelRecord modelRecord, UpsertModelRecordRequest request, boolean creating) {
-        if (creating) {
-            modelRecord.setModelCode(required(request.getModelCode(), "model_code"));
+        LlmProviderConfig existingProvider = findProviderSnapshot(modelRecord);
+        String customModelName = required(firstNonBlank(
+                blankToNull(request.getCustomModelName()),
+                blankToNull(modelRecord.getModelName())
+        ), "custom_model_name");
+        String provider = required(firstNonBlank(
+                blankToNull(request.getProvider()),
+                blankToNull(modelRecord.getProvider()),
+                existingProvider == null ? null : blankToNull(existingProvider.getProviderType())
+        ), "provider");
+        String actualModelName = required(firstNonBlank(
+                blankToNull(request.getModelName()),
+                blankToNull(request.getUpstreamModelCode()),
+                blankToNull(modelRecord.getUpstreamModelCode()),
+                blankToNull(modelRecord.getModelCode())
+        ), "model_name");
+        String apiKey = required(firstNonBlank(
+                blankToNull(request.getApiKey()),
+                blankToNull(modelRecord.getApiKey()),
+                existingProvider == null ? null : blankToNull(existingProvider.getApiKeySecretRef())
+        ), "api_key");
+        String baseUrl = required(firstNonBlank(
+                blankToNull(request.getBaseUrl()),
+                blankToNull(modelRecord.getBaseUrl()),
+                existingProvider == null ? null : blankToNull(existingProvider.getBaseUrl())
+        ), "base_url").replaceAll("/+$", "");
+
+        if (creating && (modelRecord.getProviderCode() == null || modelRecord.getProviderCode().isBlank())) {
+            modelRecord.setProviderCode(providerCodeFor(required(modelRecord.getModelCode(), "model_code")));
         }
-        String providerCode = required(request.getProviderCode(), "provider_code");
-        requireProvider(providerCode);
-        modelRecord.setModelName(required(request.getModelName(), "model_name"));
-        modelRecord.setProviderCode(providerCode);
-        modelRecord.setUpstreamModelCode(firstNonBlank(blankToNull(request.getUpstreamModelCode()), modelRecord.getModelCode()));
-        modelRecord.setCapabilitiesJson(writeJson(request.getCapabilities()));
-        modelRecord.setDefaultSystemPrompt(blankToNull(request.getDefaultSystemPrompt()));
-        modelRecord.setDefaultOptionsJson(writeJson(request.getDefaultOptions()));
-        if (request.getEnabled() != null) {
-            modelRecord.setEnabled(request.getEnabled());
-        }
+        modelRecord.setModelName(customModelName);
+        modelRecord.setProvider(provider);
+        modelRecord.setProviderType(provider);
+        modelRecord.setUpstreamModelCode(actualModelName);
+        modelRecord.setApiKey(apiKey);
+        modelRecord.setBaseUrl(baseUrl);
+        modelRecord.setCapabilitiesJson(null);
+        modelRecord.setDefaultSystemPrompt(null);
+        modelRecord.setDefaultOptionsJson(null);
+        modelRecord.setEnabled(true);
     }
 
     private LlmProviderConfig requireProvider(String providerCode) {
@@ -480,8 +525,23 @@ public class ModelConfigService {
         return value;
     }
 
-    private Map<String, Object> modelRecordToResponseMap(LlmModelRecord modelRecord, LlmProviderConfig provider) {
-        Map<String, Object> value = modelRecordToRuntimeMap(modelRecord, provider);
+    private Map<String, Object> modelRecordToAdminResponseMap(LlmModelRecord modelRecord, LlmProviderConfig provider) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", modelRecord.getId());
+        value.put("custom_model_name", modelRecord.getModelName());
+        value.put("provider", firstNonBlank(
+                blankToNull(modelRecord.getProvider()),
+                provider == null ? blankToNull(modelRecord.getProviderType()) : blankToNull(provider.getProviderType())
+        ));
+        value.put("model_name", firstNonBlank(modelRecord.getUpstreamModelCode(), modelRecord.getModelCode()));
+        value.put("api_key", firstNonBlank(
+                blankToNull(modelRecord.getApiKey()),
+                provider == null ? null : blankToNull(provider.getApiKeySecretRef())
+        ));
+        value.put("base_url", firstNonBlank(
+                blankToNull(modelRecord.getBaseUrl()),
+                provider == null ? null : blankToNull(provider.getBaseUrl())
+        ));
         value.put("created_at", modelRecord.getCreatedAt());
         value.put("updated_at", modelRecord.getUpdatedAt());
         return value;
@@ -527,6 +587,39 @@ public class ModelConfigService {
         } catch (Exception exception) {
             throw badRequest("Invalid JSON payload");
         }
+    }
+
+    private LlmProviderConfig findProviderSnapshot(LlmModelRecord modelRecord) {
+        if (modelRecord == null || modelRecord.getProviderCode() == null || modelRecord.getProviderCode().isBlank()) {
+            return null;
+        }
+        return providerRepository.findByProviderCode(modelRecord.getProviderCode()).orElse(null);
+    }
+
+    private void upsertInternalProvider(LlmModelRecord modelRecord, String userId) {
+        String providerCode = required(firstNonBlank(modelRecord.getProviderCode(), providerCodeFor(modelRecord.getModelCode())), "provider_code");
+        LlmProviderConfig provider = providerRepository.findByProviderCode(providerCode).orElseGet(LlmProviderConfig::new);
+        boolean creating = provider.getId() == null;
+        provider.setProviderCode(providerCode);
+        provider.setProviderName(firstNonBlank(modelRecord.getModelName(), providerCode));
+        provider.setProviderType(required(firstNonBlank(modelRecord.getProvider(), modelRecord.getProviderType()), "provider"));
+        provider.setBaseUrl(required(modelRecord.getBaseUrl(), "base_url").replaceAll("/+$", ""));
+        provider.setApiKeySecretRef(required(modelRecord.getApiKey(), "api_key"));
+        provider.setEnabled(true);
+        if (creating) {
+            provider.setCreatedBy(normalizeUserId(userId));
+            provider.setCreatedAt(LocalDateTime.now());
+        }
+        provider.setUpdatedAt(LocalDateTime.now());
+        providerRepository.save(provider);
+    }
+
+    private String generateHiddenModelCode() {
+        return "model-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+    }
+
+    private String providerCodeFor(String modelCode) {
+        return required(modelCode, "model_code") + "-provider";
     }
 
     private List<String> collectModelRecordReferences(String modelCode) {

@@ -189,8 +189,11 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         LlmModelRecord modelRecord = new LlmModelRecord();
         modelRecord.setModelCode(modelCode);
         modelRecord.setModelName(modelName);
+        modelRecord.setProvider(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getProviderType).orElse("openai"));
         modelRecord.setProviderCode(providerCode);
         modelRecord.setUpstreamModelCode(upstreamModelCode);
+        modelRecord.setApiKey(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getApiKeySecretRef).orElse(null));
+        modelRecord.setBaseUrl(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getBaseUrl).orElse(null));
         modelRecord.setDefaultSystemPrompt(defaultSystemPrompt);
         modelRecord.setDefaultOptionsJson(writeJson(defaultOptions));
         modelRecord.setCapabilitiesJson(writeJson(Map.of("chat", true)));

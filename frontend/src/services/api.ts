@@ -357,8 +357,6 @@ export async function getModelRecords(params: {
   page: number
   pageSize: number
   keyword?: string
-  providerCode?: string
-  enabled?: boolean
 }): Promise<PagedModelRecordResponse> {
   const query = new URLSearchParams()
   query.set('page', String(params.page))
@@ -366,14 +364,6 @@ export async function getModelRecords(params: {
   query.set('page_size', String(params.pageSize))
   if (params.keyword && params.keyword.trim()) {
     query.set('keyword', params.keyword.trim())
-    query.set('q', params.keyword.trim())
-  }
-  if (params.providerCode && params.providerCode.trim()) {
-    query.set('providerCode', params.providerCode.trim())
-    query.set('provider_code', params.providerCode.trim())
-  }
-  if (typeof params.enabled === 'boolean') {
-    query.set('enabled', String(params.enabled))
   }
   const response = await fetch(`${API_BASE_URL}/model-config/models?${query.toString()}`)
   if (!response.ok) {
@@ -382,8 +372,8 @@ export async function getModelRecords(params: {
   return await response.json()
 }
 
-export async function getModelRecord(modelCode: string): Promise<ModelRecordConfig> {
-  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`)
+export async function getModelRecord(id: number): Promise<ModelRecordConfig> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${id}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -392,21 +382,18 @@ export async function getModelRecord(modelCode: string): Promise<ModelRecordConf
 
 export async function saveModelRecord(
   payload: {
-    model_code: string
+    custom_model_name: string
+    provider: string
     model_name: string
-    provider_code: string
-    upstream_model_code: string
-    capabilities: string[]
-    default_system_prompt?: string
-    default_options?: Record<string, unknown>
-    enabled: boolean
+    api_key: string
+    base_url: string
   },
   currentUserId: string,
-  existingModelCode?: string
+  existingId?: number
 ): Promise<ModelRecordConfig> {
-  const isUpdate = Boolean(existingModelCode)
+  const isUpdate = typeof existingId === 'number'
   const response = await fetch(
-    isUpdate ? `${API_BASE_URL}/model-config/models/${encodeURIComponent(existingModelCode || '')}` : `${API_BASE_URL}/model-config/models`,
+    isUpdate ? `${API_BASE_URL}/model-config/models/${existingId}` : `${API_BASE_URL}/model-config/models`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -422,8 +409,8 @@ export async function saveModelRecord(
   return await response.json()
 }
 
-export async function deleteModelRecord(modelCode: string, currentUserId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`, {
+export async function deleteModelRecord(id: number, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/${id}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId,
@@ -434,29 +421,17 @@ export async function deleteModelRecord(modelCode: string, currentUserId: string
   }
 }
 
-export async function validateModelRecord(modelCode: string, currentUserId: string): Promise<ProviderValidationResult> {
-  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}/validate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': currentUserId,
-    },
-  })
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function testModelRecordChat(
-  modelCode: string,
+export async function testModelRecordConnection(
   payload: {
-    system_prompt?: string
-    message: string
+    custom_model_name: string
+    provider: string
+    model_name: string
+    api_key: string
+    base_url: string
   },
   currentUserId: string
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}/test-chat`, {
+  const response = await fetch(`${API_BASE_URL}/model-config/models/test`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

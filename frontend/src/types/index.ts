@@ -338,16 +338,12 @@ export interface ModelProviderConfig {
 }
 
 export interface ModelRecordConfig {
-  model_code: string
+  id: number
+  custom_model_name: string
+  provider: string
   model_name: string
-  provider_code: string
-  provider_name?: string | null
-  provider_type?: string | null
-  upstream_model_code: string
-  capabilities: string[]
-  default_system_prompt?: string | null
-  default_options?: Record<string, unknown> | null
-  enabled: boolean
+  api_key: string
+  base_url: string
   created_at?: string
   updated_at?: string
 }

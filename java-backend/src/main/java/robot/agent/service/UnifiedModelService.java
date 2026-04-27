@@ -102,6 +102,48 @@ public class UnifiedModelService {
         );
     }
 
+    public UnifiedModelResult invokeDirectChat(
+            String providerType,
+            String baseUrl,
+            String apiKey,
+            String modelName,
+            List<? extends Map<String, ?>> messages,
+            Map<String, ?> options
+    ) {
+        LlmProviderConfig provider = new LlmProviderConfig();
+        provider.setProviderType(required(providerType, "provider"));
+        provider.setBaseUrl(required(baseUrl, "base_url").replaceAll("/+$", ""));
+        provider.setApiKeySecretRef(required(apiKey, "api_key"));
+        provider.setEnabled(true);
+
+        Map<String, Object> effectiveOptions = new LinkedHashMap<>();
+        if (options != null) {
+            effectiveOptions.putAll(options);
+        }
+        int timeoutSec = integerValue(effectiveOptions.get("timeout_sec")) == null
+                ? 30
+                : Math.max(5, integerValue(effectiveOptions.get("timeout_sec")));
+        ProviderRequest providerRequest = buildChatRequest(
+                provider,
+                required(modelName, "model_name"),
+                "",
+                normalizeMessages(messages),
+                effectiveOptions
+        );
+        Map<String, Object> payload = postForMap(providerRequest, timeoutSec);
+        String providerProtocol = resolveProviderProtocol(normalizeProviderType(provider.getProviderType()));
+        String text = extractText(providerProtocol, payload);
+        Map<String, Object> usage = extractUsage(providerProtocol, payload);
+        return new UnifiedModelResult(
+                "draft-" + normalizeProviderType(providerType),
+                "draft-provider",
+                modelName,
+                text,
+                usage,
+                payload
+        );
+    }
+
     public int validateProviderConnection(LlmProviderConfig provider, String modelCode, Map<String, Object> requestBodyOverride) {
         String providerType = normalizeProviderType(required(provider.getProviderType(), "provider_type"));
         String providerProtocol = resolveProviderProtocol(providerType);
@@ -324,12 +366,12 @@ public class UnifiedModelService {
         return Map.of();
     }
 
-    private List<Map<String, Object>> normalizeMessages(List<Map<String, Object>> messages) {
+    private List<Map<String, Object>> normalizeMessages(List<? extends Map<String, ?>> messages) {
         if (messages == null || messages.isEmpty()) {
             return List.of(Map.of("role", "user", "content", "ping"));
         }
         List<Map<String, Object>> normalized = new ArrayList<>();
-        for (Map<String, Object> message : messages) {
+        for (Map<String, ?> message : messages) {
             Map<String, Object> value = new LinkedHashMap<>();
             value.put("role", firstNonBlank(stringValue(message.get("role")), "user"));
             value.put("content", firstNonBlank(stringValue(message.get("content")), ""));
