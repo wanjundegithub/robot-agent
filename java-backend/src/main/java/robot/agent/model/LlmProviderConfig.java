@@ -24,7 +24,7 @@ public class LlmProviderConfig {
     @Column(name = "base_url", length = 256, nullable = false)
     private String baseUrl;
 
-    @Column(name = "default_model_code", length = 128, nullable = false)
+    @Transient
     private String defaultModelCode;
 
     @Column(name = "api_key_secret_ref", length = 256)

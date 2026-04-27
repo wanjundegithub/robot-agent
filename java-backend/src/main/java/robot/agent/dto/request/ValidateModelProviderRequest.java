@@ -9,8 +9,6 @@ public class ValidateModelProviderRequest {
     private String providerType;
     @JsonProperty("base_url")
     private String baseUrl;
-    @JsonProperty("default_model_code")
-    private String defaultModelCode;
     @JsonProperty("api_key_secret_ref")
     private String apiKeySecretRef;
     @JsonProperty("model_code")
@@ -27,9 +25,6 @@ public class ValidateModelProviderRequest {
 
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
-
-    public String getDefaultModelCode() { return defaultModelCode; }
-    public void setDefaultModelCode(String defaultModelCode) { this.defaultModelCode = defaultModelCode; }
 
     public String getApiKeySecretRef() { return apiKeySecretRef; }
     public void setApiKeySecretRef(String apiKeySecretRef) { this.apiKeySecretRef = apiKeySecretRef; }

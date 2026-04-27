@@ -4,8 +4,27 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
-import robot.agent.model.*;
-import robot.agent.repository.*;
+import robot.agent.model.KnowledgeBase;
+import robot.agent.model.KnowledgeBaseStatus;
+import robot.agent.model.KnowledgeVersion;
+import robot.agent.model.KnowledgeVersionStatus;
+import robot.agent.model.LlmModelRecord;
+import robot.agent.model.LlmProviderConfig;
+import robot.agent.model.Role;
+import robot.agent.model.UserRole;
+import robot.agent.model.UserRoleId;
+import robot.agent.model.Workflow;
+import robot.agent.model.WorkflowStatus;
+import robot.agent.model.WorkflowVersion;
+import robot.agent.model.WorkflowVersionStatus;
+import robot.agent.repository.KnowledgeBaseRepository;
+import robot.agent.repository.KnowledgeVersionRepository;
+import robot.agent.repository.LlmModelRecordRepository;
+import robot.agent.repository.LlmProviderConfigRepository;
+import robot.agent.repository.RoleRepository;
+import robot.agent.repository.UserRoleRepository;
+import robot.agent.repository.WorkflowRepository;
+import robot.agent.repository.WorkflowVersionRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,8 +39,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
-    private final LlmProviderConfigRepository llmProviderConfigRepository;
-    private final LlmModelProfileRepository llmModelProfileRepository;
+    private final LlmProviderConfigRepository providerRepository;
+    private final LlmModelRecordRepository modelRecordRepository;
     private final RoleRepository roleRepository;
     private final UserRoleRepository userRoleRepository;
     private final ObjectMapper objectMapper;
@@ -31,8 +50,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
             WorkflowVersionRepository workflowVersionRepository,
             KnowledgeBaseRepository knowledgeBaseRepository,
             KnowledgeVersionRepository knowledgeVersionRepository,
-            LlmProviderConfigRepository llmProviderConfigRepository,
-            LlmModelProfileRepository llmModelProfileRepository,
+            LlmProviderConfigRepository providerRepository,
+            LlmModelRecordRepository modelRecordRepository,
             RoleRepository roleRepository,
             UserRoleRepository userRoleRepository,
             ObjectMapper objectMapper
@@ -41,8 +60,8 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         this.workflowVersionRepository = workflowVersionRepository;
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeVersionRepository = knowledgeVersionRepository;
-        this.llmProviderConfigRepository = llmProviderConfigRepository;
-        this.llmModelProfileRepository = llmModelProfileRepository;
+        this.providerRepository = providerRepository;
+        this.modelRecordRepository = modelRecordRepository;
         this.roleRepository = roleRepository;
         this.userRoleRepository = userRoleRepository;
         this.objectMapper = objectMapper;
@@ -126,68 +145,71 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         knowledgeBaseRepository.save(knowledgeBase);
     }
 
-    private void seedModelConfigs() throws Exception {
-        java.util.Optional<LlmProviderConfig> existingProvider = llmProviderConfigRepository.findByProviderCode("openai-compatible-prod");
-        if (existingProvider.isEmpty()) {
-            LlmProviderConfig provider = new LlmProviderConfig();
-            String apiKey = System.getenv("ROBOT_LLM_API_KEY");
-            provider.setProviderCode("openai-compatible-prod");
-            provider.setProviderName("默认 OpenAI 提供方");
-            provider.setProviderType("openai");
-            provider.setBaseUrl("https://api1.oai1.online/v1");
-            provider.setDefaultModelCode("gpt-4o-mini");
-            provider.setApiKeySecretRef(apiKey == null || apiKey.isBlank() ? null : "env:ROBOT_LLM_API_KEY");
-            provider.setEnabled(apiKey != null && !apiKey.isBlank());
-            provider.setCreatedBy("system");
-            llmProviderConfigRepository.save(provider);
-        } else if (existingProvider.get().getProviderName() == null || existingProvider.get().getProviderName().isBlank()) {
-            LlmProviderConfig provider = existingProvider.get();
-            provider.setProviderName("默认 OpenAI 提供方");
-            llmProviderConfigRepository.save(provider);
-        }
+    private void seedModelConfigs() {
+        LlmProviderConfig provider = providerRepository.findByProviderCode("openai-compatible-prod")
+                .orElseGet(() -> {
+                    LlmProviderConfig created = new LlmProviderConfig();
+                    created.setProviderCode("openai-compatible-prod");
+                    created.setCreatedBy("system");
+                    created.setCreatedAt(LocalDateTime.now());
+                    return created;
+                });
+        String apiKey = System.getenv("ROBOT_LLM_API_KEY");
+        provider.setProviderName("Default OpenAI Compatible Provider");
+        provider.setProviderType("openai");
+        provider.setBaseUrl("https://api1.oai1.online/v1");
+        provider.setApiKeySecretRef(apiKey == null || apiKey.isBlank() ? null : "env:ROBOT_LLM_API_KEY");
+        provider.setEnabled(apiKey != null && !apiKey.isBlank());
+        provider.setUpdatedAt(LocalDateTime.now());
+        providerRepository.save(provider);
 
-        seedProfile("intent-router-v1", "openai-compatible-prod", "gpt-4o-mini", "intent_routing", 0.10d, 0.80d, 512);
-        seedProfile("knowledge-query-rewrite-v1", "openai-compatible-prod", "gpt-4o-mini", "knowledge_query_rewrite", 0.10d, 0.90d, 512);
-        seedProfile("knowledge-answer-v1", "openai-compatible-prod", "gpt-4o-mini", "knowledge_answer", 0.20d, 0.90d, 1024);
-        seedProfile("general-chat-v1", "openai-compatible-prod", "gpt-4o-mini", "general_llm", 0.30d, 0.95d, 1024);
-        seedProfile("general-chat-fallback-v1", "openai-compatible-prod", "gpt-4o-mini", "general_llm", 0.20d, 0.90d, 1024);
-        seedProfile("structured-extraction-v1", "openai-compatible-prod", "gpt-4o-mini", "structured_extraction", 0.10d, 0.80d, 512);
+        seedModelRecord("intent-router-v1", "Intent Router", "openai-compatible-prod", "gpt-4o-mini",
+                "Route user messages to workflows.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
+        seedModelRecord("knowledge-query-rewrite-v1", "Knowledge Query Rewrite", "openai-compatible-prod", "gpt-4o-mini",
+                "Rewrite knowledge search queries.", Map.of("temperature", 0.10d, "top_p", 0.90d, "max_tokens", 512));
+        seedModelRecord("knowledge-answer-v1", "Knowledge Answer", "openai-compatible-prod", "gpt-4o-mini",
+                "Generate grounded knowledge answers.", Map.of("temperature", 0.20d, "top_p", 0.90d, "max_tokens", 1024));
+        seedModelRecord("general-chat-v1", "General Chat", "openai-compatible-prod", "gpt-4o-mini",
+                "General workflow chat model.", Map.of("temperature", 0.30d, "top_p", 0.95d, "max_tokens", 1024));
+        seedModelRecord("structured-extraction-v1", "Structured Extraction", "openai-compatible-prod", "gpt-4o-mini",
+                "Extract structured slots.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
     }
 
-    private void seedProfile(
-            String profileCode,
-            String providerCode,
+    private void seedModelRecord(
             String modelCode,
-            String purpose,
-            double temperature,
-            double topP,
-            int maxTokens
+            String modelName,
+            String providerCode,
+            String upstreamModelCode,
+            String defaultSystemPrompt,
+            Map<String, Object> defaultOptions
     ) {
-        if (llmModelProfileRepository.findByProfileCode(profileCode).isPresent()) {
+        if (modelRecordRepository.findByModelCode(modelCode).isPresent()) {
             return;
         }
-        LlmModelProfile profile = new LlmModelProfile();
-        profile.setProfileCode(profileCode);
-        profile.setProviderCode(providerCode);
-        profile.setModelCode(modelCode);
-        profile.setPurpose(purpose);
-        profile.setTemperature(java.math.BigDecimal.valueOf(temperature));
-        profile.setTopP(java.math.BigDecimal.valueOf(topP));
-        profile.setMaxTokens(maxTokens);
-        profile.setTimeoutSec(15);
-        profile.setCreatedBy("system");
-        llmModelProfileRepository.save(profile);
+        LlmModelRecord modelRecord = new LlmModelRecord();
+        modelRecord.setModelCode(modelCode);
+        modelRecord.setModelName(modelName);
+        modelRecord.setProviderCode(providerCode);
+        modelRecord.setUpstreamModelCode(upstreamModelCode);
+        modelRecord.setDefaultSystemPrompt(defaultSystemPrompt);
+        modelRecord.setDefaultOptionsJson(writeJson(defaultOptions));
+        modelRecord.setCapabilitiesJson(writeJson(Map.of("chat", true)));
+        modelRecord.setEnabled(true);
+        modelRecord.setCreatedBy("system");
+        modelRecord.setCreatedAt(LocalDateTime.now());
+        modelRecord.setUpdatedAt(LocalDateTime.now());
+        modelRecordRepository.save(modelRecord);
     }
 
-    private void seedWorkflows() throws Exception {
-        seedWorkflowDefinition("flight_booking", "Flight Booking", "Phase 2 flight booking workflow.", "2.0.0");
-        seedWorkflowDefinition("hotel_booking", "Hotel Booking", "Phase 2 hotel booking workflow.", "1.0.0");
-        seedWorkflowDefinition("general_query", "General Query", "Phase 2 knowledge-assisted general query workflow.", "1.0.0");
+    private void seedWorkflows() {
+        seedWorkflowDefinition("flight_booking", "Flight Booking", "Flight booking workflow.", "2.0.0");
+        seedWorkflowDefinition("hotel_booking", "Hotel Booking", "Hotel booking workflow.", "1.0.0");
+        seedWorkflowDefinition("general_query", "General Query", "Knowledge-assisted query workflow.", "1.0.0");
 
-        seedWorkflowVersion("flight_booking", "1.0.0", flightBookingV1(), entryRule(List.of("flight", "ticket", "booking", "航班", "机票", "订票"), 100));
-        seedWorkflowVersion("flight_booking", "2.0.0", flightBookingV2(), entryRule(List.of("flight", "ticket", "booking", "航班", "机票", "订票"), 120));
-        seedWorkflowVersion("hotel_booking", "1.0.0", hotelBookingV1(), entryRule(List.of("hotel", "room", "住宿", "酒店"), 110));
-        seedWorkflowVersion("general_query", "1.0.0", generalQueryV1(), entryRule(List.of("policy", "refund", "改签", "退票", "政策"), 90));
+        seedWorkflowVersion("flight_booking", "1.0.0", flightBookingV1(), entryRule(List.of("flight", "ticket", "booking"), 100));
+        seedWorkflowVersion("flight_booking", "2.0.0", flightBookingV2(), entryRule(List.of("flight", "ticket", "booking"), 120));
+        seedWorkflowVersion("hotel_booking", "1.0.0", hotelBookingV1(), entryRule(List.of("hotel", "room"), 110));
+        seedWorkflowVersion("general_query", "1.0.0", generalQueryV1(), entryRule(List.of("policy", "refund"), 90));
     }
 
     private void seedWorkflowDefinition(String workflowCode, String name, String description, String currentVersion) {
@@ -202,33 +224,31 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                     created.setCreatedAt(LocalDateTime.now());
                     return created;
                 });
-
         workflow.setStatus(WorkflowStatus.PUBLISHED);
         workflow.setCurrentVersion(currentVersion);
         workflow.setUpdatedAt(LocalDateTime.now());
         workflowRepository.save(workflow);
     }
 
-    private void seedWorkflowVersion(String workflowCode, String version, Map<String, Object> definition, Map<String, Object> entryRule) throws Exception {
+    private void seedWorkflowVersion(String workflowCode, String version, Map<String, Object> definition, Map<String, Object> entryRule) {
         if (workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version).isPresent()) {
             return;
         }
-
         WorkflowVersion workflowVersion = new WorkflowVersion();
         workflowVersion.setWorkflowCode(workflowCode);
         workflowVersion.setVersion(version);
         workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
-        workflowVersion.setDefinition(objectMapper.writeValueAsString(definition));
-        workflowVersion.setEntryRule(objectMapper.writeValueAsString(entryRule));
-        workflowVersion.setEditorMeta(objectMapper.writeValueAsString(Map.of(
+        workflowVersion.setDefinition(writeJson(definition));
+        workflowVersion.setEntryRule(writeJson(entryRule));
+        workflowVersion.setEditorMeta(writeJson(Map.of(
                 "layout_engine", "reactflow",
                 "viewport", Map.of("x", 0, "y", 0, "zoom", 0.92),
                 "readonly", false,
                 "last_saved_by", "system"
         )));
-        workflowVersion.setConfig(objectMapper.writeValueAsString(Map.of(
-                "intent_profile_ref", "intent-router-v1",
-                "llm_defaults", Map.of("model_profile_ref", "general-chat-v1", "provider_code", "openai-compatible-prod")
+        workflowVersion.setConfig(writeJson(Map.of(
+                "routing_model_code", "intent-router-v1",
+                "llm_defaults", Map.of("model_code", "general-chat-v1", "provider_code", "openai-compatible-prod")
         )));
         workflowVersion.setCreatedBy("system");
         workflowVersion.setCreatedAt(LocalDateTime.now());
@@ -251,9 +271,9 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_profile_ref", "structured-extraction-v1")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_code", "structured-extraction-v1")),
                         "check_slots", Map.of("id", "check_slots", "type", "condition", "config", Map.of("required_fields", List.of("departure_city", "arrival_city", "departure_date"))),
-                        "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("请补充出行信息", "还缺少部分订票信息，请补全后继续。")),
+                        "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("Provide trip details", "Please provide missing booking details.")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "departure_city", "execution.departure_city",
                                 "arrival_city", "execution.arrival_city",
@@ -277,10 +297,10 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_profile_ref", "structured-extraction-v1")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "slot_extraction", "model_code", "structured-extraction-v1")),
                         "check_slots", Map.of("id", "check_slots", "type", "condition", "config", Map.of("required_fields", List.of("departure_city", "arrival_city", "departure_date"))),
-                        "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("请补充航班需求", "需要完整的出发地、目的地和日期。")),
-                        "search_flights", Map.of("id", "search_flights", "type", "tool", "config", Map.of("tool_code", "flight_search_api", "url", "http://localhost:19001/api/flights/search", "method", "POST", "retry_policy", "network_timeout", "idempotent", true)),
+                        "collect_info", Map.of("id", "collect_info", "type", "form", "config", bookingForm("Provide flight details", "Origin, destination, and date are required.")),
+                        "search_flights", Map.of("id", "search_flights", "type", "tool", "config", Map.of("tool_code", "flight_search_api", "url", "http://localhost:19001/api/flights/search", "method", "POST")),
                         "check_seat_availability", Map.of("id", "check_seat_availability", "type", "subflow", "config", Map.of("subflow_code", "seat_check", "subflow_version", "1.0.0")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "departure_city", "execution.departure_city",
@@ -309,17 +329,17 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "entry", "start",
                 "nodes", Map.of(
                         "start", Map.of("id", "start", "type", "start"),
-                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "hotel_slot_extraction", "model_profile_ref", "structured-extraction-v1")),
+                        "extract_slots", Map.of("id", "extract_slots", "type", "llm", "config", Map.of("prompt", "hotel_slot_extraction", "model_code", "structured-extraction-v1")),
                         "collect_info", Map.of("id", "collect_info", "type", "form", "config", Map.of(
-                                "title", "请补充酒店需求",
-                                "description", "需要目的地和入住日期。",
+                                "title", "Provide hotel details",
+                                "description", "Destination and check-in date are required.",
                                 "fields", List.of(
-                                        Map.of("name", "arrival_city", "type", "text", "required", true, "label", "目的城市"),
-                                        Map.of("name", "departure_date", "type", "date", "required", true, "label", "入住日期"),
-                                        Map.of("name", "nights", "type", "number", "required", false, "label", "入住晚数")
+                                        Map.of("name", "arrival_city", "type", "text", "required", true, "label", "Destination city"),
+                                        Map.of("name", "departure_date", "type", "date", "required", true, "label", "Check-in date"),
+                                        Map.of("name", "nights", "type", "number", "required", false, "label", "Nights")
                                 )
                         )),
-                        "search_hotels", Map.of("id", "search_hotels", "type", "tool", "config", Map.of("tool_code", "hotel_search_api", "url", "http://localhost:19001/api/hotels/search", "method", "POST", "retry_policy", "network_timeout", "idempotent", true)),
+                        "search_hotels", Map.of("id", "search_hotels", "type", "tool", "config", Map.of("tool_code", "hotel_search_api", "url", "http://localhost:19001/api/hotels/search", "method", "POST")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "arrival_city", "execution.arrival_city",
                                 "departure_date", "execution.departure_date",
@@ -347,10 +367,10 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                                 "kb_version", "1.0.0",
                                 "retrieval_mode", "hybrid",
                                 "top_k", 3,
-                                "query_rewrite", Map.of("enabled", true, "model_profile_ref", "knowledge-query-rewrite-v1"),
-                                "answer_generation", Map.of("enabled", true, "model_profile_ref", "knowledge-answer-v1")
+                                "query_rewrite", Map.of("enabled", true, "model_code", "knowledge-query-rewrite-v1"),
+                                "answer_generation", Map.of("enabled", true, "model_code", "knowledge-answer-v1")
                         )),
-                        "answer_query", Map.of("id", "answer_query", "type", "llm", "config", Map.of("prompt", "knowledge_answer", "model_profile_ref", "knowledge-answer-v1")),
+                        "answer_query", Map.of("id", "answer_query", "type", "llm", "config", Map.of("prompt", "knowledge_answer", "model_code", "knowledge-answer-v1")),
                         "end", Map.of("id", "end", "type", "end", "config", Map.of("output_format", Map.of(
                                 "answer", "execution.answer",
                                 "retrieved_docs", "execution.retrieved_docs"
@@ -369,11 +389,19 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
                 "title", title,
                 "description", description,
                 "fields", List.of(
-                        Map.of("name", "departure_city", "type", "text", "required", true, "label", "出发城市"),
-                        Map.of("name", "arrival_city", "type", "text", "required", true, "label", "到达城市"),
-                        Map.of("name", "departure_date", "type", "date", "required", true, "label", "出发日期"),
-                        Map.of("name", "passengers", "type", "number", "required", false, "label", "乘客数")
+                        Map.of("name", "departure_city", "type", "text", "required", true, "label", "Origin city"),
+                        Map.of("name", "arrival_city", "type", "text", "required", true, "label", "Destination city"),
+                        Map.of("name", "departure_date", "type", "date", "required", true, "label", "Departure date"),
+                        Map.of("name", "passengers", "type", "number", "required", false, "label", "Passengers")
                 )
         );
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to serialize seed payload", exception);
+        }
     }
 }

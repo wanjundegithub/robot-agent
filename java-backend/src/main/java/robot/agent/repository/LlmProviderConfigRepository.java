@@ -11,4 +11,5 @@ public interface LlmProviderConfigRepository extends JpaRepository<LlmProviderCo
     Optional<LlmProviderConfig> findByProviderCode(String providerCode);
     List<LlmProviderConfig> findByProviderCodeIn(Collection<String> providerCodes);
     List<LlmProviderConfig> findByEnabledTrueOrderByProviderCodeAsc();
+    List<LlmProviderConfig> findAllByOrderByProviderCodeAsc();
 }

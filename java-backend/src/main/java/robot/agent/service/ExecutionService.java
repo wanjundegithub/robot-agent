@@ -301,8 +301,8 @@ public class ExecutionService {
         executeRequest.setWorkflowConfig(runtimeBundle.workflowConfig());
         executeRequest.setWorkflowCatalog(runtimeBundle.workflowCatalog());
         executeRequest.setProviderConfigs(runtimeBundle.providerConfigs());
-        executeRequest.setModelProfiles(runtimeBundle.modelProfiles());
-        executeRequest.setIntentProfileCode(runtimeBundle.routingProfileCode());
+        executeRequest.setModelRecords(runtimeBundle.modelRecords());
+        executeRequest.setRoutingModelCode(runtimeBundle.routingModelCode());
         Map<String, Object> executeInput = new LinkedHashMap<>();
         executeInput.put("user_message", request.getContent());
         executeInput.put("session_id", session.getId());
@@ -311,18 +311,18 @@ public class ExecutionService {
         executeInput.put("workflow_id", request.getWorkflowId());
         executeInput.put("requested_tool_code", confirmationEvaluation.toolCode());
         executeInput.put("confirmed_tool_codes", executeRequest.getConfirmedToolCodes());
-        executeInput.put("intent_profile_code", runtimeBundle.routingProfileCode());
+        executeInput.put("routing_model_code", runtimeBundle.routingModelCode());
         executeRequest.setInputVariables(executeInput);
         log.info(
-                "execution.dispatch executionId={} sessionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} profileCount={} intentProfileCode={}",
+                "execution.dispatch executionId={} sessionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} modelRecordCount={} routingModelCode={}",
                 saved.getId(),
                 session.getId(),
                 request.getWorkflowId(),
                 saved.getWorkflowCode(),
                 saved.getWorkflowVersion(),
                 runtimeBundle.providerConfigs().size(),
-                runtimeBundle.modelProfiles().size(),
-                runtimeBundle.routingProfileCode()
+                runtimeBundle.modelRecords().size(),
+                runtimeBundle.routingModelCode()
         );
 
         Flux<ServerSentEvent<String>> stream = pythonClient.execute(executeRequest);

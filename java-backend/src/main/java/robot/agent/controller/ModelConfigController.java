@@ -1,10 +1,19 @@
 package robot.agent.controller;
 
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import robot.agent.dto.request.TestModelProfileRequest;
-import robot.agent.dto.request.UpsertModelProfileRequest;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
+import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.dto.request.ValidateModelProviderRequest;
 import robot.agent.service.ModelConfigService;
 
@@ -34,14 +43,6 @@ public class ModelConfigController {
         return ResponseEntity.ok(modelConfigService.saveProviderConfig(userId, request));
     }
 
-    @PostMapping("/providers/validate-draft")
-    public ResponseEntity<Map<String, Object>> validateProviderDraft(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestBody ValidateModelProviderRequest request
-    ) {
-        return ResponseEntity.ok(modelConfigService.validateProviderDraft(userId, request));
-    }
-
     @PutMapping("/providers/{providerCode}")
     public ResponseEntity<Map<String, Object>> updateProvider(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -49,6 +50,15 @@ public class ModelConfigController {
             @RequestBody UpsertModelProviderRequest request
     ) {
         return ResponseEntity.ok(modelConfigService.updateProviderConfig(userId, providerCode, request));
+    }
+
+    @DeleteMapping("/providers/{providerCode}")
+    public ResponseEntity<Void> deleteProvider(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String providerCode
+    ) {
+        modelConfigService.deleteProviderConfig(userId, providerCode);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/providers/{providerCode}/validate")
@@ -60,34 +70,65 @@ public class ModelConfigController {
         return ResponseEntity.ok(modelConfigService.validateProviderConfig(userId, providerCode, request));
     }
 
-    @GetMapping("/profiles")
-    public ResponseEntity<List<Map<String, Object>>> getProfiles() {
-        return ResponseEntity.ok(modelConfigService.getModelProfiles());
+    @PostMapping("/providers/validate-draft")
+    public ResponseEntity<Map<String, Object>> validateProviderDraft(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody ValidateModelProviderRequest request
+    ) {
+        return ResponseEntity.ok(modelConfigService.validateProviderDraft(userId, request));
     }
 
-    @PostMapping("/profiles")
-    public ResponseEntity<Map<String, Object>> saveProfile(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestBody UpsertModelProfileRequest request
+    @GetMapping("/models")
+    public ResponseEntity<Map<String, Object>> getModels(
+            @RequestParam(value = "q", required = false) String keyword,
+            @RequestParam(value = "provider_code", required = false) String providerCode,
+            @RequestParam(value = "enabled", required = false) Boolean enabled,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "page_size", defaultValue = "20") int pageSize
     ) {
-        return ResponseEntity.ok(modelConfigService.saveModelProfile(userId, request));
+        return ResponseEntity.ok(modelConfigService.getModelRecords(keyword, providerCode, enabled, page, pageSize));
     }
 
-    @PutMapping("/profiles/{profileCode}")
-    public ResponseEntity<Map<String, Object>> updateProfile(
+    @PostMapping("/models")
+    public ResponseEntity<Map<String, Object>> saveModelRecord(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String profileCode,
-            @RequestBody UpsertModelProfileRequest request
+            @RequestBody UpsertModelRecordRequest request
     ) {
-        return ResponseEntity.ok(modelConfigService.updateModelProfile(userId, profileCode, request));
+        return ResponseEntity.ok(modelConfigService.saveModelRecord(userId, request));
     }
 
-    @PostMapping("/profiles/{profileCode}/test-chat")
-    public ResponseEntity<Map<String, Object>> testProfileChat(
+    @PutMapping("/models/{modelCode}")
+    public ResponseEntity<Map<String, Object>> updateModelRecord(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable String profileCode,
-            @RequestBody TestModelProfileRequest request
+            @PathVariable String modelCode,
+            @RequestBody UpsertModelRecordRequest request
     ) {
-        return ResponseEntity.ok(modelConfigService.testProfileChat(userId, profileCode, request));
+        return ResponseEntity.ok(modelConfigService.updateModelRecord(userId, modelCode, request));
+    }
+
+    @DeleteMapping("/models/{modelCode}")
+    public ResponseEntity<Void> deleteModelRecord(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String modelCode
+    ) {
+        modelConfigService.deleteModelRecord(userId, modelCode);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/models/{modelCode}/validate")
+    public ResponseEntity<Map<String, Object>> validateModelRecord(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String modelCode
+    ) {
+        return ResponseEntity.ok(modelConfigService.validateModelRecord(userId, modelCode));
+    }
+
+    @PostMapping("/models/{modelCode}/test-chat")
+    public ResponseEntity<Map<String, Object>> testModelRecord(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String modelCode,
+            @RequestBody TestModelRecordRequest request
+    ) {
+        return ResponseEntity.ok(modelConfigService.testModelRecordChat(userId, modelCode, request));
     }
 }

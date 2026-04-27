@@ -48,10 +48,10 @@ public class ExecuteRequest {
     private Map<String, Map<String, Object>> workflowCatalog;
     @JsonProperty("provider_configs")
     private List<Map<String, Object>> providerConfigs;
-    @JsonProperty("model_profiles")
-    private List<Map<String, Object>> modelProfiles;
-    @JsonProperty("intent_profile_code")
-    private String intentProfileCode;
+    @JsonProperty("model_records")
+    private List<Map<String, Object>> modelRecords;
+    @JsonProperty("routing_model_code")
+    private String routingModelCode;
     @JsonProperty("input_variables")
     private Map<String, Object> inputVariables;
 
@@ -121,11 +121,11 @@ public class ExecuteRequest {
     public List<Map<String, Object>> getProviderConfigs() { return providerConfigs; }
     public void setProviderConfigs(List<Map<String, Object>> providerConfigs) { this.providerConfigs = providerConfigs; }
 
-    public List<Map<String, Object>> getModelProfiles() { return modelProfiles; }
-    public void setModelProfiles(List<Map<String, Object>> modelProfiles) { this.modelProfiles = modelProfiles; }
+    public List<Map<String, Object>> getModelRecords() { return modelRecords; }
+    public void setModelRecords(List<Map<String, Object>> modelRecords) { this.modelRecords = modelRecords; }
 
-    public String getIntentProfileCode() { return intentProfileCode; }
-    public void setIntentProfileCode(String intentProfileCode) { this.intentProfileCode = intentProfileCode; }
+    public String getRoutingModelCode() { return routingModelCode; }
+    public void setRoutingModelCode(String routingModelCode) { this.routingModelCode = routingModelCode; }
 
     public Map<String, Object> getInputVariables() { return inputVariables; }
     public void setInputVariables(Map<String, Object> inputVariables) { this.inputVariables = inputVariables; }

@@ -421,11 +421,14 @@ public class WorkflowService {
 
         String normalizedContent = content == null ? "" : content.toLowerCase(Locale.ROOT);
         List<Map<String, Object>> workflowDefinitions = versions.stream()
-                .map(version -> normalizeWorkflowDefinition(parseJsonObject(version.getDefinition())))
+                .map(version -> attachWorkflowConfig(
+                        normalizeWorkflowDefinition(parseJsonObject(version.getDefinition())),
+                        normalizeWorkflowConfig(parseJsonObject(version.getConfig()))
+                ))
                 .toList();
-        String routingProfileCode = modelConfigService.resolveRoutingProfileCode(workflowDefinitions);
-        ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingProfileCode);
-        ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingProfileCode, runtimeBundle);
+        String routingModelCode = modelConfigService.resolveRoutingModelCode(workflowDefinitions);
+        ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingModelCode);
+        ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingModelCode, runtimeBundle);
         List<WorkflowScore> scoredVersions = versions.stream()
                 .map(version -> new WorkflowScore(
                         version,
@@ -565,7 +568,7 @@ public class WorkflowService {
                 version,
                 normalizedDefinition,
                 parseJsonObject(workflowVersion.getEntryRule()),
-                parseJsonObject(workflowVersion.getConfig())
+                normalizeWorkflowConfig(parseJsonObject(workflowVersion.getConfig()))
         );
     }
 
@@ -577,7 +580,7 @@ public class WorkflowService {
                 version,
                 normalizedDefinition,
                 parseJsonObject(workflowVersion.getEntryRule()),
-                parseJsonObject(workflowVersion.getConfig()),
+                normalizeWorkflowConfig(parseJsonObject(workflowVersion.getConfig())),
                 false
         );
     }
@@ -608,31 +611,32 @@ public class WorkflowService {
             boolean includePublishedCatalog
     ) {
         Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(workflowDefinition);
+        Map<String, Object> normalizedWorkflowConfig = normalizeWorkflowConfig(workflowConfig);
         Map<String, Map<String, Object>> workflowCatalog = includePublishedCatalog
                 ? buildWorkflowCatalog()
                 : new LinkedHashMap<>();
         workflowCatalog.put(workflowCode + "@" + version, normalizedDefinition);
-        Collection<Map<String, Object>> workflowDefinitions = workflowCatalog.values();
-        String routingProfileCode = modelConfigService.resolveRoutingProfileCode(workflowDefinitions);
-        ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingProfileCode);
+        Collection<Map<String, Object>> workflowDefinitions = List.of(attachWorkflowConfig(normalizedDefinition, normalizedWorkflowConfig));
+        String routingModelCode = modelConfigService.resolveRoutingModelCode(workflowDefinitions);
+        ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingModelCode);
         return new RuntimeExecutionBundle(
                 normalizedDefinition,
                 entryRule,
-                workflowConfig,
+                normalizedWorkflowConfig,
                 workflowCatalog,
                 runtimeBundle.providerConfigs(),
-                runtimeBundle.modelProfiles(),
-                routingProfileCode
+                runtimeBundle.modelRecords(),
+                routingModelCode
         );
     }
 
     private ModelIntent classifyIntent(
             String normalizedContent,
             List<WorkflowVersion> versions,
-            String routingProfileCode,
+            String routingModelCode,
             ModelConfigService.RuntimeModelBundle runtimeBundle
     ) {
-        if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelProfiles().isEmpty()) {
+        if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelRecords().isEmpty()) {
             return fallbackModelIntent(versions, normalizedContent, "model_config_unavailable");
         }
         List<Map<String, Object>> candidates = versions.stream()
@@ -646,10 +650,10 @@ public class WorkflowService {
         try {
             response = pythonClient.classifyIntent(Map.of(
                     "message", normalizedContent,
-                    "intent_profile_code", routingProfileCode,
+                    "routing_model_code", routingModelCode,
                     "candidate_workflows", candidates,
                     "provider_configs", runtimeBundle.providerConfigs(),
-                    "model_profiles", runtimeBundle.modelProfiles()
+                    "model_records", runtimeBundle.modelRecords()
             )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
         } catch (RuntimeException exception) {
             return fallbackModelIntent(versions, normalizedContent, "intent_classification_fallback");
@@ -806,9 +810,9 @@ public class WorkflowService {
         }
 
         Map<String, Object> variables = asMap(source.get("variables"));
-        Map<String, Object> modelBindings = asMap(source.get("model_bindings"));
+        Map<String, Object> modelBindings = normalizeLegacyModelReferences(asMap(source.get("model_bindings")));
         Map<String, Object> editorMeta = asMap(source.get("editor_meta"));
-        Map<String, Object> legacyConfig = asMap(source.get("config"));
+        Map<String, Object> legacyConfig = normalizeWorkflowConfig(asMap(source.get("config")));
 
         if (variables.isEmpty()
                 && (legacyConfig.get("global_variables") instanceof List<?> || legacyConfig.get("temporary_variables") instanceof List<?>)) {
@@ -817,7 +821,7 @@ public class WorkflowService {
             variables.put("temporary", legacyConfig.getOrDefault("temporary_variables", List.of()));
         }
         if (modelBindings.isEmpty()) {
-            modelBindings = asMap(legacyConfig.get("llm_defaults"));
+            modelBindings = normalizeLegacyModelReferences(asMap(legacyConfig.get("llm_defaults")));
         }
         if (editorMeta.isEmpty()) {
             editorMeta = asMap(source.get("meta"));
@@ -834,7 +838,7 @@ public class WorkflowService {
         if (!legacyConfig.isEmpty()) {
             normalized.put("config", legacyConfig);
         }
-        return normalized;
+        return normalizeLegacyModelReferences(normalized);
     }
 
     private Map<String, Object> normalizeGraphs(Map<String, Object> source) {
@@ -895,7 +899,7 @@ public class WorkflowService {
                 node.put("type", normalizedType);
             }
             node.put("id", firstNonBlank(stringValue(rawNode.get("id")), nodeId));
-            Map<String, Object> config = new LinkedHashMap<>(asMap(rawNode.get("config")));
+            Map<String, Object> config = normalizeLegacyModelReferences(new LinkedHashMap<>(asMap(rawNode.get("config"))));
             if ("sub_agent".equals(normalizedType)) {
                 String subgraphId = resolveSubgraphId(config);
                 if (subgraphId != null) {
@@ -937,6 +941,66 @@ public class WorkflowService {
             appendTransitionTargets(edges, transitionEntry.getKey(), transitionEntry.getValue(), index);
         }
         return edges;
+    }
+
+    private Map<String, Object> attachWorkflowConfig(
+            Map<String, Object> workflowDefinition,
+            Map<String, Object> workflowConfig
+    ) {
+        Map<String, Object> attached = deepCopyMap(workflowDefinition);
+        if (workflowConfig != null && !workflowConfig.isEmpty()) {
+            attached.put("config", normalizeWorkflowConfig(workflowConfig));
+        }
+        return attached;
+    }
+
+    private Map<String, Object> normalizeWorkflowConfig(Map<String, Object> workflowConfig) {
+        Map<String, Object> normalized = normalizeLegacyModelReferences(workflowConfig);
+        if (normalized.isEmpty()) {
+            return normalized;
+        }
+        String routingModelCode = firstNonBlank(
+                stringValue(normalized.get("routing_model_code")),
+                stringValue(normalized.get("intent_profile_ref"))
+        );
+        if (routingModelCode != null) {
+            normalized.put("routing_model_code", routingModelCode);
+            normalized.remove("intent_profile_ref");
+        }
+        Object llmDefaults = normalized.get("llm_defaults");
+        if (llmDefaults instanceof Map<?, ?>) {
+            normalized.put("llm_defaults", normalizeLegacyModelReferences(asMap(llmDefaults)));
+        }
+        return normalized;
+    }
+
+    private Map<String, Object> normalizeLegacyModelReferences(Map<String, Object> source) {
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = entry.getKey();
+            Object value = normalizeLegacyModelReferenceValue(entry.getValue());
+            String normalizedKey = switch (key) {
+                case "intent_profile_ref" -> "routing_model_code";
+                case "model_profile_ref" -> "model_code";
+                default -> key;
+            };
+            normalized.put(normalizedKey, value);
+        }
+        return normalized;
+    }
+
+    private Object normalizeLegacyModelReferenceValue(Object value) {
+        if (value instanceof Map<?, ?> mapValue) {
+            return normalizeLegacyModelReferences(asMap(mapValue));
+        }
+        if (value instanceof List<?> listValue) {
+            List<Object> normalized = new ArrayList<>();
+            for (Object item : listValue) {
+                normalized.add(normalizeLegacyModelReferenceValue(item));
+            }
+            return normalized;
+        }
+        return value;
     }
 
     private void appendTransitionTargets(
@@ -1274,8 +1338,8 @@ public class WorkflowService {
             Map<String, Object> workflowConfig,
             Map<String, Map<String, Object>> workflowCatalog,
             List<Map<String, Object>> providerConfigs,
-            List<Map<String, Object>> modelProfiles,
-            String routingProfileCode
+            List<Map<String, Object>> modelRecords,
+            String routingModelCode
     ) {
     }
 }

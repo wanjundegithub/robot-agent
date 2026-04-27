@@ -12,7 +12,6 @@ import org.springframework.web.server.ResponseStatusException;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
 import robot.agent.repository.LlmModelRecordRepository;
-import robot.agent.repository.LlmModelProfileRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
 
 import java.time.LocalDateTime;
@@ -25,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -35,13 +35,11 @@ class ModelConfigServiceTest {
     private static final LocalDateTime FIXED_UPDATED_AT = LocalDateTime.of(2026, 4, 26, 10, 30, 0);
 
     private final LlmProviderConfigRepository providerRepository = mock(LlmProviderConfigRepository.class);
-    private final LlmModelProfileRepository profileRepository = mock(LlmModelProfileRepository.class);
     private final LlmModelRecordRepository modelRecordRepository = mock(LlmModelRecordRepository.class);
     private final AccessControlService accessControlService = mock(AccessControlService.class);
     private final AuditService auditService = mock(AuditService.class);
     private final ModelConfigService modelConfigService = new ModelConfigService(
             providerRepository,
-            profileRepository,
             modelRecordRepository,
             new ObjectMapper(),
             accessControlService,
@@ -57,12 +55,12 @@ class ModelConfigServiceTest {
     @Test
     void listModelRecordsRequestsUpdatedAtDescSortAndReturnsPageEnvelope() {
         PageRequest repositoryPageFixture = PageRequest.of(0, 10, Sort.by(Sort.Order.desc("updatedAt")));
-        when(modelRecordRepository.search("doubao", "provider-a", true, any(Pageable.class)))
+        when(modelRecordRepository.search(eq("doubao"), eq("provider-a"), eq(true), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(modelRecord("chat-main", "Doubao Chat")), repositoryPageFixture, 1));
 
         Map<String, Object> page = modelConfigService.getModelRecords("doubao", "provider-a", true, 0, 10);
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(modelRecordRepository).search("doubao", "provider-a", true, pageableCaptor.capture());
+        verify(modelRecordRepository).search(eq("doubao"), eq("provider-a"), eq(true), pageableCaptor.capture());
         Pageable pageable = pageableCaptor.getValue();
 
         assertThat(page.get("page")).isEqualTo(0);

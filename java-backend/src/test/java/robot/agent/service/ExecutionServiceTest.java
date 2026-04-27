@@ -241,6 +241,8 @@ class ExecutionServiceTest {
         ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
         verify(pythonClient).execute(requestCaptor.capture());
         assertThat(requestCaptor.getValue().getWorkflowDefinition()).isEqualTo(resolvedDefinition);
+        assertThat(requestCaptor.getValue().getModelRecords()).isEmpty();
+        assertThat(requestCaptor.getValue().getRoutingModelCode()).isEqualTo("routing-default");
     }
 
     @Test
@@ -341,5 +343,7 @@ class ExecutionServiceTest {
         assertThat(requestCaptor.getValue().getWorkflowCode()).isEqualTo("travel_assistant");
         assertThat(requestCaptor.getValue().getWorkflowDefinition()).containsEntry("schema_version", "workflow-designer/v2");
         assertThat(requestCaptor.getValue().getWorkflowDefinition()).containsKey("graphs");
+        assertThat(requestCaptor.getValue().getModelRecords()).isEmpty();
+        assertThat(requestCaptor.getValue().getRoutingModelCode()).isEqualTo("routing-default");
     }
 }

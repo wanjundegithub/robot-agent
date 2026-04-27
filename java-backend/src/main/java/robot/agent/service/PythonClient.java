@@ -29,14 +29,14 @@ public class PythonClient {
 
     public Flux<ServerSentEvent<String>> execute(ExecuteRequest request) {
         log.info(
-                "python.execute.request sessionId={} executionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} profileCount={}",
+                "python.execute.request sessionId={} executionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} modelRecordCount={}",
                 request.getSessionId(),
                 request.getExecutionId(),
                 request.getWorkflowId(),
                 request.getWorkflowCode(),
                 request.getWorkflowVersion(),
                 request.getProviderConfigs() == null ? 0 : request.getProviderConfigs().size(),
-                request.getModelProfiles() == null ? 0 : request.getModelProfiles().size()
+                request.getModelRecords() == null ? 0 : request.getModelRecords().size()
         );
         return webClient.post()
                 .uri("/api/execute")
@@ -114,9 +114,9 @@ public class PythonClient {
 
     public Mono<Map<String, Object>> classifyIntent(Map<String, Object> request) {
         log.info(
-                "python.intent.classify messagePreview={} intentProfileCode={} candidateCount={}",
+                "python.intent.classify messagePreview={} routingModelCode={} candidateCount={}",
                 preview(request == null ? null : String.valueOf(request.get("message"))),
-                request == null ? null : request.get("intent_profile_code"),
+                request == null ? null : request.get("routing_model_code"),
                 request != null && request.get("candidate_workflows") instanceof java.util.List<?> list ? list.size() : 0
         );
         return webClient.post()
