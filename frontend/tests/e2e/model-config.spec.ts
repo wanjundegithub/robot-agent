@@ -218,6 +218,12 @@ test.describe('简化后的模型配置页', () => {
     await expect(page.getByText('服务商配置')).toHaveCount(0)
     await expect(page.getByText('新建模型记录')).toHaveCount(0)
 
+    await expect(page.getByLabel('自定义模型名')).toHaveAttribute('required', '')
+    await expect(page.getByLabel('供应商')).toHaveAttribute('required', '')
+    await expect(page.getByLabel('Model 名称（实际调用模型）')).toHaveAttribute('required', '')
+    await expect(page.getByLabel('API Key（接口密钥）')).toHaveAttribute('required', '')
+    await expect(page.getByLabel('Base URL（接口地址）')).toHaveAttribute('required', '')
+
     const sidebarBox = await page.getByTestId('model-config-sidebar').boundingBox()
     const listBox = await page.getByTestId('model-config-list').boundingBox()
     expect(sidebarBox).not.toBeNull()
@@ -240,6 +246,15 @@ test.describe('简化后的模型配置页', () => {
     await expect(page.getByLabel('Model 名称（实际调用模型）')).toHaveValue('gpt-4o-mini')
     await expect(page.getByLabel('API Key（接口密钥）')).toHaveValue('sk-openai-demo')
     await expect(page.getByLabel('Base URL（接口地址）')).toHaveValue('https://api.openai.example/v1')
+    await expect(page.getByText(/^已加载模型/)).toHaveCount(0)
+    await expect(page.getByText(/^ID\s+\d+$/)).toHaveCount(0)
+
+    const baseUrlBox = await page.getByLabel('Base URL（接口地址）').boundingBox()
+    const saveButtonBox = await page.getByTestId('model-config-save').boundingBox()
+    expect(baseUrlBox).not.toBeNull()
+    expect(saveButtonBox).not.toBeNull()
+    expect(saveButtonBox?.y || 0).toBeGreaterThan((baseUrlBox?.y || 0) + (baseUrlBox?.height || 0))
+    expect(saveButtonBox?.y || 0).toBeLessThan((baseUrlBox?.y || 0) + (baseUrlBox?.height || 0) + 72)
 
     await page.getByLabel('自定义模型名').fill('通用对话模型-已编辑')
     await page.getByTestId('model-config-save').click()
@@ -250,11 +265,16 @@ test.describe('简化后的模型配置页', () => {
     expect(lastTestPayload?.model_name).toBe('gpt-4o-mini')
 
     await page.getByTestId('model-config-create').click()
-    await page.getByLabel('自定义模型名').fill('结构化抽取模型')
+    lastTestPayload = null
     await page.getByLabel('供应商').selectOption('deepseek')
     await page.getByLabel('Model 名称（实际调用模型）').fill('deepseek-chat')
     await page.getByLabel('API Key（接口密钥）').fill('sk-deepseek-demo')
     await page.getByLabel('Base URL（接口地址）').fill('https://api.deepseek.com/v1')
+    await page.getByTestId('model-config-test-call').click()
+    await expect(page.getByText('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')).toBeVisible()
+    expect(lastTestPayload).toBeNull()
+
+    await page.getByLabel('自定义模型名').fill('结构化抽取模型')
     await page.getByTestId('model-config-save').click()
     await expect(page.getByText('结构化抽取模型')).toBeVisible()
   })

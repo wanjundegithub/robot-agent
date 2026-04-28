@@ -159,19 +159,20 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         provider.setProviderType("openai");
         provider.setBaseUrl("https://api1.oai1.online/v1");
         provider.setApiKeySecretRef(apiKey == null || apiKey.isBlank() ? null : "env:ROBOT_LLM_API_KEY");
+        provider.setDefaultModelCode("general-chat-v1");
         provider.setEnabled(apiKey != null && !apiKey.isBlank());
         provider.setUpdatedAt(LocalDateTime.now());
         providerRepository.save(provider);
 
-        seedModelRecord("intent-router-v1", "Intent Router", "openai-compatible-prod", "gpt-4o-mini",
+        seedModelRecord("intent-router-v1", "意图路由模型", "openai-compatible-prod", "gpt-4o-mini",
                 "Route user messages to workflows.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
-        seedModelRecord("knowledge-query-rewrite-v1", "Knowledge Query Rewrite", "openai-compatible-prod", "gpt-4o-mini",
+        seedModelRecord("knowledge-query-rewrite-v1", "知识库改写模型", "openai-compatible-prod", "gpt-4o-mini",
                 "Rewrite knowledge search queries.", Map.of("temperature", 0.10d, "top_p", 0.90d, "max_tokens", 512));
-        seedModelRecord("knowledge-answer-v1", "Knowledge Answer", "openai-compatible-prod", "gpt-4o-mini",
+        seedModelRecord("knowledge-answer-v1", "知识库回答模型", "openai-compatible-prod", "gpt-4o-mini",
                 "Generate grounded knowledge answers.", Map.of("temperature", 0.20d, "top_p", 0.90d, "max_tokens", 1024));
-        seedModelRecord("general-chat-v1", "General Chat", "openai-compatible-prod", "gpt-4o-mini",
+        seedModelRecord("general-chat-v1", "通用对话模型", "openai-compatible-prod", "gpt-4o-mini",
                 "General workflow chat model.", Map.of("temperature", 0.30d, "top_p", 0.95d, "max_tokens", 1024));
-        seedModelRecord("structured-extraction-v1", "Structured Extraction", "openai-compatible-prod", "gpt-4o-mini",
+        seedModelRecord("structured-extraction-v1", "结构化抽取模型", "openai-compatible-prod", "gpt-4o-mini",
                 "Extract structured slots.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
     }
 
@@ -183,11 +184,13 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
             String defaultSystemPrompt,
             Map<String, Object> defaultOptions
     ) {
-        if (modelRecordRepository.findByModelCode(modelCode).isPresent()) {
-            return;
-        }
-        LlmModelRecord modelRecord = new LlmModelRecord();
-        modelRecord.setModelCode(modelCode);
+        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode).orElseGet(() -> {
+            LlmModelRecord created = new LlmModelRecord();
+            created.setModelCode(modelCode);
+            created.setCreatedBy("system");
+            created.setCreatedAt(LocalDateTime.now());
+            return created;
+        });
         modelRecord.setModelName(modelName);
         modelRecord.setProvider(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getProviderType).orElse("openai"));
         modelRecord.setProviderCode(providerCode);
@@ -198,8 +201,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         modelRecord.setDefaultOptionsJson(writeJson(defaultOptions));
         modelRecord.setCapabilitiesJson(writeJson(Map.of("chat", true)));
         modelRecord.setEnabled(true);
-        modelRecord.setCreatedBy("system");
-        modelRecord.setCreatedAt(LocalDateTime.now());
         modelRecord.setUpdatedAt(LocalDateTime.now());
         modelRecordRepository.save(modelRecord);
     }

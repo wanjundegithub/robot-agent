@@ -27,6 +27,9 @@ public class LlmProviderConfig {
     @Column(name = "api_key_secret_ref", length = 256)
     private String apiKeySecretRef;
 
+    @Column(name = "default_model_code", length = 128)
+    private String defaultModelCode;
+
     @Column(name = "enabled", nullable = false)
     private boolean enabled = true;
 
@@ -56,6 +59,9 @@ public class LlmProviderConfig {
 
     public String getApiKeySecretRef() { return apiKeySecretRef; }
     public void setApiKeySecretRef(String apiKeySecretRef) { this.apiKeySecretRef = apiKeySecretRef; }
+
+    public String getDefaultModelCode() { return defaultModelCode; }
+    public void setDefaultModelCode(String defaultModelCode) { this.defaultModelCode = defaultModelCode; }
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }

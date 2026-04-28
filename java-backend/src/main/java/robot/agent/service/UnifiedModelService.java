@@ -312,9 +312,9 @@ public class UnifiedModelService {
                     }
                 }
                 case "doubao" -> {
-                    Object outputText = payload.get("output_text");
-                    if (outputText != null && !String.valueOf(outputText).isBlank()) {
-                        return String.valueOf(outputText);
+                    String text = extractDoubaoText(payload);
+                    if (text != null) {
+                        return text;
                     }
                 }
                 case "claude" -> {
@@ -350,6 +350,49 @@ public class UnifiedModelService {
         } catch (Exception ignored) {
         }
         throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid chat response");
+    }
+
+    private String extractDoubaoText(Map<String, Object> payload) {
+        String outputText = stringValue(payload.get("output_text"));
+        if (outputText != null) {
+            return outputText;
+        }
+        Object output = payload.get("output");
+        if (!(output instanceof List<?> outputItems) || outputItems.isEmpty()) {
+            return null;
+        }
+        String messageOutputText = extractDoubaoOutputText(outputItems, true);
+        return messageOutputText == null ? extractDoubaoOutputText(outputItems, false) : messageOutputText;
+    }
+
+    private String extractDoubaoOutputText(List<?> outputItems, boolean requireOutputTextType) {
+        List<String> parts = new ArrayList<>();
+        for (Object outputItem : outputItems) {
+            if (!(outputItem instanceof Map<?, ?> outputMap)) {
+                continue;
+            }
+            if (!"message".equals(String.valueOf(outputMap.get("type")))
+                    && !"assistant".equals(String.valueOf(outputMap.get("role")))) {
+                continue;
+            }
+            Object content = outputMap.get("content");
+            if (!(content instanceof List<?> contentItems)) {
+                continue;
+            }
+            for (Object contentItem : contentItems) {
+                if (!(contentItem instanceof Map<?, ?> contentMap)) {
+                    continue;
+                }
+                if (requireOutputTextType && !"output_text".equals(String.valueOf(contentMap.get("type")))) {
+                    continue;
+                }
+                String text = stringValue(contentMap.get("text"));
+                if (text != null) {
+                    parts.add(text);
+                }
+            }
+        }
+        return parts.isEmpty() ? null : String.join("", parts);
     }
 
     private Map<String, Object> extractUsage(String providerProtocol, Map<String, Object> payload) {

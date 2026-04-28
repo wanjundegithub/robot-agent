@@ -248,18 +248,43 @@ async def _invoke_provider(
         if protocol in {"openai", "openai_compatible", "deepseek", "qwen"}:
             return str(payload["choices"][0]["message"]["content"])
         if protocol == "doubao":
-            for item in payload.get("output", []):
-                if not isinstance(item, dict):
-                    continue
-                for content in item.get("content", []):
-                    if isinstance(content, dict) and content.get("text") is not None:
-                        return str(content["text"])
+            output_text = _extract_doubao_text(payload)
+            if output_text:
+                return output_text
             raise KeyError("doubao output text not found")
         if protocol == "claude":
             return str(payload["content"][0]["text"])
         return str(payload["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as exc:  # pragma: no cover - defensive
         raise ModelExecutionError(f"Invalid provider payload: {payload}") from exc
+
+
+def _extract_doubao_text(payload: Dict[str, Any]) -> str | None:
+    output_text = payload.get("output_text")
+    if output_text is not None and str(output_text).strip():
+        return str(output_text)
+
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return None
+
+    parts: List[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "message" and item.get("role") != "assistant":
+            continue
+        content_items = item.get("content")
+        if not isinstance(content_items, list):
+            continue
+        for content in content_items:
+            if not isinstance(content, dict) or content.get("type") != "output_text":
+                continue
+            text = content.get("text")
+            if text is not None and str(text).strip():
+                parts.append(str(text))
+
+    return "".join(parts) if parts else None
 
 
 def _resolve_secret(secret_ref: Any) -> str:

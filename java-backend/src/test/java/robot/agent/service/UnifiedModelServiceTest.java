@@ -106,6 +106,33 @@ class UnifiedModelServiceTest {
     }
 
     @Test
+    void invokeDirectChatExtractsDoubaoResponsesOutputText() {
+        stubDoubaoProviderResponse("""
+                {
+                  "object":"response",
+                  "output":[
+                    {"type":"reasoning","summary":[{"type":"summary_text","text":"推理摘要不应作为最终回答"}],"status":"completed"},
+                    {"type":"message","role":"assistant","content":[{"type":"output_text","text":"在常规的十进制算术运算里，1+1=2。"}],"status":"completed"}
+                  ],
+                  "usage":{"input_tokens":55,"output_tokens":434,"total_tokens":489}
+                }
+                """);
+
+        UnifiedModelResult result = unifiedModelService.invokeDirectChat(
+                "doubao",
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v3",
+                "test-api-key",
+                "doubao-seed-2-0-pro-260215",
+                List.of(Map.of("role", "user", "content", "1+1等于几？")),
+                Map.of()
+        );
+        assertThat(handlerFailure.get()).as("provider request assertions").isNull();
+
+        assertThat(result.text()).isEqualTo("在常规的十进制算术运算里，1+1=2。");
+        assertThat(((Number) result.usage().get("total_tokens")).intValue()).isEqualTo(489);
+    }
+
+    @Test
     void invokeChatMapsMissingModelToStableErrorCode() {
         when(modelRecordRepository.findByModelCode("missing")).thenReturn(Optional.empty());
 
@@ -152,6 +179,46 @@ class UnifiedModelServiceTest {
                 }
                 if (!(requestJson.get("messages") instanceof List<?> messages) || messages.isEmpty()) {
                     handlerFailure.compareAndSet(null, "Expected non-empty messages field in request payload: " + requestBody);
+                }
+            } catch (Exception exception) {
+                handlerFailure.compareAndSet(null, "Handler validation failed: " + exception.getMessage());
+            }
+            byte[] payload = jsonBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, payload.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(payload);
+            }
+        });
+        server.start();
+    }
+
+    private void stubDoubaoProviderResponse(String jsonBody) {
+        handlerFailure.set(null);
+        try {
+            server = HttpServer.create(new InetSocketAddress(0), 0);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to start local stub provider server for UnifiedModelServiceTest", exception);
+        }
+        server.createContext("/api/v3/responses", exchange -> {
+            try {
+                if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    handlerFailure.compareAndSet(null, "Expected POST request but got: " + exchange.getRequestMethod());
+                }
+                if (!"/api/v3/responses".equals(exchange.getRequestURI().getPath())) {
+                    handlerFailure.compareAndSet(null, "Unexpected request path: " + exchange.getRequestURI().getPath());
+                }
+                String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+                if (authorization == null || !authorization.equals("Bearer test-api-key")) {
+                    handlerFailure.compareAndSet(null, "Expected Bearer Authorization header but got: " + authorization);
+                }
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                Map<?, ?> requestJson = OBJECT_MAPPER.readValue(requestBody, Map.class);
+                if (!"doubao-seed-2-0-pro-260215".equals(requestJson.get("model"))) {
+                    handlerFailure.compareAndSet(null, "Unexpected model field in request payload: " + requestBody);
+                }
+                if (!(requestJson.get("input") instanceof List<?> input) || input.isEmpty()) {
+                    handlerFailure.compareAndSet(null, "Expected non-empty input field in request payload: " + requestBody);
                 }
             } catch (Exception exception) {
                 handlerFailure.compareAndSet(null, "Handler validation failed: " + exception.getMessage());

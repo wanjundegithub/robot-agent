@@ -216,7 +216,6 @@ try {
     $env:ROBOT_DB_PASSWORD = 'root'
     $env:ROBOT_REDIS_URL = 'redis://localhost:6379/0'
     $env:ROBOT_VECTOR_DSN = 'postgresql://robot:robot@localhost:5432/robot_vector'
-    $env:ROBOT_OTEL_ENABLED = 'false'
 
     if (-not $env:ROBOT_LLM_API_KEY) {
         Write-Warning "ROBOT_LLM_API_KEY is not set. Seeded demo Provider tests will fail until you enter a real API Key in the model config page or set the environment variable."

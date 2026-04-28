@@ -42,7 +42,6 @@ $env:ROBOT_DB_USERNAME = 'root'
 $env:ROBOT_DB_PASSWORD = 'root'
 $env:ROBOT_REDIS_URL = 'redis://localhost:6379/0'
 $env:ROBOT_VECTOR_DSN = 'postgresql://robot:robot@localhost:5432/robot_vector'
-$env:ROBOT_OTEL_ENABLED = 'false'
 
 Write-Host "Starting application stack..."
 & (Join-Path $root "start-all.ps1")

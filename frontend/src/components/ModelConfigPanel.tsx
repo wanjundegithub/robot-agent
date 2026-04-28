@@ -78,11 +78,20 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
   const handleSelect = (record: ModelRecordConfig) => {
     setForm(recordToForm(record))
-    setStatus(`已加载模型：${record.custom_model_name}`)
+    setStatus('')
   }
 
+  const isFormComplete = () =>
+    Boolean(
+      form.custom_model_name.trim() &&
+        form.provider.trim() &&
+        form.model_name.trim() &&
+        form.api_key.trim() &&
+        form.base_url.trim()
+    )
+
   const handleSave = async () => {
-    if (!form.custom_model_name.trim() || !form.provider.trim() || !form.model_name.trim() || !form.api_key.trim() || !form.base_url.trim()) {
+    if (!isFormComplete()) {
       setStatus('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')
       return
     }
@@ -107,9 +116,8 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
         setKeyword('')
         setKeywordInput('')
         setPage(0)
-      } else {
-        await loadRecords()
       }
+      await loadRecords()
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '保存模型配置失败')
     } finally {
@@ -136,8 +144,8 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
   }
 
   const handleTest = async () => {
-    if (!form.provider.trim() || !form.model_name.trim() || !form.api_key.trim() || !form.base_url.trim()) {
-      setStatus('测试调用前请先填写供应商、Model 名称、API Key 和 Base URL')
+    if (!isFormComplete()) {
+      setStatus('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')
       return
     }
     try {
@@ -190,11 +198,6 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
             >
               新建模型
             </button>
-            {typeof form.id === 'number' && (
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
-                ID {form.id}
-              </span>
-            )}
           </div>
 
           {status && (
@@ -214,6 +217,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 value={form.custom_model_name}
                 onChange={(event) => setForm((current) => ({ ...current, custom_model_name: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
               />
             </div>
 
@@ -227,6 +231,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 value={form.provider}
                 onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
               >
                 {providerOptions.map((option) => (
                   <option key={option} value={option}>
@@ -246,6 +251,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 value={form.model_name}
                 onChange={(event) => setForm((current) => ({ ...current, model_name: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
               />
             </div>
 
@@ -260,6 +266,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 value={form.api_key}
                 onChange={(event) => setForm((current) => ({ ...current, api_key: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
               />
             </div>
 
@@ -273,39 +280,38 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 value={form.base_url}
                 onChange={(event) => setForm((current) => ({ ...current, base_url: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
               />
             </div>
-          </div>
-        </div>
 
-        <div className="border-t border-slate-200 px-5 py-4">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="prompt-primary"
-              data-testid="model-config-save"
-              onClick={() => void handleSave()}
-              disabled={isSaving}
-            >
-              {isSaving ? '保存中...' : '保存模型'}
-            </button>
-            <button
-              type="button"
-              className="prompt-secondary"
-              data-testid="model-config-test-call"
-              onClick={() => void handleTest()}
-              disabled={isTesting}
-            >
-              {isTesting ? '测试中...' : '测试调用'}
-            </button>
-            <button
-              type="button"
-              className="prompt-secondary"
-              onClick={() => void handleDelete()}
-              disabled={isDeleting || typeof form.id !== 'number'}
-            >
-              {isDeleting ? '删除中...' : '删除模型'}
-            </button>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                className="prompt-primary"
+                data-testid="model-config-save"
+                onClick={() => void handleSave()}
+                disabled={isSaving}
+              >
+                {isSaving ? '保存中...' : '保存模型'}
+              </button>
+              <button
+                type="button"
+                className="prompt-secondary"
+                data-testid="model-config-test-call"
+                onClick={() => void handleTest()}
+                disabled={isTesting}
+              >
+                {isTesting ? '测试中...' : '测试调用'}
+              </button>
+              <button
+                type="button"
+                className="prompt-secondary"
+                onClick={() => void handleDelete()}
+                disabled={isDeleting || typeof form.id !== 'number'}
+              >
+                {isDeleting ? '删除中...' : '删除模型'}
+              </button>
+            </div>
           </div>
         </div>
       </aside>
