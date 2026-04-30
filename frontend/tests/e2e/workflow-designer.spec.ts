@@ -797,6 +797,14 @@ test.describe('workflow designer v2 contract', () => {
     await page.getByTestId('workflow-subgraph-id-input').fill('subgraph_a')
     await page.getByTestId('workflow-open-subgraph').click()
     await expect(page.getByTestId('workflow-breadcrumb-subgraph_a')).toBeVisible()
+
+    const graphNameInput = page.getByTestId('workflow-current-graph-name-input')
+    await expect(graphNameInput).toHaveValue('未命名子流程')
+    await graphNameInput.fill('')
+    await expect(graphNameInput).toHaveValue('')
+    await graphNameInput.fill('子流程复核')
+    await expect(graphNameInput).toHaveValue('子流程复核')
+
     await page.getByTestId('workflow-breadcrumb-main').click()
     await page.getByTestId('workflow-publish').click()
 
@@ -820,6 +828,7 @@ test.describe('workflow designer v2 contract', () => {
     expect(Array.isArray(mainGraph.edges)).toBe(true)
     expect(subGraph.graph_id).toBe('subgraph_a')
     expect(subGraph.graph_type).toBe('SUBGRAPH')
+    expect(subGraph.graph_name).toBe('子流程复核')
     expect(Array.isArray(subGraph.edges)).toBe(true)
     expect(mainGraph).not.toHaveProperty('transitions')
     expect(mainGraph).not.toHaveProperty('entry')

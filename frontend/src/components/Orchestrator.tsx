@@ -945,11 +945,20 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   }
 
   const renameCurrentGraph = (name: string) => {
-    const normalized = name.trim()
     updateCurrentGraph((graph) => ({
       ...graph,
-      name: normalized || defaultGraphName(graph.id),
+      name,
     }))
+  }
+
+  const normalizeCurrentGraphName = () => {
+    updateCurrentGraph((graph) => {
+      const normalized = graph.name.trim()
+      return {
+        ...graph,
+        name: normalized || defaultGraphName(graph.id),
+      }
+    })
   }
 
   const createSubgraph = () => {
@@ -1026,7 +1035,9 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                 <input
                   value={currentGraph.name}
                   onChange={(event) => renameCurrentGraph(event.target.value)}
+                  onBlur={normalizeCurrentGraphName}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  data-testid="workflow-current-graph-name-input"
                   placeholder={currentGraphId === MAIN_GRAPH_ID ? '主流程' : '子流程名称'}
                 />
               </label>
@@ -1612,7 +1623,7 @@ function toDefinitionGraph(graph: WorkflowGraphState, variableNameMap: Map<strin
   return {
     graph_id: graph.id,
     graph_type: graph.id === MAIN_GRAPH_ID ? 'MAIN' : 'SUBGRAPH',
-    graph_name: graph.name,
+    graph_name: graph.name.trim() || defaultGraphName(graph.id),
     entry_node_id:
       graph.nodes.find((node) => (node.data as CanvasNodeData).nodeType === 'start')?.id || graph.nodes[0]?.id || 'start',
     nodes: nodeMap,
