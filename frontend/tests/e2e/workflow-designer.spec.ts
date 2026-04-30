@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 type PublishedWorkflow = {
   id: number
@@ -9,7 +9,297 @@ type PublishedWorkflow = {
   createdBy: string
 }
 
+type WorkflowVersionFixture = {
+  id: number
+  workflowId: number
+  workflowCode: string
+  workflowName: string
+  version: string
+  status: string
+  definition: string
+  config: string
+  editorMeta: string
+}
+
+const openNewWorkflowEditor = async (page: Page) => {
+  await page.goto('/#workflow')
+  await expect(page.getByTestId('workflow-list-page')).toBeVisible()
+  await page.getByTestId('workflow-new-version').click()
+  await expect(page.getByTestId('workflow-graph-nav')).toBeVisible()
+}
+
+const createPublishedWorkflow = (index: number): PublishedWorkflow => ({
+  id: index,
+  workflowCode: `workflow_${index}`,
+  name: `已发布工作流 ${index}`,
+  status: 'PUBLISHED',
+  currentVersion: `v20260430000${index}`,
+  createdBy: 'demo-user',
+})
+
+const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVersionFixture => ({
+  id: workflow.id * 10,
+  workflowId: workflow.id,
+  workflowCode: workflow.workflowCode,
+  workflowName: workflow.name,
+  version: workflow.currentVersion,
+  status: 'PUBLISHED',
+  definition: JSON.stringify({
+    schema_version: 'workflow-designer/v2',
+    workflow_code: workflow.workflowCode,
+    workflow_name: workflow.name,
+    workflow_version: workflow.currentVersion,
+    main_graph_id: 'main',
+    graphs: {
+      main: {
+        graph_id: 'main',
+        graph_type: 'MAIN',
+        graph_name: '主流程',
+        entry_node_id: 'coordinator_main',
+        nodes: {
+          coordinator_main: {
+            id: 'coordinator_main',
+            type: 'coordinator',
+            name: '协调节点',
+            config: {
+              prompt: '根据用户意图选择要进入的子代理流程。',
+            },
+          },
+        },
+        edges: [],
+      },
+    },
+    variables: {
+      global: [],
+      temporary: [],
+    },
+    model_bindings: {
+      routing_model_code: 'intent-router',
+      llm_defaults: {
+        model_code: 'general-chat',
+      },
+    },
+    editor_meta: {
+      current_graph_id: 'main',
+      graph_order: ['main'],
+    },
+  }),
+  config: JSON.stringify({
+    schema_version: 'workflow-designer/v2',
+    main_graph_id: 'main',
+    variable_registry: {
+      global: [],
+      temporary: [],
+    },
+    model_bindings: {
+      routing_model_code: 'intent-router',
+      llm_defaults: {
+        model_code: 'general-chat',
+      },
+    },
+  }),
+  editorMeta: JSON.stringify({
+    current_graph_id: 'main',
+    graph_order: ['main'],
+  }),
+})
+
 test.describe('workflow designer v2 contract', () => {
+  test('shows published workflow list by default with pagination and new entry', async ({ page }) => {
+    let nextSessionIndex = 1
+    const publishedWorkflows = [
+      ...Array.from({ length: 12 }, (_, index) => createPublishedWorkflow(index + 1)),
+      { ...createPublishedWorkflow(101), workflowCode: 'cap_workflow', name: 'Capability Workflow' },
+      { ...createPublishedWorkflow(102), workflowCode: 'flight_booking', name: 'Flight Booking', createdBy: 'system' },
+      { ...createPublishedWorkflow(103), workflowCode: 'workflow_1776609829026', name: 'test-demo' },
+      { ...createPublishedWorkflow(104), workflowCode: 'workflow_20260430120000', name: '真实业务工作流' },
+    ]
+
+    await page.route('**/api/**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const { pathname } = url
+
+      if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+        await route.fulfill({ json: publishedWorkflows })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'POST') {
+        const createdId = `session-e2e-${nextSessionIndex}`
+        nextSessionIndex += 1
+        await route.fulfill({
+          json: {
+            id: createdId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+        const sessionId = pathname.split('/').pop() || 'session-e2e-1'
+        await route.fulfill({
+          json: {
+            id: sessionId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/capabilities/groups' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/executions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+
+      await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+    })
+
+    await page.goto('/#workflow')
+
+    await expect(page.getByTestId('workflow-list-page')).toBeVisible()
+    await expect(page.getByTestId('workflow-graph-nav')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-list-row')).toHaveCount(10)
+    await expect(page.getByTestId('workflow-list-page-summary')).toContainText('第 1 / 2 页')
+    await expect(page.getByTestId('workflow-list-page-summary')).toContainText('共 13 个')
+    await expect(page.getByTestId('workflow-list-row-cap_workflow')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-list-row-flight_booking')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-list-row-workflow_1776609829026')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-list-row-workflow_1')).toContainText('已发布工作流 1')
+    await expect(page.getByTestId('workflow-list-row-workflow_1')).toContainText('workflow_1')
+    await expect(page.getByTestId('workflow-list-row-workflow_1')).toContainText('v202604300001')
+
+    const listBox = await page.getByTestId('workflow-list-page').boundingBox()
+    const firstRowBox = await page.getByTestId('workflow-list-row-workflow_1').boundingBox()
+    const pagerBox = await page.getByTestId('workflow-list-page-summary').boundingBox()
+    expect(listBox?.width).toBeGreaterThan(1100)
+    expect(pagerBox?.y).toBeGreaterThan(firstRowBox?.y || 0)
+
+    await page.getByTestId('workflow-list-next').click()
+    await expect(page.getByTestId('workflow-list-page-summary')).toContainText('第 2 / 2 页')
+    await expect(page.getByTestId('workflow-list-row-workflow_11')).toBeVisible()
+    await expect(page.getByTestId('workflow-list-row-workflow_20260430120000')).toBeVisible()
+    await expect(page.getByTestId('workflow-list-row-workflow_1')).toHaveCount(0)
+
+    await page.getByTestId('workflow-new-version').click()
+    await expect(page.getByTestId('workflow-graph-nav')).toBeVisible()
+    await expect(page.getByTestId('workflow-back-list')).toBeVisible()
+    await expect(page.getByTestId('workflow-link-chat')).toHaveCount(0)
+  })
+
+  test('edits current published version and deletes from published list', async ({ page }) => {
+    let nextSessionIndex = 1
+    let deletedPath = ''
+    const publishedWorkflows = [createPublishedWorkflow(1), createPublishedWorkflow(2)]
+
+    await page.addInitScript(() => {
+      window.confirm = () => true
+    })
+
+    await page.route('**/api/**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const { pathname } = url
+
+      if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+        await route.fulfill({ json: publishedWorkflows })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/versions') && request.method() === 'GET') {
+        const workflowCode = decodeURIComponent(pathname.split('/')[3] || '')
+        const workflow = publishedWorkflows.find((item) => item.workflowCode === workflowCode)
+        await route.fulfill({ json: workflow ? [createWorkflowVersionFixture(workflow)] : [] })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && request.method() === 'DELETE') {
+        deletedPath = pathname
+        const workflowCode = decodeURIComponent(pathname.split('/')[3] || '')
+        const index = publishedWorkflows.findIndex((item) => item.workflowCode === workflowCode)
+        if (index >= 0) {
+          publishedWorkflows.splice(index, 1)
+        }
+        await route.fulfill({ status: 204 })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'POST') {
+        const createdId = `session-e2e-${nextSessionIndex}`
+        nextSessionIndex += 1
+        await route.fulfill({
+          json: {
+            id: createdId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+        const sessionId = pathname.split('/').pop() || 'session-e2e-1'
+        await route.fulfill({
+          json: {
+            id: sessionId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/capabilities/groups' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/executions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+
+      await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+    })
+
+    await page.goto('/#workflow')
+
+    await page.getByTestId('workflow-list-edit-workflow_1').click()
+    await expect(page.getByTestId('workflow-name-input')).toHaveValue('已发布工作流 1')
+    await expect(page.getByTestId('workflow-current-graph')).toContainText('主流程')
+    await expect(page.getByTestId('workflow-link-chat')).toHaveCount(0)
+
+    await page.getByTestId('workflow-back-list').click()
+    await expect(page.getByTestId('workflow-list-page')).toBeVisible()
+
+    await page.getByTestId('workflow-list-delete-workflow_1').click()
+    await expect.poll(() => deletedPath).toBe('/api/workflows/workflow_1')
+    await expect(page.getByTestId('workflow-list-row-workflow_1')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-list-row-workflow_2')).toBeVisible()
+  })
+
   test('shows chinese workflow navigation and property panels', async ({ page }) => {
     let nextSessionIndex = 1
 
@@ -81,7 +371,7 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
+    await openNewWorkflowEditor(page)
 
     await expect(page.getByTestId('workflow-graph-nav')).toBeVisible()
     await expect(page.getByTestId('workflow-properties-panel')).toBeVisible()
@@ -160,7 +450,7 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
+    await openNewWorkflowEditor(page)
 
     await expect(page.getByTestId('workflow-page-layout')).toBeVisible()
     await expect(page.getByTestId('workflow-page-main')).toBeVisible()
@@ -168,8 +458,9 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-info-panel')).toBeVisible()
     await expect(page.getByTestId('workflow-process-properties-card')).toBeVisible()
     await expect(page.getByTestId('workflow-version-panel')).toHaveCount(0)
-    await expect(page.getByTestId('workflow-new-version')).toBeVisible()
-    await expect(page.getByTestId('workflow-version-toggle')).toBeVisible()
+    await expect(page.getByTestId('workflow-back-list')).toBeVisible()
+    await expect(page.getByTestId('workflow-new-version')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-version-toggle')).toHaveCount(0)
     await expect(page.getByTestId('workflow-name-input')).toBeVisible()
     await expect(page.getByTestId('workflow-publish')).toBeVisible()
     await expect(page.getByTestId('workflow-save-draft')).toHaveCount(0)
@@ -186,9 +477,6 @@ test.describe('workflow designer v2 contract', () => {
     expect(propertiesBox).not.toBeNull()
     expect((variableBox as { x: number }).x).toBeGreaterThan((mainBox as { x: number }).x)
     expect((infoBox as { y: number }).y).toBeLessThan((propertiesBox as { y: number }).y)
-
-    await page.getByTestId('workflow-version-toggle').click()
-    await expect(page.getByTestId('workflow-version-panel')).toBeVisible()
   })
 
   test('restricts main graph nodes and exposes start/message/function/end inside subflows', async ({ page }) => {
@@ -262,7 +550,7 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
+    await openNewWorkflowEditor(page)
 
     await expect(page.getByTestId('workflow-add-node-coordinator')).toBeVisible()
     await expect(page.getByTestId('workflow-add-node-sub_agent')).toBeVisible()
@@ -376,7 +664,7 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
+    await openNewWorkflowEditor(page)
 
     await expect(page.locator('.react-flow__node')).toHaveCount(1)
     await page.getByTestId('workflow-add-node-sub_agent').click()
@@ -502,7 +790,7 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
+    await openNewWorkflowEditor(page)
 
     await page.getByTestId('workflow-name-input').fill('Nested Graph Contract')
     await page.getByTestId('workflow-add-node-sub_agent').click()
@@ -552,7 +840,7 @@ test.describe('workflow designer v2 contract', () => {
     expect(configLlmDefaults).not.toHaveProperty('model_profile_ref')
   })
 
-  test('links published workflow code/version into chat page', async ({ page }) => {
+  test('publishes from editor without exposing chat debug entry', async ({ page }) => {
     let publishRequest: { workflowCode: string; version: string } | null = null
     let nextSessionIndex = 1
     const publishedWorkflows: PublishedWorkflow[] = []
@@ -697,16 +985,16 @@ test.describe('workflow designer v2 contract', () => {
       await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
     })
 
-    await page.goto('/#workflow')
-    await page.getByTestId('workflow-name-input').fill('Publish And Link')
+    await openNewWorkflowEditor(page)
+    await page.getByTestId('workflow-name-input').fill('Publish Without Chat Link')
     await page.getByTestId('workflow-publish').click()
 
     await expect.poll(() => publishRequest).not.toBeNull()
-    await page.getByTestId('workflow-link-chat').click()
-    await expect(page).toHaveURL(/#chat$/)
-
-    const expected = publishRequest as { workflowCode: string; version: string }
-    await expect(page.getByTestId('chat-workflow-target')).toContainText(expected.workflowCode)
-    await expect(page.getByTestId('chat-workflow-target')).toContainText(expected.version)
+    await expect(page.getByTestId('workflow-link-chat')).toHaveCount(0)
+    await page.getByTestId('workflow-back-list').click()
+    await expect(page.getByTestId('workflow-list-page')).toBeVisible()
+    await expect(page.getByTestId(`workflow-list-row-${publishRequest?.workflowCode}`)).toBeVisible()
+    await expect(page.getByTestId(`workflow-list-row-${publishRequest?.workflowCode}`)).toContainText(publishRequest?.version || '')
+    await expect(page).toHaveURL(/#workflow$/)
   })
 })

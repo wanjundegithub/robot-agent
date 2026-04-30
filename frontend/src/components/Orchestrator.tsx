@@ -143,7 +143,6 @@ interface OrchestratorProps {
   onWorkflowDraftChange?: (draft: WorkflowDraftPayload) => void
   onWorkflowSidebarStateChange?: (state: WorkflowSidebarState) => void
   onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
-  onLinkWorkflowToChat?: () => void
 }
 
 const DRAFT_VERSION = 'draft'
@@ -334,7 +333,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     onWorkflowDraftChange,
     onWorkflowSidebarStateChange,
     onWorkflowVersionMutation,
-    onLinkWorkflowToChat,
   },
   ref
 ) {
@@ -1311,15 +1309,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           data-testid="workflow-publish"
         >
           {isPublishing ? '发布中...' : '发布版本'}
-        </button>
-        <button
-          className="prompt-secondary w-full"
-          type="button"
-          onClick={onLinkWorkflowToChat}
-          disabled={!workflowMeta.workflowCode || !workflowMeta.publishedVersion}
-          data-testid="workflow-link-chat"
-        >
-          跳转聊天联调
         </button>
         <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-500">
           <div>最新发布：{workflowMeta.publishedVersion || '尚未发布'}</div>

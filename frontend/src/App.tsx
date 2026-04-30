@@ -8,8 +8,17 @@ import ModelConfigPanel from './components/ModelConfigPanel'
 import Orchestrator from './components/Orchestrator'
 import ReplayPanel from './components/ReplayPanel'
 import SessionReplayPanel from './components/SessionReplayPanel'
-import WorkflowPanel from './components/WorkflowPanel'
-import { createSession, deleteSession, getPublishedWorkflows, getSession, getSessionExecutions, getSessionMessages, getSessionsByUserId } from './services/api'
+import {
+  createSession,
+  deleteSession,
+  deleteWorkflow,
+  getPublishedWorkflows,
+  getSession,
+  getSessionExecutions,
+  getSessionMessages,
+  getSessionsByUserId,
+  getWorkflowVersions,
+} from './services/api'
 import { displayExecutionStatus, displaySessionStatus, displaySocketState, displayUserLabel } from './utils/displayText'
 import type {
   ExecutionDetail,
@@ -24,19 +33,10 @@ import type {
   SendMessageResponse,
   SocketState,
   WebSocketEnvelope,
-  WorkflowDesignerDefinitionV2,
   WorkflowEditorSelection,
   WorkflowSummary,
 } from './types'
-import type { WorkflowSidebarState, WorkflowVersionMutation } from './components/Orchestrator'
-
-interface WorkflowDraftState {
-  workflowCode: string
-  workflowVersion: string
-  definition: WorkflowDesignerDefinitionV2
-  entryRule: Record<string, unknown>
-  workflowConfig: Record<string, unknown>
-}
+import type { WorkflowVersionMutation } from './components/Orchestrator'
 
 interface ChatWorkflowBinding {
   workflowCode: string
@@ -44,6 +44,17 @@ interface ChatWorkflowBinding {
 }
 
 type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'capability-center'
+type WorkflowPageMode = 'list' | 'editor'
+
+const WORKFLOW_LIST_PAGE_SIZE = 10
+
+const isDisplayableWorkflow = (workflow: WorkflowSummary) => {
+  if (workflow.createdBy === 'system') return false
+  const workflowCode = workflow.workflowCode || ''
+  if (workflowCode === 'cap_workflow' || workflowCode.startsWith('cap_workflow_')) return false
+  if (workflowCode === 'workflow_1776609829026' || workflowCode === 'workflow_1777206095089') return false
+  return true
+}
 
 const gatewayLog = (event: string, details?: Record<string, unknown>) => {
   if (details) {
@@ -116,15 +127,15 @@ const App: React.FC = () => {
     executionId: string
     form: FormDefinition
   } | null>(null)
-  const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraftState | null>(null)
   const [publishedWorkflowOptions, setPublishedWorkflowOptions] = useState<WorkflowSummary[]>([])
   const [selectedPublishedWorkflowCode, setSelectedPublishedWorkflowCode] = useState('')
   const [chatWorkflowBinding, setChatWorkflowBinding] = useState<ChatWorkflowBinding | null>(null)
-  const [workflowSidebarState, setWorkflowSidebarState] = useState<WorkflowSidebarState | null>(null)
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
   const [workflowEditorSelection, setWorkflowEditorSelection] = useState<WorkflowEditorSelection | null>(null)
-  const [showWorkflowVersionPanel, setShowWorkflowVersionPanel] = useState(false)
   const [workflowEditorInstance, setWorkflowEditorInstance] = useState(0)
+  const [workflowPageMode, setWorkflowPageMode] = useState<WorkflowPageMode>('list')
+  const [workflowListPage, setWorkflowListPage] = useState(1)
+  const [workflowListStatus, setWorkflowListStatus] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
   const activeSocketSessionIdRef = useRef<string | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -136,7 +147,7 @@ const App: React.FC = () => {
   const loadPublishedWorkflowOptions = useCallback(async () => {
     try {
       const items = await getPublishedWorkflows()
-      const filteredItems = items.filter((item) => item.createdBy !== 'system')
+      const filteredItems = items.filter(isDisplayableWorkflow)
       setPublishedWorkflowOptions(filteredItems)
       setSelectedPublishedWorkflowCode((current) =>
         filteredItems.some((item) => item.workflowCode === current) ? current : ''
@@ -310,6 +321,11 @@ const App: React.FC = () => {
     if (!workflowVersionMutation) return
     void loadPublishedWorkflowOptions()
   }, [loadPublishedWorkflowOptions, workflowVersionMutation])
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(publishedWorkflowOptions.length / WORKFLOW_LIST_PAGE_SIZE))
+    setWorkflowListPage((current) => Math.min(Math.max(current, 1), totalPages))
+  }, [publishedWorkflowOptions.length])
 
   useEffect(() => {
     if (!sessionId) return
@@ -1129,18 +1145,67 @@ const App: React.FC = () => {
     setChatWorkflowBinding(null)
   }
 
-  const handleLinkWorkflowToChat = () => {
-    const workflowCode = workflowSidebarState?.workflowCode || workflowDraft?.workflowCode
-    const workflowVersion = workflowSidebarState?.publishedVersion
-    if (!workflowCode || !workflowVersion) {
+  const openNewWorkflowEditor = () => {
+    setWorkflowEditorSelection(null)
+    setWorkflowEditorInstance((current) => current + 1)
+    setWorkflowPageMode('editor')
+    setWorkflowListStatus('')
+  }
+
+  const openWorkflowList = () => {
+    setWorkflowPageMode('list')
+    setWorkflowEditorSelection(null)
+    void loadPublishedWorkflowOptions()
+  }
+
+  const handleEditPublishedWorkflow = async (workflow: WorkflowSummary) => {
+    if (!workflow.currentVersion) {
+      setWorkflowListStatus('该工作流暂无当前发布版本，无法编辑。')
       return
     }
-    setSelectedPublishedWorkflowCode(workflowCode)
-    setChatWorkflowBinding({
-      workflowCode,
-      workflowVersion,
-    })
-    navigateToPage('chat')
+
+    setWorkflowListStatus('正在加载工作流版本...')
+    try {
+      const versions = await getWorkflowVersions(workflow.workflowCode)
+      const selectedVersion = versions.find((item) => item.version === workflow.currentVersion) ?? versions[0]
+      if (!selectedVersion) {
+        setWorkflowListStatus('未找到可编辑的工作流版本。')
+        return
+      }
+      setWorkflowEditorSelection({
+        workflowCode: workflow.workflowCode,
+        workflowName: workflow.name,
+        publishedVersion: workflow.currentVersion,
+        version: { ...selectedVersion },
+      })
+      setWorkflowEditorInstance((current) => current + 1)
+      setWorkflowPageMode('editor')
+      setWorkflowListStatus('')
+    } catch (error) {
+      setWorkflowListStatus(error instanceof Error ? `加载失败：${error.message}` : '加载失败。')
+    }
+  }
+
+  const handleDeletePublishedWorkflow = async (workflow: WorkflowSummary) => {
+    const confirmed = window.confirm(`确定删除工作流 ${workflow.name || workflow.workflowCode} 吗？删除后将不再出现在已发布列表。`)
+    if (!confirmed) return
+
+    setWorkflowListStatus('正在删除工作流...')
+    try {
+      await deleteWorkflow(workflow.workflowCode, currentUserId)
+      setPublishedWorkflowOptions((current) => current.filter((item) => item.workflowCode !== workflow.workflowCode))
+      setSelectedPublishedWorkflowCode((current) => (current === workflow.workflowCode ? '' : current))
+      setChatWorkflowBinding((current) => (current?.workflowCode === workflow.workflowCode ? null : current))
+      setWorkflowVersionMutation({
+        workflowCode: workflow.workflowCode,
+        version: workflow.currentVersion || '',
+        action: 'delete',
+        refreshAt: Date.now(),
+      })
+      setWorkflowListStatus('工作流已删除。')
+    } catch (error) {
+      setWorkflowListStatus(error instanceof Error ? `删除失败：${error.message}` : '删除失败。')
+    }
   }
 
   const renderPromptCards = () => (
@@ -1252,60 +1317,137 @@ const App: React.FC = () => {
 
   const renderPageContent = () => {
     if (activePage === 'workflow') {
+      const workflowTotalPages = Math.max(1, Math.ceil(publishedWorkflowOptions.length / WORKFLOW_LIST_PAGE_SIZE))
+      const normalizedWorkflowListPage = Math.min(workflowListPage, workflowTotalPages)
+      const workflowListStart = (normalizedWorkflowListPage - 1) * WORKFLOW_LIST_PAGE_SIZE
+      const visibleWorkflows = publishedWorkflowOptions.slice(
+        workflowListStart,
+        workflowListStart + WORKFLOW_LIST_PAGE_SIZE
+      )
+
+      if (workflowPageMode === 'list') {
+        return (
+          <section className="grid min-h-0 flex-1" data-testid="workflow-list-page">
+            <div className="panel-card flex min-h-0 flex-col">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">工作流列表</div>
+                  <div className="text-xs text-slate-500">仅展示已发布工作流。点击新增或编辑后进入工作流设计页面。</div>
+                </div>
+                <button
+                  className="prompt-primary"
+                  type="button"
+                  onClick={openNewWorkflowEditor}
+                  data-testid="workflow-new-version"
+                >
+                  新增工作流版本
+                </button>
+              </div>
+
+              {workflowListStatus && (
+                <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                  {workflowListStatus}
+                </div>
+              )}
+
+              {visibleWorkflows.length === 0 ? (
+                <div className="flex-1 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-6 text-sm text-slate-500">
+                  暂无已发布工作流，请点击新增进入设计器。
+                </div>
+              ) : (
+                <div className="flex-1 space-y-3 overflow-auto pr-1">
+                  {visibleWorkflows.map((workflow) => (
+                    <div
+                      key={workflow.workflowCode}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
+                      data-testid="workflow-list-row"
+                    >
+                      <div
+                        className="flex flex-wrap items-center justify-between gap-3"
+                        data-testid={`workflow-list-row-${workflow.workflowCode}`}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-semibold text-slate-900">
+                            {workflow.name || '未命名工作流'}
+                          </div>
+                          <div className="mt-1 text-sm text-slate-500">
+                            {workflow.workflowCode} / 当前版本 {workflow.currentVersion || '未知版本'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-md border border-sky-200 px-3 py-1.5 text-sm text-sky-700 hover:border-sky-300"
+                            type="button"
+                            onClick={() => void handleEditPublishedWorkflow(workflow)}
+                            data-testid={`workflow-list-edit-${workflow.workflowCode}`}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:border-red-300"
+                            type="button"
+                            onClick={() => void handleDeletePublishedWorkflow(workflow)}
+                            data-testid={`workflow-list-delete-${workflow.workflowCode}`}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600">
+                <div data-testid="workflow-list-page-summary">
+                  第 {normalizedWorkflowListPage} / {workflowTotalPages} 页 · 共 {publishedWorkflowOptions.length} 个
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="prompt-secondary"
+                    type="button"
+                    onClick={() => setWorkflowListPage((current) => Math.max(1, current - 1))}
+                    disabled={normalizedWorkflowListPage <= 1}
+                    data-testid="workflow-list-prev"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="prompt-secondary"
+                    type="button"
+                    onClick={() => setWorkflowListPage((current) => Math.min(workflowTotalPages, current + 1))}
+                    disabled={normalizedWorkflowListPage >= workflowTotalPages}
+                    data-testid="workflow-list-next"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      }
+
       return (
         <section className="page-grid page-grid-workflow" data-testid="workflow-page-layout">
           <div className="page-stack min-w-0" data-testid="workflow-page-main">
             <div className="flex flex-wrap justify-end gap-2">
               <button
-                className="prompt-primary"
-                type="button"
-                onClick={() => {
-                  setWorkflowEditorSelection(null)
-                  setWorkflowEditorInstance((current) => current + 1)
-                  setShowWorkflowVersionPanel(false)
-                }}
-                data-testid="workflow-new-version"
-              >
-                新增工作流版本
-              </button>
-              <button
                 className="prompt-secondary"
                 type="button"
-                onClick={() => setShowWorkflowVersionPanel((current) => !current)}
-                data-testid="workflow-version-toggle"
+                onClick={openWorkflowList}
+                data-testid="workflow-back-list"
               >
-                {showWorkflowVersionPanel ? '关闭工作流版本' : '编辑工作流版本'}
+                返回工作流列表
               </button>
             </div>
             <Orchestrator
               key={workflowEditorInstance}
               currentUserId={currentUserId}
               editorSelection={workflowEditorSelection}
-              onWorkflowDraftChange={setWorkflowDraft}
-              onWorkflowSidebarStateChange={setWorkflowSidebarState}
               onWorkflowVersionMutation={setWorkflowVersionMutation}
-              onLinkWorkflowToChat={handleLinkWorkflowToChat}
             />
           </div>
-          {showWorkflowVersionPanel && (
-            <div className="fixed inset-y-0 right-0 z-40 w-[min(420px,100vw)] overflow-auto border-l border-slate-200 bg-slate-50/95 p-4 shadow-2xl">
-              <div className="mb-3 flex justify-end">
-                <button className="prompt-secondary" type="button" onClick={() => setShowWorkflowVersionPanel(false)}>
-                  关闭
-                </button>
-              </div>
-              <WorkflowPanel
-                currentUserId={currentUserId}
-                workflowCode={workflowSidebarState?.workflowCode || workflowDraft?.workflowCode}
-                refreshSignal={workflowVersionMutation}
-                onWorkflowVersionMutation={setWorkflowVersionMutation}
-                onEditVersion={(selection) => {
-                  setWorkflowEditorSelection({ ...selection, version: { ...selection.version } })
-                  setShowWorkflowVersionPanel(false)
-                }}
-              />
-            </div>
-          )}
         </section>
       )
     }

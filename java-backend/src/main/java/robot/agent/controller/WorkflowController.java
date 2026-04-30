@@ -52,6 +52,15 @@ public class WorkflowController {
         return ResponseEntity.ok(workflowService.getWorkflowByCode(code));
     }
 
+    @DeleteMapping("/{code}")
+    public ResponseEntity<Void> deleteWorkflow(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String code
+    ) {
+        workflowService.deleteWorkflow(userId, code);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{code}/publish")
     public ResponseEntity<WorkflowResponse> publishWorkflow(
             @RequestHeader(value = "X-User-Id", required = false) String userId,

@@ -3,6 +3,7 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
@@ -38,6 +39,28 @@ public class WorkflowService {
     private final AuditService auditService;
     private final PythonClient pythonClient;
     private final ModelConfigService modelConfigService;
+    private final WorkflowSchemaRepairService workflowSchemaRepairService;
+
+    @Autowired
+    public WorkflowService(
+            WorkflowRepository workflowRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            AuditService auditService,
+            PythonClient pythonClient,
+            ModelConfigService modelConfigService,
+            WorkflowSchemaRepairService workflowSchemaRepairService
+    ) {
+        this.workflowRepository = workflowRepository;
+        this.workflowVersionRepository = workflowVersionRepository;
+        this.objectMapper = objectMapper;
+        this.accessControlService = accessControlService;
+        this.auditService = auditService;
+        this.pythonClient = pythonClient;
+        this.modelConfigService = modelConfigService;
+        this.workflowSchemaRepairService = workflowSchemaRepairService;
+    }
 
     public WorkflowService(
             WorkflowRepository workflowRepository,
@@ -48,13 +71,16 @@ public class WorkflowService {
             PythonClient pythonClient,
             ModelConfigService modelConfigService
     ) {
-        this.workflowRepository = workflowRepository;
-        this.workflowVersionRepository = workflowVersionRepository;
-        this.objectMapper = objectMapper;
-        this.accessControlService = accessControlService;
-        this.auditService = auditService;
-        this.pythonClient = pythonClient;
-        this.modelConfigService = modelConfigService;
+        this(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService,
+                null
+        );
     }
 
     public WorkflowResponse createWorkflow(String userId, String workflowCode, String name, String description, Long workspaceId) {
@@ -77,8 +103,9 @@ public class WorkflowService {
     }
 
     public List<WorkflowResponse> getAllWorkflows() {
-        List<Workflow> workflows = workflowRepository.findAll();
+        List<Workflow> workflows = workflowRepository.findByStatusNotOrderByCreatedAtDesc(WorkflowStatus.ARCHIVED);
         return workflows.stream()
+                .filter(this::isVisibleWorkflow)
                 .map(WorkflowResponse::fromEntity)
                 .collect(Collectors.toList());
     }
@@ -86,6 +113,8 @@ public class WorkflowService {
     public List<WorkflowResponse> getPublishedWorkflows() {
         List<Workflow> workflows = workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED);
         return workflows.stream()
+                .filter(this::isVisibleWorkflow)
+                .filter(this::isUserManagedWorkflow)
                 .map(WorkflowResponse::fromEntity)
                 .collect(Collectors.toList());
     }
@@ -94,6 +123,30 @@ public class WorkflowService {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         return WorkflowResponse.fromEntity(workflow);
+    }
+
+    public void deleteWorkflow(String userId, String workflowCode) {
+        Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
+                .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.delete");
+
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureArchivedWorkflowStatusSupported();
+        }
+        workflow.setStatus(WorkflowStatus.ARCHIVED);
+        workflow.setCurrentVersion(null);
+        workflow.setUpdatedAt(LocalDateTime.now());
+        workflowRepository.save(workflow);
+
+        auditService.logAction(
+                workflow.getWorkspaceId(),
+                userId,
+                "workflow.delete",
+                "workflow_definition",
+                workflowCode,
+                null,
+                200
+        );
     }
 
     public WorkflowResponse publishWorkflow(String userId, String workflowCode, String version) {
@@ -452,7 +505,9 @@ public class WorkflowService {
     public RoutingDecision routeMessage(String content, Execution activeExecution) {
         List<WorkflowVersion> versions = resolveCurrentWorkflowVersions();
         if (versions.isEmpty()) {
-            versions = workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.DRAFT);
+            versions = filterVisibleWorkflowVersions(
+                    workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.DRAFT)
+            );
         }
         if (versions.isEmpty()) {
             throw new RuntimeException("No workflow versions available");
@@ -540,6 +595,9 @@ public class WorkflowService {
         List<Workflow> workflows = workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED);
         List<WorkflowVersion> currentVersions = new ArrayList<>();
         for (Workflow workflow : workflows) {
+            if (!isVisibleWorkflow(workflow)) {
+                continue;
+            }
             if (workflow.getCurrentVersion() == null || workflow.getCurrentVersion().isBlank()) {
                 continue;
             }
@@ -783,7 +841,9 @@ public class WorkflowService {
     }
 
     private Map<String, Map<String, Object>> buildWorkflowCatalog() {
-        List<WorkflowVersion> versions = workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED);
+        List<WorkflowVersion> versions = filterVisibleWorkflowVersions(
+                workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)
+        );
         Map<String, Map<String, Object>> catalog = new LinkedHashMap<>();
         for (WorkflowVersion version : versions) {
             catalog.put(
@@ -792,6 +852,43 @@ public class WorkflowService {
             );
         }
         return catalog;
+    }
+
+    private List<WorkflowVersion> filterVisibleWorkflowVersions(List<WorkflowVersion> versions) {
+        if (versions == null) {
+            return List.of();
+        }
+        return versions.stream()
+                .filter(version -> isVisibleWorkflowCode(version.getWorkflowCode()))
+                .toList();
+    }
+
+    private boolean isVisibleWorkflowCode(String workflowCode) {
+        if (workflowCode == null || workflowCode.isBlank()) {
+            return false;
+        }
+        Optional<Workflow> workflow = workflowRepository.findByWorkflowCode(workflowCode);
+        return workflow != null && workflow.map(this::isVisibleWorkflow).orElse(false);
+    }
+
+    private boolean isVisibleWorkflow(Workflow workflow) {
+        return workflow != null && workflow.getStatus() != WorkflowStatus.ARCHIVED;
+    }
+
+    private boolean isUserManagedWorkflow(Workflow workflow) {
+        if (workflow == null || "system".equalsIgnoreCase(workflow.getCreatedBy())) {
+            return false;
+        }
+        String code = workflow.getWorkflowCode() == null ? "" : workflow.getWorkflowCode();
+        String description = workflow.getDescription() == null ? "" : workflow.getDescription();
+        if ("cap_workflow".equals(code) || code.startsWith("cap_workflow_")) {
+            return false;
+        }
+        if (("workflow_1776609829026".equals(code) || "workflow_1777206095089".equals(code))
+                && "Auto-created draft workflow".equals(description)) {
+            return false;
+        }
+        return true;
     }
 
     private Map<String, Object> parseJsonObject(String json) {

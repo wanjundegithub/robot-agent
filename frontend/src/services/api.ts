@@ -258,6 +258,18 @@ export async function getPublishedWorkflows(): Promise<WorkflowSummary[]> {
   return await response.json()
 }
 
+export async function deleteWorkflow(workflowCode: string, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${encodeURIComponent(workflowCode)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
 export async function getWorkflowVersions(workflowCode: string): Promise<WorkflowVersionSummary[]> {
   const response = await fetch(`${API_BASE_URL}/workflows/${workflowCode}/versions`)
   if (!response.ok) {

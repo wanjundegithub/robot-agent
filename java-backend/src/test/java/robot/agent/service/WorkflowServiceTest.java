@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import reactor.core.publisher.Mono;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
 import robot.agent.model.Workflow;
@@ -21,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -646,6 +649,188 @@ class WorkflowServiceTest {
                 null,
                 200
         );
+    }
+
+    @Test
+    void deleteWorkflowSoftDeletesWorkflowClearsCurrentVersionAndRecordsAudit() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode("demo_flow");
+        workflow.setName("Demo Flow");
+        workflow.setWorkspaceId(1L);
+        workflow.setStatus(WorkflowStatus.PUBLISHED);
+        workflow.setCurrentVersion("v1");
+
+        when(workflowRepository.findByWorkflowCode("demo_flow")).thenReturn(Optional.of(workflow));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        workflowService.deleteWorkflow("tester", "demo_flow");
+
+        assertThat(workflow.getStatus()).isEqualTo(WorkflowStatus.ARCHIVED);
+        assertThat(workflow.getCurrentVersion()).isNull();
+        verify(accessControlService).requireWorkflowAdminAction("tester", 1L, "demo_flow", "workflow.delete");
+        verify(workflowRepository).save(workflow);
+        verify(workflowVersionRepository, never()).delete(any(WorkflowVersion.class));
+        verify(auditService).logAction(
+                1L,
+                "tester",
+                "workflow.delete",
+                "workflow_definition",
+                "demo_flow",
+                null,
+                200
+        );
+    }
+
+    @Test
+    void deleteWorkflowRepairsLegacyStatusEnumBeforeSoftDelete() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+        WorkflowSchemaRepairService workflowSchemaRepairService = mock(WorkflowSchemaRepairService.class);
+
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode("demo_flow");
+        workflow.setName("Demo Flow");
+        workflow.setWorkspaceId(1L);
+        workflow.setStatus(WorkflowStatus.PUBLISHED);
+        workflow.setCurrentVersion("v1");
+
+        when(workflowRepository.findByWorkflowCode("demo_flow")).thenReturn(Optional.of(workflow));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService,
+                workflowSchemaRepairService
+        );
+
+        workflowService.deleteWorkflow("tester", "demo_flow");
+
+        InOrder inOrder = inOrder(workflowSchemaRepairService, workflowRepository);
+        inOrder.verify(workflowSchemaRepairService).ensureArchivedWorkflowStatusSupported();
+        inOrder.verify(workflowRepository).save(workflow);
+        assertThat(workflow.getStatus()).isEqualTo(WorkflowStatus.ARCHIVED);
+    }
+
+    @Test
+    void getAllWorkflowsExcludesSoftDeletedWorkflows() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow active = new Workflow();
+        active.setWorkflowCode("active_flow");
+        active.setName("Active Flow");
+        active.setWorkspaceId(1L);
+        active.setStatus(WorkflowStatus.PUBLISHED);
+
+        when(workflowRepository.findByStatusNotOrderByCreatedAtDesc(WorkflowStatus.ARCHIVED))
+                .thenReturn(List.of(active));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        assertThat(workflowService.getAllWorkflows())
+                .extracting(response -> response.getWorkflowCode())
+                .containsExactly("active_flow");
+    }
+
+    @Test
+    void getPublishedWorkflowsDoesNotReturnSoftDeletedWorkflow() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow published = new Workflow();
+        published.setWorkflowCode("published_flow");
+        published.setName("Published Flow");
+        published.setWorkspaceId(1L);
+        published.setStatus(WorkflowStatus.PUBLISHED);
+        published.setCreatedBy("demo-admin");
+
+        Workflow deleted = new Workflow();
+        deleted.setWorkflowCode("deleted_flow");
+        deleted.setName("Deleted Flow");
+        deleted.setWorkspaceId(1L);
+        deleted.setStatus(WorkflowStatus.ARCHIVED);
+
+        Workflow systemSeed = new Workflow();
+        systemSeed.setWorkflowCode("flight_booking");
+        systemSeed.setName("Flight Booking");
+        systemSeed.setWorkspaceId(1L);
+        systemSeed.setStatus(WorkflowStatus.PUBLISHED);
+        systemSeed.setCreatedBy("system");
+
+        Workflow demoGenerated = new Workflow();
+        demoGenerated.setWorkflowCode("cap_workflow_20260425203345");
+        demoGenerated.setName("Capability Workflow");
+        demoGenerated.setDescription("Auto-created draft workflow");
+        demoGenerated.setWorkspaceId(1L);
+        demoGenerated.setStatus(WorkflowStatus.PUBLISHED);
+        demoGenerated.setCreatedBy("demo-admin");
+
+        Workflow newlySaved = new Workflow();
+        newlySaved.setWorkflowCode("workflow_20260430120000");
+        newlySaved.setName("真实业务工作流");
+        newlySaved.setDescription("Auto-created draft workflow");
+        newlySaved.setWorkspaceId(1L);
+        newlySaved.setStatus(WorkflowStatus.PUBLISHED);
+        newlySaved.setCreatedBy("demo-admin");
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(published, deleted, systemSeed, demoGenerated, newlySaved));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        assertThat(workflowService.getPublishedWorkflows())
+                .extracting(response -> response.getWorkflowCode())
+                .containsExactly("published_flow", "workflow_20260430120000");
     }
 
     @Test
