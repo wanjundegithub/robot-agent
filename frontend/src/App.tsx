@@ -28,7 +28,7 @@ import type {
   WorkflowEditorSelection,
   WorkflowSummary,
 } from './types'
-import type { OrchestratorHandle, WorkflowSidebarState, WorkflowVersionMutation } from './components/Orchestrator'
+import type { WorkflowSidebarState, WorkflowVersionMutation } from './components/Orchestrator'
 
 interface WorkflowDraftState {
   workflowCode: string
@@ -122,9 +122,9 @@ const App: React.FC = () => {
   const [chatWorkflowBinding, setChatWorkflowBinding] = useState<ChatWorkflowBinding | null>(null)
   const [workflowSidebarState, setWorkflowSidebarState] = useState<WorkflowSidebarState | null>(null)
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
-  const [workflowNameInput, setWorkflowNameInput] = useState('')
   const [workflowEditorSelection, setWorkflowEditorSelection] = useState<WorkflowEditorSelection | null>(null)
-  const orchestratorRef = useRef<OrchestratorHandle | null>(null)
+  const [showWorkflowVersionPanel, setShowWorkflowVersionPanel] = useState(false)
+  const [workflowEditorInstance, setWorkflowEditorInstance] = useState(0)
   const wsRef = useRef<WebSocket | null>(null)
   const activeSocketSessionIdRef = useRef<string | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -305,10 +305,6 @@ const App: React.FC = () => {
       cancelled = true
     }
   }, [createAndSelectSession, currentUserId, loadRetainedHistory, resetSessionView])
-
-  useEffect(() => {
-    setWorkflowNameInput(workflowSidebarState?.workflowName ?? '')
-  }, [workflowSidebarState?.workflowName])
 
   useEffect(() => {
     if (!workflowVersionMutation) return
@@ -1259,80 +1255,57 @@ const App: React.FC = () => {
       return (
         <section className="page-grid page-grid-workflow" data-testid="workflow-page-layout">
           <div className="page-stack min-w-0" data-testid="workflow-page-main">
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                className="prompt-primary"
+                type="button"
+                onClick={() => {
+                  setWorkflowEditorSelection(null)
+                  setWorkflowEditorInstance((current) => current + 1)
+                  setShowWorkflowVersionPanel(false)
+                }}
+                data-testid="workflow-new-version"
+              >
+                新增工作流版本
+              </button>
+              <button
+                className="prompt-secondary"
+                type="button"
+                onClick={() => setShowWorkflowVersionPanel((current) => !current)}
+                data-testid="workflow-version-toggle"
+              >
+                {showWorkflowVersionPanel ? '关闭工作流版本' : '编辑工作流版本'}
+              </button>
+            </div>
             <Orchestrator
-              ref={orchestratorRef}
+              key={workflowEditorInstance}
               currentUserId={currentUserId}
               editorSelection={workflowEditorSelection}
               onWorkflowDraftChange={setWorkflowDraft}
               onWorkflowSidebarStateChange={setWorkflowSidebarState}
               onWorkflowVersionMutation={setWorkflowVersionMutation}
+              onLinkWorkflowToChat={handleLinkWorkflowToChat}
             />
           </div>
-          <div className="page-stack min-w-0">
-            <div className="panel-card">
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">工作流信息</div>
-                  <div className="text-xs text-slate-500">工作流页只保留名称维护与版本发布，已去掉草稿操作。</div>
-                </div>
-                {workflowSidebarState?.workflowId && (
-                  <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
-                    编号 {workflowSidebarState.workflowId}
-                  </div>
-                )}
-              </div>
-              <div className="space-y-3">
-                <input
-                  value={workflowNameInput}
-                  onChange={(event) => {
-                    const nextValue = event.target.value
-                    setWorkflowNameInput(nextValue)
-                    orchestratorRef.current?.setWorkflowName(nextValue)
-                  }}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  data-testid="workflow-name-input"
-                  placeholder="工作流名称"
-                />
-                <button
-                  className="prompt-primary w-full"
-                  type="button"
-                  onClick={() => void orchestratorRef.current?.publish()}
-                  disabled={workflowSidebarState?.isPublishing}
-                  data-testid="workflow-publish"
-                >
-                  {workflowSidebarState?.isPublishing ? '发布中...' : '发布版本'}
+          {showWorkflowVersionPanel && (
+            <div className="fixed inset-y-0 right-0 z-40 w-[min(420px,100vw)] overflow-auto border-l border-slate-200 bg-slate-50/95 p-4 shadow-2xl">
+              <div className="mb-3 flex justify-end">
+                <button className="prompt-secondary" type="button" onClick={() => setShowWorkflowVersionPanel(false)}>
+                  关闭
                 </button>
-                <button
-                  className="prompt-secondary w-full"
-                  type="button"
-                  onClick={handleLinkWorkflowToChat}
-                  disabled={!workflowSidebarState?.workflowCode || !workflowSidebarState?.publishedVersion}
-                  data-testid="workflow-link-chat"
-                >
-                  跳转聊天联调
-                </button>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-500">
-                  <div>最新发布：{workflowSidebarState?.publishedVersion || '尚未发布'}</div>
-                  <div>保存状态：{workflowSidebarState?.saveStatus || '尚未保存'}</div>
-                  {(workflowSidebarState?.validationIssues?.length || 0) > 0 && (
-                    <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
-                      当前还有 {workflowSidebarState?.validationIssues.length || 0} 项待处理问题
-                    </div>
-                  )}
-                </div>
               </div>
+              <WorkflowPanel
+                currentUserId={currentUserId}
+                workflowCode={workflowSidebarState?.workflowCode || workflowDraft?.workflowCode}
+                refreshSignal={workflowVersionMutation}
+                onWorkflowVersionMutation={setWorkflowVersionMutation}
+                onEditVersion={(selection) => {
+                  setWorkflowEditorSelection({ ...selection, version: { ...selection.version } })
+                  setShowWorkflowVersionPanel(false)
+                }}
+              />
             </div>
-
-            <WorkflowPanel
-              currentUserId={currentUserId}
-              workflowCode={workflowSidebarState?.workflowCode || workflowDraft?.workflowCode}
-              refreshSignal={workflowVersionMutation}
-              onWorkflowVersionMutation={setWorkflowVersionMutation}
-              onEditVersion={(selection) => {
-                setWorkflowEditorSelection({ ...selection, version: { ...selection.version } })
-              }}
-            />
-          </div>
+          )}
         </section>
       )
     }

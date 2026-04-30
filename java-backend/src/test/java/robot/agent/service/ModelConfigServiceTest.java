@@ -175,12 +175,12 @@ class ModelConfigServiceTest {
     }
 
     @Test
-    void resolveRoutingModelCodeDefaultsWhenExplicitRoutingModelCodeMissing() {
+    void resolveRoutingModelCodeReturnsNullWhenExplicitRoutingModelCodeMissing() {
         String routingModelCode = modelConfigService.resolveRoutingModelCode(List.of(
                 Map.of("config", Map.of("llm_defaults", Map.of("model_code", "chat-main")))
         ));
 
-        assertThat(routingModelCode).isEqualTo("intent-router-v1");
+        assertThat(routingModelCode).isNull();
     }
 
     @Test

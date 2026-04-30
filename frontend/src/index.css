@@ -80,7 +80,7 @@ body {
 }
 
 .page-grid-workflow {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .page-stack,

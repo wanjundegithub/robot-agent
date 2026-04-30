@@ -84,6 +84,16 @@ public class WorkflowController {
         return ResponseEntity.ok(workflowService.archiveWorkflowVersion(userId, code, version));
     }
 
+    @DeleteMapping("/{code}/versions/{version}")
+    public ResponseEntity<Void> deleteVersion(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String code,
+            @PathVariable String version
+    ) {
+        workflowService.deleteWorkflowVersion(userId, code, version);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{code}/versions")
     public ResponseEntity<WorkflowVersionResponse> createVersion(
             @RequestHeader(value = "X-User-Id", required = false) String userId,

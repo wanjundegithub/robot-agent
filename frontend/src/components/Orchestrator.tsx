@@ -126,7 +126,7 @@ export interface WorkflowSidebarState {
 export interface WorkflowVersionMutation {
   workflowCode: string
   version: string
-  action: 'save_draft' | 'publish' | 'rollback' | 'archive'
+  action: 'save_draft' | 'publish' | 'delete'
   refreshAt: number
 }
 
@@ -143,6 +143,7 @@ interface OrchestratorProps {
   onWorkflowDraftChange?: (draft: WorkflowDraftPayload) => void
   onWorkflowSidebarStateChange?: (state: WorkflowSidebarState) => void
   onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
+  onLinkWorkflowToChat?: () => void
 }
 
 const DRAFT_VERSION = 'draft'
@@ -327,7 +328,14 @@ const subflowNodeGroups: Array<{
 ]
 
 const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function Orchestrator(
-  { currentUserId, editorSelection, onWorkflowDraftChange, onWorkflowSidebarStateChange, onWorkflowVersionMutation },
+  {
+    currentUserId,
+    editorSelection,
+    onWorkflowDraftChange,
+    onWorkflowSidebarStateChange,
+    onWorkflowVersionMutation,
+    onLinkWorkflowToChat,
+  },
   ref
 ) {
   const [graphs, setGraphs] = useState<Record<string, WorkflowGraphState>>(() => ({
@@ -1271,6 +1279,122 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     </div>
   )
 
+  const renderWorkflowInfoPanel = () => (
+    <div
+      className="min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4"
+      data-testid="workflow-info-panel"
+    >
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="panel-title">工作流信息</div>
+          <div className="mt-2 text-sm text-slate-500">维护名称并发布版本，版本列表入口只保留编辑、发布和删除。</div>
+        </div>
+        {workflowMeta.workflowId && (
+          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
+            编号 {workflowMeta.workflowId}
+          </div>
+        )}
+      </div>
+      <div className="space-y-3">
+        <input
+          value={workflowName}
+          onChange={(event) => setWorkflowName(event.target.value)}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          data-testid="workflow-name-input"
+          placeholder="工作流名称"
+        />
+        <button
+          className="prompt-primary w-full"
+          type="button"
+          onClick={() => void handlePublish()}
+          disabled={isPublishing}
+          data-testid="workflow-publish"
+        >
+          {isPublishing ? '发布中...' : '发布版本'}
+        </button>
+        <button
+          className="prompt-secondary w-full"
+          type="button"
+          onClick={onLinkWorkflowToChat}
+          disabled={!workflowMeta.workflowCode || !workflowMeta.publishedVersion}
+          data-testid="workflow-link-chat"
+        >
+          跳转聊天联调
+        </button>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-500">
+          <div>最新发布：{workflowMeta.publishedVersion || '尚未发布'}</div>
+          <div>保存状态：{saveStatus || '尚未保存'}</div>
+          {validationIssues.length > 0 && (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+              当前还有 {validationIssues.length} 项待处理问题
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderVariableManagementPanel = () => (
+    <aside
+      className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-slate-50/90 p-4"
+      data-testid="workflow-variable-panel"
+    >
+      <div className="mb-3">
+        <div className="panel-title">变量管理</div>
+        <div className="mt-2 text-sm text-slate-500">统一维护全局变量与临时变量，供主流程和子流程复用。</div>
+      </div>
+      <div className="mb-3 grid gap-2">
+        <input
+          value={variableForm.name}
+          onChange={(event) => setVariableForm((prev) => ({ ...prev, name: event.target.value }))}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          placeholder="变量名称"
+        />
+        <div className="grid gap-2 sm:grid-cols-[1fr_120px] xl:grid-cols-1 2xl:grid-cols-[1fr_120px]">
+          <select
+            value={variableForm.type}
+            onChange={(event) => setVariableForm((prev) => ({ ...prev, type: event.target.value as VariableType }))}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          >
+            {variableTypeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={variableForm.scope}
+            onChange={(event) => setVariableForm((prev) => ({ ...prev, scope: event.target.value as VariableScope }))}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="global">全局变量</option>
+            <option value="temp">临时变量</option>
+          </select>
+        </div>
+        <textarea
+          value={variableForm.description}
+          onChange={(event) => setVariableForm((prev) => ({ ...prev, description: event.target.value }))}
+          className="min-h-[80px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          placeholder="描述变量语义、预期格式和使用约束。"
+        />
+        <button className="prompt-primary" type="button" onClick={addVariable}>
+          添加变量
+        </button>
+      </div>
+
+      <div className="grid flex-1 min-h-0 gap-4 overflow-auto pr-1">
+        <div className="space-y-2">
+          <div className="text-xs font-semibold text-slate-400">全局变量</div>
+          {renderVariableManager('global', globalVariables)}
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs font-semibold text-slate-400">临时变量</div>
+          {renderVariableManager('temp', tempVariables)}
+        </div>
+      </div>
+    </aside>
+  )
+
   useImperativeHandle(
     ref,
     () => ({
@@ -1319,7 +1443,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           </div>
         </div>
 
-        <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_360px]">
+        <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_360px_360px]">
           <aside
             className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4"
             data-testid="workflow-graph-nav"
@@ -1434,10 +1558,14 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           </section>
 
           <aside
-            className="grid min-h-0 gap-4 xl:grid-rows-[minmax(0,1fr)_minmax(0,1.1fr)]"
+            className="grid min-h-0 gap-4 xl:grid-rows-[minmax(0,3fr)_minmax(0,7fr)]"
             data-testid="workflow-properties-panel"
           >
-            <div className="min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4">
+            {renderWorkflowInfoPanel()}
+            <div
+              className="min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4"
+              data-testid="workflow-process-properties-card"
+            >
               <div className="mb-3">
                 <div className="panel-title">流程属性</div>
                 <div className="mt-2 text-sm text-slate-500">
@@ -1446,63 +1574,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               </div>
               <div className="max-h-full overflow-auto pr-1">{renderNodeEditor()}</div>
             </div>
-
-            <div className="min-h-0 rounded-3xl border border-slate-200 bg-slate-50/90 p-4">
-              <div className="mb-3">
-                <div className="panel-title">变量管理</div>
-                <div className="mt-2 text-sm text-slate-500">统一维护全局变量与临时变量，供主流程和子流程复用。</div>
-              </div>
-              <div className="mb-3 grid gap-2">
-                <input
-                  value={variableForm.name}
-                  onChange={(event) => setVariableForm((prev) => ({ ...prev, name: event.target.value }))}
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="变量名称"
-                />
-                <div className="grid gap-2 sm:grid-cols-[1fr_120px]">
-                  <select
-                    value={variableForm.type}
-                    onChange={(event) => setVariableForm((prev) => ({ ...prev, type: event.target.value as VariableType }))}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    {variableTypeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={variableForm.scope}
-                    onChange={(event) => setVariableForm((prev) => ({ ...prev, scope: event.target.value as VariableScope }))}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    <option value="global">全局变量</option>
-                    <option value="temp">临时变量</option>
-                  </select>
-                </div>
-                <textarea
-                  value={variableForm.description}
-                  onChange={(event) => setVariableForm((prev) => ({ ...prev, description: event.target.value }))}
-                  className="min-h-[80px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="描述变量语义、预期格式和使用约束。"
-                />
-                <button className="prompt-primary" type="button" onClick={addVariable}>
-                  添加变量
-                </button>
-              </div>
-
-              <div className="grid max-h-[420px] gap-4 overflow-auto xl:grid-cols-2">
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-slate-400">全局变量</div>
-                  {renderVariableManager('global', globalVariables)}
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-slate-400">临时变量</div>
-                  {renderVariableManager('temp', tempVariables)}
-                </div>
-              </div>
-            </div>
           </aside>
+          {renderVariableManagementPanel()}
         </div>
       </div>
     </div>

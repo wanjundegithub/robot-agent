@@ -89,7 +89,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-current-graph')).toContainText('主流程')
   })
 
-  test('uses a full-width workspace with a dedicated versions sidebar and no draft action bar', async ({ page }) => {
+  test('uses a full-width workspace with right variable management and workflow info above properties', async ({ page }) => {
     let nextSessionIndex = 1
 
     await page.route('**/api/**', async (route) => {
@@ -164,18 +164,31 @@ test.describe('workflow designer v2 contract', () => {
 
     await expect(page.getByTestId('workflow-page-layout')).toBeVisible()
     await expect(page.getByTestId('workflow-page-main')).toBeVisible()
-    await expect(page.getByTestId('workflow-version-panel')).toBeVisible()
+    await expect(page.getByTestId('workflow-variable-panel')).toBeVisible()
+    await expect(page.getByTestId('workflow-info-panel')).toBeVisible()
+    await expect(page.getByTestId('workflow-process-properties-card')).toBeVisible()
+    await expect(page.getByTestId('workflow-version-panel')).toHaveCount(0)
+    await expect(page.getByTestId('workflow-new-version')).toBeVisible()
+    await expect(page.getByTestId('workflow-version-toggle')).toBeVisible()
     await expect(page.getByTestId('workflow-name-input')).toBeVisible()
     await expect(page.getByTestId('workflow-publish')).toBeVisible()
     await expect(page.getByTestId('workflow-save-draft')).toHaveCount(0)
     await expect(page.getByTestId('workflow-validate')).toHaveCount(0)
 
     const mainBox = await page.getByTestId('workflow-page-main').boundingBox()
-    const sidebarBox = await page.getByTestId('workflow-version-panel').boundingBox()
+    const variableBox = await page.getByTestId('workflow-variable-panel').boundingBox()
+    const infoBox = await page.getByTestId('workflow-info-panel').boundingBox()
+    const propertiesBox = await page.getByTestId('workflow-process-properties-card').boundingBox()
 
     expect(mainBox).not.toBeNull()
-    expect(sidebarBox).not.toBeNull()
-    expect((sidebarBox as { x: number }).x).toBeGreaterThan((mainBox as { x: number }).x)
+    expect(variableBox).not.toBeNull()
+    expect(infoBox).not.toBeNull()
+    expect(propertiesBox).not.toBeNull()
+    expect((variableBox as { x: number }).x).toBeGreaterThan((mainBox as { x: number }).x)
+    expect((infoBox as { y: number }).y).toBeLessThan((propertiesBox as { y: number }).y)
+
+    await page.getByTestId('workflow-version-toggle').click()
+    await expect(page.getByTestId('workflow-version-panel')).toBeVisible()
   })
 
   test('restricts main graph nodes and exposes start/message/function/end inside subflows', async ({ page }) => {

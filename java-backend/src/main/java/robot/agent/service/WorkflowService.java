@@ -243,6 +243,45 @@ public class WorkflowService {
         return WorkflowVersionResponse.fromEntity(savedVersion, workflow);
     }
 
+    public void deleteWorkflowVersion(String userId, String workflowCode, String version) {
+        Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
+                .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
+        accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.delete");
+
+        WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
+                .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
+
+        if (version.equals(workflow.getCurrentVersion())) {
+            Optional<WorkflowVersion> fallbackPublishedVersion = workflowVersionRepository
+                    .findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(workflowCode, WorkflowVersionStatus.ARCHIVED)
+                    .stream()
+                    .filter(item -> item.getStatus() == WorkflowVersionStatus.PUBLISHED)
+                    .filter(item -> !version.equals(item.getVersion()))
+                    .findFirst();
+
+            if (fallbackPublishedVersion.isPresent()) {
+                workflow.setCurrentVersion(fallbackPublishedVersion.get().getVersion());
+                workflow.setStatus(WorkflowStatus.PUBLISHED);
+            } else {
+                workflow.setCurrentVersion(null);
+                workflow.setStatus(WorkflowStatus.DRAFT);
+            }
+            workflow.setUpdatedAt(LocalDateTime.now());
+            workflowRepository.save(workflow);
+        }
+
+        workflowVersionRepository.delete(workflowVersion);
+        auditService.logAction(
+                workflow.getWorkspaceId(),
+                userId,
+                "workflow.version.delete",
+                "workflow_version",
+                workflowCode + ":" + version,
+                null,
+                200
+        );
+    }
+
     private String resolveWorkflowName(CreateWorkflowVersionRequest request, String workflowCode) {
         if (request.getWorkflowName() != null && !request.getWorkflowName().isBlank()) {
             return request.getWorkflowName().trim();

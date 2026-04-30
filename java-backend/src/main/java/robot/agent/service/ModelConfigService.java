@@ -46,8 +46,6 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class ModelConfigService {
 
-    private static final String DEFAULT_ROUTING_MODEL_CODE = "intent-router-v1";
-
     private final LlmProviderConfigRepository providerRepository;
     private final LlmModelRecordRepository modelRecordRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
@@ -145,7 +143,7 @@ public class ModelConfigService {
                 return modelCode;
             }
         }
-        return DEFAULT_ROUTING_MODEL_CODE;
+        return null;
     }
 
     public List<Map<String, Object>> getProviderConfigs() {

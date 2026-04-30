@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  archiveWorkflowVersion,
+  deleteWorkflowVersion,
   getWorkflows,
   getWorkflowVersions,
   publishWorkflow,
-  rollbackWorkflow,
 } from '../services/api'
 import type { WorkflowEditorSelection, WorkflowSummary, WorkflowVersionSummary } from '../types'
 import type { WorkflowVersionMutation } from './Orchestrator'
@@ -98,23 +97,15 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     await load()
   }
 
-  const handleRollback = async (targetWorkflowCode: string, version: string) => {
-    await rollbackWorkflow(targetWorkflowCode, version, currentUserId)
-    onWorkflowVersionMutation?.({
-      workflowCode: targetWorkflowCode,
-      version,
-      action: 'rollback',
-      refreshAt: Date.now(),
-    })
-    await load()
-  }
+  const handleDelete = async (targetWorkflowCode: string, version: string) => {
+    const confirmed = window.confirm(`确定删除版本 ${version} 吗？该操作不可恢复。`)
+    if (!confirmed) return
 
-  const handleArchive = async (targetWorkflowCode: string, version: string) => {
-    await archiveWorkflowVersion(targetWorkflowCode, version, currentUserId)
+    await deleteWorkflowVersion(targetWorkflowCode, version, currentUserId)
     onWorkflowVersionMutation?.({
       workflowCode: targetWorkflowCode,
       version,
-      action: 'archive',
+      action: 'delete',
       refreshAt: Date.now(),
     })
     await load()
@@ -139,7 +130,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
         <div>
           <div className="panel-title">工作流版本</div>
           <div className="text-xs text-slate-500">
-            查看每个工作流的已保存、已发布、已回滚和已归档版本。
+            通过新增或编辑工作流版本进入设计器，可发布或删除历史版本。
           </div>
         </div>
         <button className="text-xs text-slate-500 hover:text-slate-700" onClick={() => void load()}>
@@ -233,20 +224,12 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                               发布
                             </button>
                             <button
-                              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400"
-                              onClick={() =>
-                                void handleRollback(group.workflow.workflowCode, version.version)
-                              }
-                            >
-                              回滚
-                            </button>
-                            <button
                               className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:border-red-300"
                               onClick={() =>
-                                void handleArchive(group.workflow.workflowCode, version.version)
+                                void handleDelete(group.workflow.workflowCode, version.version)
                               }
                             >
-                              归档
+                              删除
                             </button>
                           </div>
                         </div>

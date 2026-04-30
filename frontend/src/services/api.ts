@@ -280,6 +280,18 @@ export async function archiveWorkflowVersion(workflowCode: string, version: stri
   return await response.json()
 }
 
+export async function deleteWorkflowVersion(workflowCode: string, version: string, currentUserId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowCode}/versions/${encodeURIComponent(version)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
 export async function getModelProviders(): Promise<ModelProviderConfig[]> {
   const response = await fetch(`${API_BASE_URL}/model-config/providers`)
   if (!response.ok) {

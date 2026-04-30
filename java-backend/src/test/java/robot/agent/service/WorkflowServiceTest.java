@@ -595,6 +595,60 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void deleteWorkflowVersionRemovesVersionAndClearsCurrentVersionWhenNoPublishedFallbackExists() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode("demo_flow");
+        workflow.setName("Demo Flow");
+        workflow.setWorkspaceId(1L);
+        workflow.setStatus(WorkflowStatus.PUBLISHED);
+        workflow.setCurrentVersion("v1");
+
+        WorkflowVersion version = new WorkflowVersion();
+        version.setWorkflowCode("demo_flow");
+        version.setVersion("v1");
+        version.setStatus(WorkflowVersionStatus.PUBLISHED);
+
+        when(workflowRepository.findByWorkflowCode("demo_flow")).thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("demo_flow", "v1")).thenReturn(Optional.of(version));
+        when(workflowVersionRepository.findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc("demo_flow", WorkflowVersionStatus.ARCHIVED))
+                .thenReturn(List.of(version));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)).thenReturn(List.of());
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        workflowService.deleteWorkflowVersion("tester", "demo_flow", "v1");
+
+        assertThat(workflow.getCurrentVersion()).isNull();
+        assertThat(workflow.getStatus()).isEqualTo(WorkflowStatus.DRAFT);
+        verify(workflowVersionRepository).delete(version);
+        verify(auditService).logAction(
+                1L,
+                "tester",
+                "workflow.version.delete",
+                "workflow_version",
+                "demo_flow:v1",
+                null,
+                200
+        );
+    }
+
+    @Test
     void buildRuntimeExecutionBundleForExplicitExecutionUsesIsolatedCatalog() {
         WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
         WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);

@@ -8,8 +8,6 @@ import robot.agent.model.KnowledgeBase;
 import robot.agent.model.KnowledgeBaseStatus;
 import robot.agent.model.KnowledgeVersion;
 import robot.agent.model.KnowledgeVersionStatus;
-import robot.agent.model.LlmModelRecord;
-import robot.agent.model.LlmProviderConfig;
 import robot.agent.model.Role;
 import robot.agent.model.UserRole;
 import robot.agent.model.UserRoleId;
@@ -19,8 +17,6 @@ import robot.agent.model.WorkflowVersion;
 import robot.agent.model.WorkflowVersionStatus;
 import robot.agent.repository.KnowledgeBaseRepository;
 import robot.agent.repository.KnowledgeVersionRepository;
-import robot.agent.repository.LlmModelRecordRepository;
-import robot.agent.repository.LlmProviderConfigRepository;
 import robot.agent.repository.RoleRepository;
 import robot.agent.repository.UserRoleRepository;
 import robot.agent.repository.WorkflowRepository;
@@ -39,8 +35,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
-    private final LlmProviderConfigRepository providerRepository;
-    private final LlmModelRecordRepository modelRecordRepository;
     private final RoleRepository roleRepository;
     private final UserRoleRepository userRoleRepository;
     private final ObjectMapper objectMapper;
@@ -50,8 +44,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
             WorkflowVersionRepository workflowVersionRepository,
             KnowledgeBaseRepository knowledgeBaseRepository,
             KnowledgeVersionRepository knowledgeVersionRepository,
-            LlmProviderConfigRepository providerRepository,
-            LlmModelRecordRepository modelRecordRepository,
             RoleRepository roleRepository,
             UserRoleRepository userRoleRepository,
             ObjectMapper objectMapper
@@ -60,8 +52,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         this.workflowVersionRepository = workflowVersionRepository;
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeVersionRepository = knowledgeVersionRepository;
-        this.providerRepository = providerRepository;
-        this.modelRecordRepository = modelRecordRepository;
         this.roleRepository = roleRepository;
         this.userRoleRepository = userRoleRepository;
         this.objectMapper = objectMapper;
@@ -70,7 +60,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) throws Exception {
         seedRoles();
-        seedModelConfigs();
         seedKnowledgeBase();
         seedWorkflows();
     }
@@ -143,66 +132,6 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
 
         knowledgeBase.setCurrentVersion("1.0.0");
         knowledgeBaseRepository.save(knowledgeBase);
-    }
-
-    private void seedModelConfigs() {
-        LlmProviderConfig provider = providerRepository.findByProviderCode("openai-compatible-prod")
-                .orElseGet(() -> {
-                    LlmProviderConfig created = new LlmProviderConfig();
-                    created.setProviderCode("openai-compatible-prod");
-                    created.setCreatedBy("system");
-                    created.setCreatedAt(LocalDateTime.now());
-                    return created;
-                });
-        String apiKey = System.getenv("ROBOT_LLM_API_KEY");
-        provider.setProviderName("Default OpenAI Compatible Provider");
-        provider.setProviderType("openai");
-        provider.setBaseUrl("https://api1.oai1.online/v1");
-        provider.setApiKeySecretRef(apiKey == null || apiKey.isBlank() ? null : "env:ROBOT_LLM_API_KEY");
-        provider.setDefaultModelCode("general-chat-v1");
-        provider.setEnabled(apiKey != null && !apiKey.isBlank());
-        provider.setUpdatedAt(LocalDateTime.now());
-        providerRepository.save(provider);
-
-        seedModelRecord("intent-router-v1", "意图路由模型", "openai-compatible-prod", "gpt-4o-mini",
-                "Route user messages to workflows.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
-        seedModelRecord("knowledge-query-rewrite-v1", "知识库改写模型", "openai-compatible-prod", "gpt-4o-mini",
-                "Rewrite knowledge search queries.", Map.of("temperature", 0.10d, "top_p", 0.90d, "max_tokens", 512));
-        seedModelRecord("knowledge-answer-v1", "知识库回答模型", "openai-compatible-prod", "gpt-4o-mini",
-                "Generate grounded knowledge answers.", Map.of("temperature", 0.20d, "top_p", 0.90d, "max_tokens", 1024));
-        seedModelRecord("general-chat-v1", "通用对话模型", "openai-compatible-prod", "gpt-4o-mini",
-                "General workflow chat model.", Map.of("temperature", 0.30d, "top_p", 0.95d, "max_tokens", 1024));
-        seedModelRecord("structured-extraction-v1", "结构化抽取模型", "openai-compatible-prod", "gpt-4o-mini",
-                "Extract structured slots.", Map.of("temperature", 0.10d, "top_p", 0.80d, "max_tokens", 512));
-    }
-
-    private void seedModelRecord(
-            String modelCode,
-            String modelName,
-            String providerCode,
-            String upstreamModelCode,
-            String defaultSystemPrompt,
-            Map<String, Object> defaultOptions
-    ) {
-        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode).orElseGet(() -> {
-            LlmModelRecord created = new LlmModelRecord();
-            created.setModelCode(modelCode);
-            created.setCreatedBy("system");
-            created.setCreatedAt(LocalDateTime.now());
-            return created;
-        });
-        modelRecord.setModelName(modelName);
-        modelRecord.setProvider(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getProviderType).orElse("openai"));
-        modelRecord.setProviderCode(providerCode);
-        modelRecord.setUpstreamModelCode(upstreamModelCode);
-        modelRecord.setApiKey(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getApiKeySecretRef).orElse(null));
-        modelRecord.setBaseUrl(providerRepository.findByProviderCode(providerCode).map(LlmProviderConfig::getBaseUrl).orElse(null));
-        modelRecord.setDefaultSystemPrompt(defaultSystemPrompt);
-        modelRecord.setDefaultOptionsJson(writeJson(defaultOptions));
-        modelRecord.setCapabilitiesJson(writeJson(Map.of("chat", true)));
-        modelRecord.setEnabled(true);
-        modelRecord.setUpdatedAt(LocalDateTime.now());
-        modelRecordRepository.save(modelRecord);
     }
 
     private void seedWorkflows() {
