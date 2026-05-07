@@ -30,4 +30,12 @@ public class WorkflowSchemaRepairService {
 
         jdbcTemplate.execute("ALTER TABLE workflow_definition MODIFY COLUMN status ENUM('DRAFT','PUBLISHED','ARCHIVED') NOT NULL");
     }
+
+    public void ensureWorkflowSnapshotColumnSupported() {
+        List<Map<String, Object>> columns = jdbcTemplate.queryForList("SHOW COLUMNS FROM workflow_version LIKE 'workflow_snapshot'");
+        if (!columns.isEmpty()) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE workflow_version ADD COLUMN workflow_snapshot JSON NULL");
+    }
 }

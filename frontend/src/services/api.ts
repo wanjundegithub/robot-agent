@@ -477,6 +477,7 @@ export async function saveWorkflowDraft(
     definition: Record<string, unknown>
     entryRule: Record<string, unknown>
     workflowConfig: Record<string, unknown>
+    workflowSnapshot: Record<string, unknown>
     currentUserId: string
   }
 ): Promise<WorkflowVersionSummary> {
@@ -508,6 +509,7 @@ export async function saveWorkflowDraft(
         }
       ),
       config: JSON.stringify(payload.workflowConfig),
+      workflow_snapshot: JSON.stringify(payload.workflowSnapshot),
     }),
   })
   if (!response.ok) {

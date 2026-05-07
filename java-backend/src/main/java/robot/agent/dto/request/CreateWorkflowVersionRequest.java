@@ -14,6 +14,8 @@ public class CreateWorkflowVersionRequest {
     @JsonProperty("editor_meta")
     private String editorMeta;
     private String config;
+    @JsonProperty("workflow_snapshot")
+    private String workflowSnapshot;
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
@@ -35,4 +37,7 @@ public class CreateWorkflowVersionRequest {
 
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }
+
+    public String getWorkflowSnapshot() { return workflowSnapshot; }
+    public void setWorkflowSnapshot(String workflowSnapshot) { this.workflowSnapshot = workflowSnapshot; }
 }

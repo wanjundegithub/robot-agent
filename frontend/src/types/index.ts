@@ -262,6 +262,7 @@ export interface WorkflowVersionSummary {
   entryRule?: string
   editorMeta?: string
   config?: string
+  workflowSnapshot?: string
   createdAt?: string
   publishedAt?: string | null
 }
@@ -304,6 +305,21 @@ export interface WorkflowDesignerDefinitionV2 {
     }
   }
   editor_meta: Record<string, unknown>
+}
+
+export interface WorkflowSnapshotV1 {
+  schema_version: 'workflow-snapshot/v1'
+  workflow: {
+    workflow_code: string
+    workflow_name: string
+    workflow_version: string
+  }
+  designer: {
+    definition: WorkflowDesignerDefinitionV2
+    entry_rule: Record<string, unknown>
+    workflow_config: Record<string, unknown>
+    editor_meta: Record<string, unknown>
+  }
 }
 
 export interface SessionSummary {

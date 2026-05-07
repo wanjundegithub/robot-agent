@@ -34,6 +34,9 @@ public class WorkflowVersion {
     @Column(name = "config", columnDefinition = "JSON")
     private String config;
 
+    @Column(name = "workflow_snapshot", columnDefinition = "JSON")
+    private String workflowSnapshot;
+
     @Column(name = "created_by", length = 64)
     private String createdBy;
 
@@ -67,6 +70,9 @@ public class WorkflowVersion {
 
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }
+
+    public String getWorkflowSnapshot() { return workflowSnapshot; }
+    public void setWorkflowSnapshot(String workflowSnapshot) { this.workflowSnapshot = workflowSnapshot; }
 
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }

@@ -25,6 +25,7 @@ import type {
   CapabilityItemSummary,
   WorkflowDesignerDefinitionV2,
   WorkflowEditorSelection,
+  WorkflowSnapshotV1,
   WorkflowValidationIssue,
 } from '../types'
 
@@ -78,6 +79,7 @@ interface ModelBindingsState {
 
 interface WorkflowDraftPayload {
   workflowCode: string
+  workflowName?: string
   workflowVersion: string
   definition: WorkflowDesignerDefinitionV2
   entryRule: Record<string, unknown>
@@ -633,6 +635,14 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       workflow_name: basics.workflowName,
       workflow_version: version,
     }
+    const workflowSnapshot = buildWorkflowSnapshot({
+      workflowCode: basics.workflowCode,
+      workflowName: basics.workflowName,
+      workflowVersion: version,
+      definition,
+      entryRule: currentEntryRule,
+      workflowConfig: compatibilityWorkflowConfig,
+    })
 
     const response = await saveWorkflowDraft(basics.workflowCode, {
       workflowName: basics.workflowName,
@@ -640,6 +650,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       definition,
       entryRule: currentEntryRule,
       workflowConfig: compatibilityWorkflowConfig,
+      workflowSnapshot: workflowSnapshot as unknown as Record<string, unknown>,
       currentUserId,
     })
 
@@ -1799,14 +1810,46 @@ function createPublishVersion() {
   return `v${parts.join('')}`
 }
 
-function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedWorkflowState {
-  const definition = parseJsonObject(selection.version.definition)
-  const versionConfig = parseJsonObject(selection.version.config)
-  const versionEditorMeta = parseJsonObject(selection.version.editorMeta)
-  const definitionEditorMeta = asRecord(definition.editor_meta)
-  const editorMeta = Object.keys(definitionEditorMeta).length > 0 ? definitionEditorMeta : versionEditorMeta
+function buildWorkflowSnapshot(payload: WorkflowDraftPayload): WorkflowSnapshotV1 {
+  const workflowName = (payload.workflowName || '').trim()
+  return {
+    schema_version: 'workflow-snapshot/v1',
+    workflow: {
+      workflow_code: payload.workflowCode,
+      workflow_name: workflowName,
+      workflow_version: payload.workflowVersion,
+    },
+    designer: {
+      definition: payload.definition,
+      entry_rule: payload.entryRule,
+      workflow_config: payload.workflowConfig,
+      editor_meta: asRecord(payload.definition.editor_meta),
+    },
+  }
+}
 
-  const variablesSource = resolveVariableSource(definition, versionConfig)
+function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedWorkflowState {
+  const snapshot = parseWorkflowSnapshot(selection.version.workflowSnapshot)
+  const snapshotDesigner = snapshot ? asRecord(snapshot.designer) : {}
+  const snapshotDefinition = asRecord(snapshotDesigner.definition)
+  const hasSnapshotDefinition = Object.keys(snapshotDefinition).length > 0
+
+  const legacyDefinition = parseJsonObject(selection.version.definition)
+  const definition = hasSnapshotDefinition ? snapshotDefinition : legacyDefinition
+  const versionConfig = parseJsonObject(selection.version.config)
+  const snapshotWorkflowConfig = asRecord(snapshotDesigner.workflow_config)
+  const effectiveConfig = Object.keys(snapshotWorkflowConfig).length > 0 ? snapshotWorkflowConfig : versionConfig
+  const versionEditorMeta = parseJsonObject(selection.version.editorMeta)
+  const snapshotEditorMeta = asRecord(snapshotDesigner.editor_meta)
+  const definitionEditorMeta = asRecord(definition.editor_meta)
+  const editorMeta =
+    Object.keys(snapshotEditorMeta).length > 0
+      ? snapshotEditorMeta
+      : Object.keys(definitionEditorMeta).length > 0
+      ? definitionEditorMeta
+      : versionEditorMeta
+
+  const variablesSource = resolveVariableSource(definition, effectiveConfig)
   const globalVariables = toVariableDefinitions(variablesSource.global, 'global')
   const tempVariables = toVariableDefinitions(variablesSource.temporary, 'temp')
   const variableNameToId = new Map(
@@ -1829,11 +1872,24 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
       (String(selection.version.status || '').toLowerCase() === 'published' ? selection.version.version : null),
     globalVariables,
     tempVariables,
-    modelBindings: resolveModelBindings(definition, versionConfig),
+    modelBindings: resolveModelBindings(definition, effectiveConfig),
     graphs: hydratedGraphs.graphs,
     graphOrder: hydratedGraphs.graphOrder,
     currentGraphId: hydratedGraphs.currentGraphId,
   }
+}
+
+function parseWorkflowSnapshot(source?: string | null): WorkflowSnapshotV1 | null {
+  const snapshot = parseJsonObject(source)
+  if (stringValue(snapshot.schema_version) !== 'workflow-snapshot/v1') {
+    return null
+  }
+  const designer = asRecord(snapshot.designer)
+  const definition = asRecord(designer.definition)
+  if (Object.keys(definition).length === 0) {
+    return null
+  }
+  return snapshot as unknown as WorkflowSnapshotV1
 }
 
 function resolveModelBindings(definition: Record<string, unknown>, versionConfig: Record<string, unknown>): ModelBindingsState {

@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 public class WorkflowService {
 
     private static final String WORKFLOW_SCHEMA_V2 = "workflow-designer/v2";
+    private static final String WORKFLOW_SNAPSHOT_SCHEMA_V1 = "workflow-snapshot/v1";
     private static final String DEFAULT_MAIN_GRAPH_ID = "main";
     private static final Set<String> SUPPORTED_NODE_TYPES = Set.of(
             "start", "coordinator", "sub_agent", "tool", "message", "function", "end"
@@ -153,9 +154,22 @@ public class WorkflowService {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.publish");
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
-
+        if (workflowVersion.getWorkflowSnapshot() == null || workflowVersion.getWorkflowSnapshot().isBlank()) {
+            workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
+                    workflowCode,
+                    workflow.getName(),
+                    version,
+                    workflowVersion.getDefinition(),
+                    workflowVersion.getEntryRule(),
+                    workflowVersion.getEditorMeta(),
+                    workflowVersion.getConfig()
+            ));
+        }
         workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
         workflowVersion.setPublishedAt(LocalDateTime.now());
         workflowVersionRepository.save(workflowVersion);
@@ -173,12 +187,30 @@ public class WorkflowService {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.rollback");
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
 
-        if (workflowVersion.getStatus() != WorkflowVersionStatus.PUBLISHED) {
+        boolean snapshotMissing = workflowVersion.getWorkflowSnapshot() == null || workflowVersion.getWorkflowSnapshot().isBlank();
+        boolean statusNeedsPublish = workflowVersion.getStatus() != WorkflowVersionStatus.PUBLISHED;
+        if (snapshotMissing) {
+            workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
+                    workflowCode,
+                    workflow.getName(),
+                    version,
+                    workflowVersion.getDefinition(),
+                    workflowVersion.getEntryRule(),
+                    workflowVersion.getEditorMeta(),
+                    workflowVersion.getConfig()
+            ));
+        }
+        if (statusNeedsPublish) {
             workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
             workflowVersion.setPublishedAt(LocalDateTime.now());
+        }
+        if (snapshotMissing || statusNeedsPublish) {
             workflowVersionRepository.save(workflowVersion);
         }
 
@@ -215,15 +247,20 @@ public class WorkflowService {
             workflow = workflowRepository.save(workflow);
         }
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.create");
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
 
         WorkflowVersion version = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, request.getVersion())
                 .orElseGet(WorkflowVersion::new);
+        String normalizedDefinitionJson = normalizeDefinitionJsonForPersist(request.getDefinition());
         version.setWorkflowCode(workflowCode);
         version.setVersion(request.getVersion());
-        version.setDefinition(normalizeDefinitionJsonForPersist(request.getDefinition()));
+        version.setDefinition(normalizedDefinitionJson);
         version.setEntryRule(request.getEntryRule());
         version.setEditorMeta(request.getEditorMeta());
         version.setConfig(request.getConfig());
+        version.setWorkflowSnapshot(resolveWorkflowSnapshotForPersist(workflow, request, normalizedDefinitionJson));
         version.setStatus(WorkflowVersionStatus.DRAFT);
         version.setCreatedBy(userId);
         if (version.getCreatedAt() == null) {
@@ -235,6 +272,9 @@ public class WorkflowService {
     }
 
     public WorkflowVersionResponse getWorkflowVersion(String workflowCode, String version) {
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found"));
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
@@ -243,6 +283,9 @@ public class WorkflowService {
     }
 
     public List<WorkflowVersionResponse> getWorkflowVersions(String workflowCode) {
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
         List<WorkflowVersion> versions = workflowVersionRepository.findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(
                 workflowCode,
                 WorkflowVersionStatus.ARCHIVED
@@ -343,6 +386,9 @@ public class WorkflowService {
     }
 
     public WorkflowVersion getWorkflowVersionEntity(String workflowCode, String version) {
+        if (workflowSchemaRepairService != null) {
+            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
+        }
         return workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
     }
@@ -907,6 +953,119 @@ public class WorkflowService {
         Map<String, Object> parsed = parseJsonObjectStrict(definitionJson);
         Map<String, Object> normalized = normalizeWorkflowDefinition(parsed);
         return writeJsonObject(normalized);
+    }
+
+    private String resolveWorkflowSnapshotForPersist(
+            Workflow workflow,
+            CreateWorkflowVersionRequest request,
+            String normalizedDefinitionJson
+    ) {
+        String workflowCode = workflow.getWorkflowCode();
+        String workflowName = firstNonBlank(
+                request.getWorkflowName() == null ? null : request.getWorkflowName().trim(),
+                workflow.getName(),
+                workflowCode
+        );
+        String workflowVersion = request.getVersion();
+        if (request.getWorkflowSnapshot() == null || request.getWorkflowSnapshot().isBlank()) {
+            return buildCompatibilityWorkflowSnapshot(
+                    workflowCode,
+                    workflowName,
+                    workflowVersion,
+                    normalizedDefinitionJson,
+                    request.getEntryRule(),
+                    request.getEditorMeta(),
+                    request.getConfig()
+            );
+        }
+        return normalizeProvidedWorkflowSnapshot(
+                request.getWorkflowSnapshot(),
+                workflowCode,
+                workflowName,
+                workflowVersion,
+                request.getEntryRule(),
+                request.getEditorMeta(),
+                request.getConfig()
+        );
+    }
+
+    private String normalizeProvidedWorkflowSnapshot(
+            String snapshotJson,
+            String workflowCode,
+            String workflowName,
+            String workflowVersion,
+            String fallbackEntryRuleJson,
+            String fallbackEditorMetaJson,
+            String fallbackConfigJson
+    ) {
+        Map<String, Object> providedSnapshot = parseJsonObjectStrict(snapshotJson);
+        String schemaVersion = stringValue(providedSnapshot.get("schema_version"));
+        if (!WORKFLOW_SNAPSHOT_SCHEMA_V1.equals(schemaVersion)) {
+            throw new RuntimeException("Unsupported workflow snapshot schema_version: " + schemaVersion);
+        }
+
+        Map<String, Object> providedDesigner = asMap(providedSnapshot.get("designer"));
+        Map<String, Object> providedDefinition = asMap(providedDesigner.get("definition"));
+        if (providedDefinition.isEmpty()) {
+            throw new RuntimeException("Workflow snapshot designer.definition is required");
+        }
+        Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(providedDefinition);
+        normalizedDefinition.put("workflow_code", workflowCode);
+        normalizedDefinition.put("workflow_name", workflowName);
+        normalizedDefinition.put("workflow_version", workflowVersion);
+
+        Map<String, Object> normalizedDesigner = new LinkedHashMap<>(providedDesigner);
+        normalizedDesigner.put("definition", normalizedDefinition);
+        if (!normalizedDesigner.containsKey("entry_rule")) {
+            normalizedDesigner.put("entry_rule", parseJsonObject(fallbackEntryRuleJson));
+        }
+        if (!normalizedDesigner.containsKey("workflow_config")) {
+            normalizedDesigner.put("workflow_config", parseJsonObject(fallbackConfigJson));
+        }
+        if (!normalizedDesigner.containsKey("editor_meta")) {
+            normalizedDesigner.put("editor_meta", parseJsonObject(fallbackEditorMetaJson));
+        }
+
+        Map<String, Object> normalizedSnapshot = new LinkedHashMap<>(providedSnapshot);
+        normalizedSnapshot.put("schema_version", WORKFLOW_SNAPSHOT_SCHEMA_V1);
+        normalizedSnapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowVersion));
+        normalizedSnapshot.put("designer", normalizedDesigner);
+        return writeJsonObject(normalizedSnapshot);
+    }
+
+    private String buildCompatibilityWorkflowSnapshot(
+            String workflowCode,
+            String workflowName,
+            String workflowVersion,
+            String definitionJson,
+            String entryRuleJson,
+            String editorMetaJson,
+            String configJson
+    ) {
+        Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(parseJsonObjectStrict(definitionJson));
+        normalizedDefinition.put("workflow_code", workflowCode);
+        normalizedDefinition.put("workflow_name", workflowName);
+        normalizedDefinition.put("workflow_version", workflowVersion);
+
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("schema_version", WORKFLOW_SNAPSHOT_SCHEMA_V1);
+        snapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowVersion));
+
+        Map<String, Object> designer = new LinkedHashMap<>();
+        designer.put("definition", normalizedDefinition);
+        designer.put("entry_rule", parseJsonObject(entryRuleJson));
+        designer.put("workflow_config", parseJsonObject(configJson));
+        designer.put("editor_meta", parseJsonObject(editorMetaJson));
+        snapshot.put("designer", designer);
+        return writeJsonObject(snapshot);
+    }
+
+    private Map<String, Object> workflowMetadataMap(String workflowCode, String workflowName, String workflowVersion) {
+        Map<String, Object> workflowMeta = new LinkedHashMap<>();
+        workflowMeta.put("workflow_code", workflowCode);
+        workflowMeta.put("workflow_name", workflowName);
+        workflowMeta.put("workflow_version", workflowVersion);
+        return workflowMeta;
     }
 
     private Map<String, Object> parseJsonObjectStrict(String json) {

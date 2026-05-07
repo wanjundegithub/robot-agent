@@ -7,6 +7,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import reactor.core.publisher.Mono;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
+import robot.agent.dto.response.WorkflowVersionResponse;
 import robot.agent.model.Workflow;
 import robot.agent.model.WorkflowStatus;
 import robot.agent.model.WorkflowVersion;
@@ -595,6 +596,215 @@ class WorkflowServiceTest {
         assertThatThrownBy(() -> workflowService.saveWorkflowDraft("tester", "bad_schema_flow", request))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Unsupported schema_version");
+    }
+
+    @Test
+    void saveWorkflowDraftPersistsSuppliedWorkflowSnapshot() throws Exception {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow existingWorkflow = new Workflow();
+        existingWorkflow.setWorkflowCode("snapshot_flow");
+        existingWorkflow.setName("Snapshot Flow");
+        existingWorkflow.setWorkspaceId(1L);
+        existingWorkflow.setStatus(WorkflowStatus.DRAFT);
+        when(workflowRepository.findByWorkflowCode("snapshot_flow")).thenReturn(Optional.of(existingWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("snapshot_flow", "v1")).thenReturn(Optional.empty());
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)).thenReturn(List.of());
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection())).thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        CreateWorkflowVersionRequest request = new CreateWorkflowVersionRequest();
+        request.setVersion("v1");
+        request.setDefinition("""
+                {
+                  "schema_version":"workflow-designer/v2",
+                  "workflow_code":"snapshot_flow",
+                  "workflow_name":"Snapshot Flow",
+                  "workflow_version":"v1",
+                  "main_graph_id":"main",
+                  "graphs":{
+                    "main":{
+                      "graph_id":"main",
+                      "graph_type":"main",
+                      "entry_node_id":"start",
+                      "nodes":{
+                        "start":{"id":"start","type":"start","config":{"prompt":"开始"}},
+                        "end":{"id":"end","type":"end","config":{"prompt":"结束","output_format":{}}}
+                      },
+                      "edges":[{"id":"e1","source":"start","target":"end"}]
+                    }
+                  },
+                  "variables":{"global":[],"temporary":[]},
+                  "model_bindings":{},
+                  "editor_meta":{"graph_layouts":{}}
+                }
+                """);
+        request.setEntryRule("{\"intent_codes\":[\"snapshot_flow\"]}");
+        request.setEditorMeta("{\"graph_layouts\":{\"main\":{}}}");
+        request.setConfig("{\"debug\":true}");
+        request.setWorkflowSnapshot("""
+                {
+                  "schema_version":"workflow-snapshot/v1",
+                  "workflow":{
+                    "workflow_code":"wrong_code",
+                    "workflow_name":"wrong_name",
+                    "workflow_version":"wrong_version"
+                  },
+                  "designer":{
+                    "definition":{
+                      "schema_version":"workflow-designer/v2",
+                      "workflow_code":"wrong_code",
+                      "workflow_name":"wrong_name",
+                      "workflow_version":"wrong_version",
+                      "main_graph_id":"main",
+                      "graphs":{
+                        "main":{
+                          "graph_id":"main",
+                          "graph_type":"main",
+                          "entry_node_id":"start",
+                          "nodes":{
+                            "start":{"id":"start","type":"start","config":{"prompt":"开始"}},
+                            "end":{"id":"end","type":"end","config":{"prompt":"结束","output_format":{}}}
+                          },
+                          "edges":[{"id":"e1","source":"start","target":"end"}]
+                        }
+                      },
+                      "variables":{"global":[],"temporary":[]},
+                      "model_bindings":{},
+                      "editor_meta":{"graph_layouts":{"main":{"start":{"x":1,"y":2}}}}
+                    },
+                    "entry_rule":{"intent_codes":["snapshot_flow"]},
+                    "workflow_config":{"debug":true},
+                    "editor_meta":{"graph_layouts":{"main":{"start":{"x":1,"y":2}}}}
+                  }
+                }
+                """);
+
+        WorkflowVersionResponse response = workflowService.saveWorkflowDraft("tester", "snapshot_flow", request);
+
+        ArgumentCaptor<WorkflowVersion> captor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(captor.capture());
+        WorkflowVersion persisted = captor.getValue();
+        assertThat(persisted.getWorkflowSnapshot()).isNotBlank();
+
+        Map<String, Object> snapshot = objectMapper.readValue(persisted.getWorkflowSnapshot(), Map.class);
+        assertThat(snapshot).containsEntry("schema_version", "workflow-snapshot/v1");
+        Map<String, Object> workflowMeta = (Map<String, Object>) snapshot.get("workflow");
+        assertThat(workflowMeta).containsEntry("workflow_code", "snapshot_flow");
+        assertThat(workflowMeta).containsEntry("workflow_name", "Snapshot Flow");
+        assertThat(workflowMeta).containsEntry("workflow_version", "v1");
+
+        Map<String, Object> designer = (Map<String, Object>) snapshot.get("designer");
+        Map<String, Object> definition = (Map<String, Object>) designer.get("definition");
+        Map<String, Object> graphs = (Map<String, Object>) definition.get("graphs");
+        Map<String, Object> mainGraph = (Map<String, Object>) graphs.get("main");
+        assertThat(mainGraph.get("nodes")).isNotNull();
+        assertThat(mainGraph.get("edges")).isNotNull();
+        assertThat(definition.get("variables")).isNotNull();
+
+        assertThat(response.getWorkflowSnapshot()).isNotBlank();
+        assertThat(response.getWorkflowSnapshot()).contains("\"schema_version\":\"workflow-snapshot/v1\"");
+        assertThat(response.getWorkflowSnapshot()).contains("\"nodes\"");
+        assertThat(response.getWorkflowSnapshot()).contains("\"edges\"");
+        assertThat(response.getWorkflowSnapshot()).contains("\"variables\"");
+    }
+
+    @Test
+    void publishWorkflowBackfillsWorkflowSnapshotForLegacyVersion() throws Exception {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode("legacy_publish_flow");
+        workflow.setName("Legacy Publish Flow");
+        workflow.setWorkspaceId(1L);
+        workflow.setStatus(WorkflowStatus.DRAFT);
+        workflow.setCurrentVersion(null);
+
+        WorkflowVersion version = new WorkflowVersion();
+        version.setWorkflowCode("legacy_publish_flow");
+        version.setVersion("v1");
+        version.setStatus(WorkflowVersionStatus.DRAFT);
+        version.setDefinition("""
+                {
+                  "schema_version":"workflow-designer/v2",
+                  "workflow_code":"legacy_publish_flow",
+                  "workflow_name":"Legacy Publish Flow",
+                  "workflow_version":"v1",
+                  "main_graph_id":"main",
+                  "graphs":{
+                    "main":{
+                      "graph_id":"main",
+                      "graph_type":"main",
+                      "entry_node_id":"start",
+                      "nodes":{
+                        "start":{"id":"start","type":"start","config":{"prompt":"开始"}},
+                        "end":{"id":"end","type":"end","config":{"prompt":"结束","output_format":{}}}
+                      },
+                      "edges":[{"id":"e1","source":"start","target":"end"}]
+                    }
+                  },
+                  "variables":{"global":[],"temporary":[]},
+                  "model_bindings":{},
+                  "editor_meta":{"graph_layouts":{}}
+                }
+                """);
+        version.setEntryRule("{\"intent_codes\":[\"legacy_publish_flow\"]}");
+        version.setEditorMeta("{\"graph_layouts\":{\"main\":{}}}");
+        version.setConfig("{\"retry\":1}");
+        version.setWorkflowSnapshot(null);
+
+        when(workflowRepository.findByWorkflowCode("legacy_publish_flow")).thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("legacy_publish_flow", "v1")).thenReturn(Optional.of(version));
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)).thenReturn(List.of());
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection())).thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        workflowService.publishWorkflow("tester", "legacy_publish_flow", "v1");
+
+        assertThat(version.getWorkflowSnapshot()).isNotBlank();
+        Map<String, Object> snapshot = objectMapper.readValue(version.getWorkflowSnapshot(), Map.class);
+        assertThat(snapshot).containsEntry("schema_version", "workflow-snapshot/v1");
+        Map<String, Object> workflowMeta = (Map<String, Object>) snapshot.get("workflow");
+        assertThat(workflowMeta).containsEntry("workflow_code", "legacy_publish_flow");
+        assertThat(workflowMeta).containsEntry("workflow_name", "Legacy Publish Flow");
+        assertThat(workflowMeta).containsEntry("workflow_version", "v1");
+
+        verify(workflowVersionRepository).save(version);
     }
 
     @Test
