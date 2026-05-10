@@ -3,6 +3,8 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +28,7 @@ import java.util.stream.Collectors;
 @Transactional
 public class WorkflowService {
 
+    private static final Logger log = LoggerFactory.getLogger(WorkflowService.class);
     private static final String WORKFLOW_SCHEMA_V2 = "workflow-designer/v2";
     private static final String WORKFLOW_SNAPSHOT_SCHEMA_V1 = "workflow-snapshot/v1";
     private static final String DEFAULT_MAIN_GRAPH_ID = "main";
@@ -151,6 +154,7 @@ public class WorkflowService {
     }
 
     public WorkflowResponse publishWorkflow(String userId, String workflowCode, String version) {
+        log.info("workflow.publish.start userId={} workflowCode={} version={}", userId, workflowCode, version);
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.publish");
@@ -160,6 +164,7 @@ public class WorkflowService {
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
         if (workflowVersion.getWorkflowSnapshot() == null || workflowVersion.getWorkflowSnapshot().isBlank()) {
+            log.info("workflow.publish.snapshot.rebuild workflowCode={} version={} reason=missing_snapshot", workflowCode, version);
             workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
                     workflowCode,
                     workflow.getName(),
@@ -179,6 +184,14 @@ public class WorkflowService {
         workflow.setCurrentVersion(version);
         workflow.setUpdatedAt(LocalDateTime.now());
         Workflow saved = workflowRepository.save(workflow);
+        log.info(
+                "workflow.publish.persisted workflowCode={} version={} workflowStatus={} versionStatus={} currentVersion={}",
+                workflowCode,
+                version,
+                saved.getStatus(),
+                workflowVersion.getStatus(),
+                saved.getCurrentVersion()
+        );
         auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.publish", "workflow_definition", workflowCode, version, 200);
 
         return WorkflowResponse.fromEntity(saved);
@@ -229,6 +242,15 @@ public class WorkflowService {
     }
 
     public WorkflowVersionResponse saveWorkflowDraft(String userId, String workflowCode, CreateWorkflowVersionRequest request) {
+        log.info(
+                "workflow.draft.save.start userId={} workflowCode={} version={} hasSnapshot={} hasEditorMeta={} hasConfig={}",
+                userId,
+                workflowCode,
+                request == null ? null : request.getVersion(),
+                request != null && request.getWorkflowSnapshot() != null && !request.getWorkflowSnapshot().isBlank(),
+                request != null && request.getEditorMeta() != null && !request.getEditorMeta().isBlank(),
+                request != null && request.getConfig() != null && !request.getConfig().isBlank()
+        );
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseGet(() -> {
                     Workflow created = new Workflow();
@@ -266,6 +288,14 @@ public class WorkflowService {
                 .orElseGet(WorkflowVersion::new);
         String normalizedDefinitionJson = normalizeDefinitionJsonForPersist(request.getDefinition());
         String resolvedEntryRuleJson = resolveEntryRuleForPersist(request.getEntryRule(), workflowCode, workflow.getName());
+        log.info(
+                "workflow.draft.normalized workflowCode={} version={} definitionLength={} entryRuleLength={} metadataChanged={}",
+                workflowCode,
+                request.getVersion(),
+                normalizedDefinitionJson == null ? 0 : normalizedDefinitionJson.length(),
+                resolvedEntryRuleJson == null ? 0 : resolvedEntryRuleJson.length(),
+                workflowMetadataChanged
+        );
         version.setWorkflowCode(workflowCode);
         version.setVersion(request.getVersion());
         version.setDefinition(normalizedDefinitionJson);
@@ -279,6 +309,14 @@ public class WorkflowService {
             version.setCreatedAt(LocalDateTime.now());
         }
         WorkflowVersion saved = workflowVersionRepository.save(version);
+        log.info(
+                "workflow.draft.persisted workflowCode={} version={} status={} snapshotLength={} configLength={}",
+                workflowCode,
+                saved.getVersion(),
+                saved.getStatus(),
+                saved.getWorkflowSnapshot() == null ? 0 : saved.getWorkflowSnapshot().length(),
+                saved.getConfig() == null ? 0 : saved.getConfig().length()
+        );
         auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.version.save_draft", "workflow_version", workflowCode + ":" + request.getVersion(), request, 200);
         return WorkflowVersionResponse.fromEntity(saved, workflow);
     }
@@ -570,6 +608,12 @@ public class WorkflowService {
     }
 
     public RoutingDecision routeMessage(String content, Execution activeExecution) {
+        log.info(
+                "workflow.route.start contentLength={} activeExecutionId={} activeWorkflowCode={}",
+                content == null ? 0 : content.length(),
+                activeExecution == null ? null : activeExecution.getId(),
+                activeExecution == null ? null : activeExecution.getWorkflowCode()
+        );
         List<WorkflowVersion> versions = resolveCurrentWorkflowVersions();
         if (versions.isEmpty()) {
             versions = filterVisibleWorkflowVersions(
@@ -589,12 +633,27 @@ public class WorkflowService {
                 .toList();
         String routingModelCode = modelConfigService.resolveRoutingModelCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingModelCode);
+        log.info(
+                "workflow.route.context versionCount={} definitionCount={} routingModelCode={} providerCount={} modelRecordCount={}",
+                versions.size(),
+                workflowDefinitions.size(),
+                routingModelCode,
+                runtimeBundle.providerConfigs().size(),
+                runtimeBundle.modelRecords().size()
+        );
         List<RoutingDecision.IntentCandidate> regexCandidates = collectRegexCandidates(versions, normalizedContent);
+        log.info("workflow.route.regex candidates={}", regexCandidates.size());
         if (!regexCandidates.isEmpty()) {
             return buildAcceptedRoutingDecision(regexCandidates, versions, activeExecution, "regex_match", 1.0d, "regex");
         }
 
         List<RoutingDecision.IntentCandidate> ragCandidates = collectRagCandidates(versions, normalizedContent);
+        log.info(
+                "workflow.route.rag candidates={} topConfidence={} threshold={}",
+                ragCandidates.size(),
+                ragCandidates.isEmpty() ? null : ragCandidates.get(0).confidence(),
+                ragAcceptThreshold()
+        );
         if (!ragCandidates.isEmpty() && ragCandidates.get(0).confidence() >= ragAcceptThreshold()) {
             return buildAcceptedRoutingDecision(
                     ragCandidates,
@@ -607,6 +666,14 @@ public class WorkflowService {
         }
 
         ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingModelCode, runtimeBundle, ragCandidates);
+        log.info(
+                "workflow.route.llm_result matched={} workflowCode={} targetType={} confidence={} reason={}",
+                modelIntent.matched(),
+                modelIntent.workflowCode(),
+                modelIntent.targetType(),
+                modelIntent.confidence(),
+                modelIntent.reason()
+        );
         return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution);
     }
 
@@ -1147,6 +1214,11 @@ public class WorkflowService {
             List<RoutingDecision.IntentCandidate> ragCandidates
     ) {
         if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelRecords().isEmpty()) {
+            log.warn(
+                    "workflow.intent.classify.skip reason=model_config_unavailable providerCount={} modelRecordCount={}",
+                    runtimeBundle.providerConfigs().size(),
+                    runtimeBundle.modelRecords().size()
+            );
             return fallbackModelIntent("model_config_unavailable");
         }
         List<Map<String, Object>> candidates = ragCandidates.stream()
@@ -1165,6 +1237,13 @@ public class WorkflowService {
                 .toList();
         Map<String, Object> response;
         try {
+            log.info(
+                    "workflow.intent.classify.request routingModelCode={} candidateCount={} providerCount={} modelRecordCount={}",
+                    routingModelCode,
+                    candidates.size(),
+                    runtimeBundle.providerConfigs().size(),
+                    runtimeBundle.modelRecords().size()
+            );
             response = pythonClient.classifyIntent(Map.of(
                     "message", normalizedContent,
                     "routing_model_code", routingModelCode,
@@ -1173,6 +1252,7 @@ public class WorkflowService {
                     "model_records", runtimeBundle.modelRecords()
             )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
         } catch (RuntimeException exception) {
+            log.warn("workflow.intent.classify.failed routingModelCode={} message={}", routingModelCode, exception.getMessage());
             return fallbackModelIntent("intent_classification_fallback");
         }
         String intentCode = stringValue(response.get("intent_code"));
@@ -1185,6 +1265,15 @@ public class WorkflowService {
         String reason = stringValue(response.get("reason"));
         boolean matched = Boolean.TRUE.equals(response.get("matched"));
         boolean needClarification = Boolean.TRUE.equals(response.get("need_clarification"));
+        log.info(
+                "workflow.intent.classify.response matched={} workflowCode={} targetType={} confidence={} needClarification={} responseKeys={}",
+                matched,
+                workflowCode,
+                targetType,
+                confidence,
+                needClarification,
+                response.keySet()
+        );
         String clarificationQuestion = stringValue(response.get("clarification_question"));
         if (!matched) {
             return new ModelIntent(
@@ -1297,11 +1386,13 @@ public class WorkflowService {
         );
         Map<String, Map<String, Object>> catalog = new LinkedHashMap<>();
         for (WorkflowVersion version : versions) {
+            log.debug("workflow.catalog.add workflowCode={} version={}", version.getWorkflowCode(), version.getVersion());
             catalog.put(
                     version.getWorkflowCode() + "@" + version.getVersion(),
                     normalizeWorkflowDefinition(parseJsonObject(version.getDefinition()))
             );
         }
+        log.info("workflow.catalog.built publishedVisibleCount={} catalogSize={}", versions.size(), catalog.size());
         return catalog;
     }
 

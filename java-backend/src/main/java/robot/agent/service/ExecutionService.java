@@ -102,6 +102,14 @@ public class ExecutionService {
         String effectiveUserId = request.getUserId() == null || request.getUserId().isBlank()
                 ? session.getUserId()
                 : request.getUserId();
+        log.info(
+                "execution.session.resolved sessionId={} workspaceId={} originalUserId={} effectiveUserId={} currentExecutionId={}",
+                session.getId(),
+                session.getWorkspaceId(),
+                session.getUserId(),
+                effectiveUserId,
+                session.getCurrentExecutionId()
+        );
         CandidateActionResult candidateActionResult = handleIntentCandidateAction(session, request, effectiveUserId);
         if (candidateActionResult != null && candidateActionResult.response() != null) {
             return candidateActionResult.response();
@@ -110,6 +118,13 @@ public class ExecutionService {
             Execution existingExecution = executionRepository.findBySessionIdAndClientMessageId(session.getId(), request.getMessageId())
                     .orElse(null);
             if (existingExecution != null) {
+                log.info(
+                        "execution.idempotent.hit sessionId={} messageId={} existingExecutionId={} status={}",
+                        session.getId(),
+                        request.getMessageId(),
+                        existingExecution.getId(),
+                        existingExecution.getStatus()
+                );
                 return buildSendMessageResponse(existingExecution, null, null);
             }
         }
@@ -121,6 +136,14 @@ public class ExecutionService {
                 && !request.getWorkflowCode().isBlank()
                 && request.getWorkflowVersion() != null
                 && !request.getWorkflowVersion().isBlank());
+        log.info(
+                "execution.routing.prepare sessionId={} activeExecutionId={} activeStatus={} forcedDecision={} explicitWorkflow={}",
+                session.getId(),
+                activeExecution == null ? null : activeExecution.getId(),
+                activeExecution == null ? null : activeExecution.getStatus(),
+                forcedRoutingDecision != null,
+                explicitWorkflowExecution
+        );
         RoutingDecision routingDecision = forcedRoutingDecision != null
                 ? forcedRoutingDecision
                 : (explicitWorkflowExecution
@@ -144,6 +167,12 @@ public class ExecutionService {
         String requestedToolCode = confirmationService.resolveRequestedToolCode(
                 request.getRequestedToolCode(),
                 request.getContent()
+        );
+        log.info(
+                "execution.tool.resolve sessionId={} requestedToolCode={} rawRequestedToolCode={}",
+                session.getId(),
+                requestedToolCode,
+                request.getRequestedToolCode()
         );
 
         if (routingDecision.isSwitchRequired() && !Boolean.TRUE.equals(request.getConfirmSwitch())) {
@@ -180,6 +209,14 @@ public class ExecutionService {
             );
             return buildPermissionDeniedResponse(session, routingDecision, authorizationDecision, requestedToolCode);
         }
+        log.info(
+                "execution.permission.allowed sessionId={} userId={} workflowCode={} toolCode={} reason={}",
+                session.getId(),
+                effectiveUserId,
+                routingDecision.workflowCode(),
+                requestedToolCode,
+                authorizationDecision.reason()
+        );
 
         ConfirmationService.ConfirmationEvaluation confirmationEvaluation = confirmationService.evaluate(
                 session.getId(),
@@ -224,6 +261,12 @@ public class ExecutionService {
             );
             return buildConfirmationRequiredResponse(session, routingDecision, confirmationEvaluation);
         }
+        log.info(
+                "execution.confirmation.passed sessionId={} toolCode={} confirmationId={}",
+                session.getId(),
+                confirmationEvaluation.toolCode(),
+                confirmationEvaluation.confirmationId()
+        );
 
         EntryProtectionService.ProtectionDecision protectionDecision = entryProtectionService.evaluateExecutionStart(
                 effectiveUserId,
@@ -253,18 +296,49 @@ public class ExecutionService {
             );
             return buildProtectionResponse(session, routingDecision, protectionDecision, confirmationEvaluation.toolCode());
         }
+        log.info(
+                "execution.protection.allowed sessionId={} workflowCode={} toolCode={} status={}",
+                session.getId(),
+                routingDecision.workflowCode(),
+                confirmationEvaluation.toolCode(),
+                protectionDecision.status()
+        );
 
         if (routingDecision.isSwitchRequired() && activeExecution != null) {
+            log.info(
+                    "execution.switch.suspend.prepare sessionId={} activeExecutionId={} targetWorkflowCode={} targetWorkflowVersion={}",
+                    session.getId(),
+                    activeExecution.getId(),
+                    routingDecision.workflowCode(),
+                    routingDecision.workflowVersion()
+            );
             suspendForSwitch(session, activeExecution, routingDecision);
         }
 
         ExperimentAssignment experimentAssignment = assignExperiment(session.getId(), routingDecision.workflowCode());
+        log.info(
+                "execution.experiment.assigned sessionId={} workflowCode={} experimentId={} experimentGroup={}",
+                session.getId(),
+                routingDecision.workflowCode(),
+                experimentAssignment.experimentId(),
+                experimentAssignment.experimentGroup()
+        );
         WorkflowService.RuntimeExecutionBundle runtimeBundle = explicitWorkflowExecution
                 ? buildExplicitRuntimeExecutionBundle(routingDecision, request)
                 : workflowService.buildRuntimeExecutionBundle(
                         routingDecision.workflowCode(),
                         routingDecision.workflowVersion()
                 );
+        log.info(
+                "execution.runtime.bundle.ready sessionId={} workflowCode={} workflowVersion={} workflowCatalogSize={} providerCount={} modelRecordCount={} routingModelCode={}",
+                session.getId(),
+                routingDecision.workflowCode(),
+                routingDecision.workflowVersion(),
+                runtimeBundle.workflowCatalog().size(),
+                runtimeBundle.providerConfigs().size(),
+                runtimeBundle.modelRecords().size(),
+                runtimeBundle.routingModelCode()
+        );
 
         Execution execution = new Execution();
         execution.setId(UUID.randomUUID().toString());
@@ -287,9 +361,23 @@ public class ExecutionService {
         execution.setInputVariables(writeJson(inputVariables));
         execution.setCreatedAt(LocalDateTime.now());
         Execution saved = executionRepository.save(execution);
+        log.info(
+                "execution.persisted executionId={} sessionId={} status={} workflowCode={} workflowVersion={}",
+                saved.getId(),
+                session.getId(),
+                saved.getStatus(),
+                saved.getWorkflowCode(),
+                saved.getWorkflowVersion()
+        );
 
         storeIntentCandidateQueue(session, routingDecision.intentCandidateQueue());
         sessionService.updateCurrentExecutionId(session, saved.getId());
+        log.info(
+                "execution.session.current_updated sessionId={} executionId={} candidateQueueSize={}",
+                session.getId(),
+                saved.getId(),
+                routingDecision.intentCandidateQueue() == null ? 0 : routingDecision.intentCandidateQueue().size()
+        );
 
         ExecuteRequest executeRequest = new ExecuteRequest();
         executeRequest.setSessionId(session.getId());
@@ -535,10 +623,18 @@ public class ExecutionService {
         String sessionId = execution == null ? stringValue(payload.get("session_id")) : execution.getSessionId();
 
         if (eventType == null) {
+            log.debug("execution.event.skip_missing_type executionId={} payloadKeys={}", executionId, payload.keySet());
             return;
         }
 
-        log.debug("execution.event executionId={} sessionId={} eventType={} payloadKeys={}", executionId, sessionId, eventType, payload.keySet());
+        log.info(
+                "execution.event.received executionId={} sessionId={} eventType={} nodeId={} payloadKeys={}",
+                executionId,
+                sessionId,
+                eventType,
+                payload.get("node_id"),
+                payload.keySet()
+        );
 
         switch (eventType) {
             case "routing.decided":
@@ -638,6 +734,16 @@ public class ExecutionService {
             execution.setMetrics(writeJson(payload.get("metrics")));
         }
         executionRepository.save(execution);
+        log.info(
+                "execution.status.persisted executionId={} status={} terminal={} outputUpdated={} variablesUpdated={} metricsUpdated={} hasError={}",
+                executionId,
+                status,
+                status.isTerminal(),
+                payload.get("output") != null,
+                payload.get("variables") != null,
+                payload.get("metrics") != null,
+                error != null
+        );
     }
 
     private void updateExecutionNode(String executionId, String eventType, Map<String, Object> payload) {
@@ -650,29 +756,39 @@ public class ExecutionService {
             executionRepository.save(execution);
         }
 
-        ExecutionNodeLog log = new ExecutionNodeLog();
-        log.setExecutionId(executionId);
-        log.setNodeId(String.valueOf(payload.getOrDefault("node_id", "")));
-        log.setNodeType(String.valueOf(payload.getOrDefault("node_type", "")));
+        ExecutionNodeLog nodeLog = new ExecutionNodeLog();
+        nodeLog.setExecutionId(executionId);
+        nodeLog.setNodeId(String.valueOf(payload.getOrDefault("node_id", "")));
+        nodeLog.setNodeType(String.valueOf(payload.getOrDefault("node_type", "")));
         if ("node.started".equals(eventType)) {
-            log.setStatus("running");
-            log.setStartedAt(LocalDateTime.now());
+            nodeLog.setStatus("running");
+            nodeLog.setStartedAt(LocalDateTime.now());
         } else if ("node.skipped".equals(eventType)) {
-            log.setStatus("skipped");
-            log.setOutput(writeJson(payload));
-            log.setCompletedAt(LocalDateTime.now());
+            nodeLog.setStatus("skipped");
+            nodeLog.setOutput(writeJson(payload));
+            nodeLog.setCompletedAt(LocalDateTime.now());
         } else if ("node.completed".equals(eventType)) {
-            log.setStatus("completed");
-            log.setOutput(writeJson(payload.get("output")));
-            log.setMetrics(writeJson(payload.get("metrics")));
-            log.setCompletedAt(LocalDateTime.now());
+            nodeLog.setStatus("completed");
+            nodeLog.setOutput(writeJson(payload.get("output")));
+            nodeLog.setMetrics(writeJson(payload.get("metrics")));
+            nodeLog.setCompletedAt(LocalDateTime.now());
         } else if ("node.failed".equals(eventType)) {
-            log.setStatus("failed");
-            log.setError(payload.getOrDefault("error", "").toString());
-            log.setCompletedAt(LocalDateTime.now());
+            nodeLog.setStatus("failed");
+            nodeLog.setError(payload.getOrDefault("error", "").toString());
+            nodeLog.setCompletedAt(LocalDateTime.now());
         }
-        log.setInput(writeJson(payload.get("input")));
-        executionNodeLogRepository.save(log);
+        nodeLog.setInput(writeJson(payload.get("input")));
+        executionNodeLogRepository.save(nodeLog);
+        log.info(
+                "execution.node.persisted executionId={} eventType={} nodeId={} nodeType={} status={} outputPresent={} metricsPresent={}",
+                executionId,
+                eventType,
+                nodeLog.getNodeId(),
+                nodeLog.getNodeType(),
+                nodeLog.getStatus(),
+                payload.get("output") != null,
+                payload.get("metrics") != null
+        );
     }
 
     private Execution resolveActiveExecution(Session session) {

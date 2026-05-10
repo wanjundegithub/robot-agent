@@ -2,6 +2,8 @@ package robot.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +43,7 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Transactional
 public class CapabilityService {
 
+    private static final Logger log = LoggerFactory.getLogger(CapabilityService.class);
     private static final Duration API_TEST_TIMEOUT = Duration.ofSeconds(5);
     private static final EnumSet<CapabilityType> CURRENTLY_SUPPORTED_CAPABILITY_TYPES = EnumSet.of(CapabilityType.API);
 
@@ -129,10 +132,19 @@ public class CapabilityService {
 
     public Map<String, Object> saveCapabilityDraft(Long groupId, String existingCapabilityCode, Map<String, Object> payload) {
         CapabilityGroup group = requireGroup(groupId);
+        log.info(
+                "capability.draft.save.start groupId={} groupCode={} existingCapabilityCode={} payloadKeys={}",
+                groupId,
+                group.getGroupCode(),
+                existingCapabilityCode,
+                payload == null ? java.util.Set.of() : payload.keySet()
+        );
         Map<String, Object> validation = validateCapabilityDraft(groupId, payload);
         if (!Boolean.TRUE.equals(validation.get("valid"))) {
+            log.warn("capability.draft.validation.failed groupId={} issues={}", groupId, validation.get("issues"));
             throw new ResponseStatusException(BAD_REQUEST, firstNonBlank(resolveValidationErrorMessage(validation), "能力草稿校验失败"));
         }
+        log.info("capability.draft.validation.passed groupId={} issueCount=0", groupId);
 
         String groupCode = group.getGroupCode();
         String capabilityCode = existingCapabilityCode != null
@@ -154,7 +166,17 @@ public class CapabilityService {
             item.setCreatedAt(LocalDateTime.now());
         }
         item.setUpdatedAt(LocalDateTime.now());
-        return toVersionSummary(groupId, itemRepository.save(item), item.getDraftVersion(), "DRAFT");
+        CapabilityItem saved = itemRepository.save(item);
+        log.info(
+                "capability.draft.persisted groupId={} groupCode={} capabilityCode={} capabilityType={} draftVersion={} authConfigId={}",
+                groupId,
+                groupCode,
+                saved.getCapabilityCode(),
+                saved.getCapabilityType(),
+                saved.getDraftVersion(),
+                saved.getAuthConfigId()
+        );
+        return toVersionSummary(groupId, saved, saved.getDraftVersion(), "DRAFT");
     }
 
     public Map<String, Object> publishCapability(Long groupId, String capabilityCode) {
@@ -164,10 +186,25 @@ public class CapabilityService {
             throw new ResponseStatusException(BAD_REQUEST, "请先保存草稿后再发布能力");
         }
         String version = createVersion();
+        log.info(
+                "capability.publish.prepare groupId={} capabilityCode={} draftVersion={} publishVersion={}",
+                groupId,
+                capabilityCode,
+                item.getDraftVersion(),
+                version
+        );
         item.setPublishedVersion(version);
         item.setStatus("PUBLISHED");
         item.setUpdatedAt(LocalDateTime.now());
-        return toVersionSummary(groupId, itemRepository.save(item), version, "PUBLISHED");
+        CapabilityItem saved = itemRepository.save(item);
+        log.info(
+                "capability.publish.persisted groupId={} capabilityCode={} publishedVersion={} status={}",
+                groupId,
+                saved.getCapabilityCode(),
+                saved.getPublishedVersion(),
+                saved.getStatus()
+        );
+        return toVersionSummary(groupId, saved, version, "PUBLISHED");
     }
 
     public void deleteCapability(Long groupId, String capabilityCode) {
@@ -261,6 +298,13 @@ public class CapabilityService {
         CapabilityType type = parseCapabilityType(payload.get("capabilityType"));
         Map<String, Object> definition = parseObject(optionalString(payload.get("definitionJson")));
         List<Map<String, Object>> issues = new ArrayList<>();
+        log.info(
+                "capability.validation.start groupId={} groupCode={} capabilityType={} definitionKeys={}",
+                groupId,
+                group.getGroupCode(),
+                type,
+                definition.keySet()
+        );
 
         if (!isCapabilityTypeSupported(type)) {
             issues.add(issue("capabilityType", "能力中心当前仅支持 API 能力"));
@@ -310,17 +354,39 @@ public class CapabilityService {
         result.put("valid", issues.isEmpty());
         result.put("message", issues.isEmpty() ? "校验通过" : "校验失败");
         result.put("issues", issues);
+        log.info(
+                "capability.validation.done groupId={} capabilityType={} valid={} issueCount={}",
+                groupId,
+                type,
+                issues.isEmpty(),
+                issues.size()
+        );
         return result;
     }
 
     public Map<String, Object> testCapability(Long groupId, String capabilityCode, Map<String, Object> payload) {
         CapabilityGroup group = requireGroup(groupId);
         CapabilityItem item = requireItem(groupId, capabilityCode);
+        log.info(
+                "capability.test.start groupId={} groupCode={} capabilityCode={} capabilityType={} payloadKeys={}",
+                groupId,
+                group.getGroupCode(),
+                capabilityCode,
+                item.getCapabilityType(),
+                payload == null ? java.util.Set.of() : payload.keySet()
+        );
         Map<String, Object> validationPayload = new LinkedHashMap<>();
         validationPayload.put("capabilityType", item.getCapabilityType().name());
         validationPayload.put("definitionJson", firstNonBlank(item.getDefinitionJson(), "{}"));
         validationPayload.put("authConfigId", item.getAuthConfigId());
         Map<String, Object> validation = validateCapabilityDraft(groupId, validationPayload);
+        log.info(
+                "capability.test.validation_result groupId={} capabilityCode={} valid={} issueCount={}",
+                groupId,
+                capabilityCode,
+                validation.get("valid"),
+                validation.get("issues") instanceof List<?> issues ? issues.size() : 0
+        );
         Map<String, Object> result;
         if (item.getCapabilityType() == CapabilityType.API) {
             CapabilityAuthConfig authConfig = requireAuthConfig(group, item.getAuthConfigId());
@@ -332,6 +398,14 @@ public class CapabilityService {
         item.setLastTestTime(LocalDateTime.now());
         itemRepository.save(item);
         persistTestRecord(group.getGroupCode(), item, result);
+        log.info(
+                "capability.test.done groupId={} capabilityCode={} success={} status={} durationMs={}",
+                groupId,
+                capabilityCode,
+                result.get("success"),
+                item.getLastTestStatus(),
+                result.get("durationMs")
+        );
         return result;
     }
 
@@ -534,6 +608,14 @@ public class CapabilityService {
 
         long startedAt = System.nanoTime();
         try {
+            log.info(
+                    "capability.api_test.request capabilityCode={} method={} url={} headerCount={} authConfigId={}",
+                    item.getCapabilityCode(),
+                    method,
+                    safeUrlForLog(url),
+                    headers.size(),
+                    authConfig == null ? null : authConfig.getId()
+            );
             HttpRequest request = buildApiTestRequest(url, method, headers);
             HttpResponse<String> response = HttpClient.newBuilder()
                     .connectTimeout(API_TEST_TIMEOUT)
@@ -552,6 +634,14 @@ public class CapabilityService {
             result.put("errorMessage", success ? null : "认证后的接口请求返回非成功状态: " + response.statusCode());
             result.put("durationMs", Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
             result.put("testedAt", LocalDateTime.now());
+            log.info(
+                    "capability.api_test.response capabilityCode={} statusCode={} success={} durationMs={} responseLength={}",
+                    item.getCapabilityCode(),
+                    response.statusCode(),
+                    success,
+                    result.get("durationMs"),
+                    response.body() == null ? 0 : response.body().length()
+            );
             return result;
         } catch (Exception exception) {
             Map<String, Object> result = new LinkedHashMap<>();
@@ -565,8 +655,25 @@ public class CapabilityService {
             result.put("errorMessage", firstNonBlank(exception.getMessage(), "API 请求失败"));
             result.put("durationMs", Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
             result.put("testedAt", LocalDateTime.now());
+            log.warn(
+                    "capability.api_test.failed capabilityCode={} method={} url={} durationMs={} errorType={} message={}",
+                    item.getCapabilityCode(),
+                    method,
+                    safeUrlForLog(url),
+                    result.get("durationMs"),
+                    exception.getClass().getSimpleName(),
+                    firstNonBlank(exception.getMessage(), "API request failed")
+            );
             return result;
         }
+    }
+
+    private String safeUrlForLog(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        int queryIndex = url.indexOf('?');
+        return queryIndex < 0 ? url : url.substring(0, queryIndex) + "?***";
     }
 
     private HttpRequest buildApiTestRequest(String url, String method, Map<String, String> headers) {

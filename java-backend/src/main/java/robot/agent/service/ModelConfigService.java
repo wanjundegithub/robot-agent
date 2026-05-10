@@ -3,6 +3,8 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -45,6 +47,8 @@ import java.util.UUID;
 @Service
 @Transactional(readOnly = true)
 public class ModelConfigService {
+
+    private static final Logger log = LoggerFactory.getLogger(ModelConfigService.class);
 
     private final LlmProviderConfigRepository providerRepository;
     private final LlmModelRecordRepository modelRecordRepository;
@@ -119,6 +123,12 @@ public class ModelConfigService {
         List<LlmModelRecord> modelRecords = modelCodes.isEmpty()
                 ? List.of()
                 : modelRecordRepository.findByModelCodeIn(modelCodes);
+        log.info(
+                "model.runtime.collect routingModelCode={} requestedModelCodes={} loadedModelCount={}",
+                routingModelCode,
+                modelCodes,
+                modelRecords.size()
+        );
         Map<String, LlmProviderConfig> providersByCode = new LinkedHashMap<>();
         for (LlmModelRecord modelRecord : modelRecords) {
             providerRepository.findByProviderCode(modelRecord.getProviderCode())
@@ -133,6 +143,12 @@ public class ModelConfigService {
                 .sorted(Comparator.comparing(LlmModelRecord::getModelCode, String.CASE_INSENSITIVE_ORDER))
                 .map(modelRecord -> modelRecordToRuntimeMap(modelRecord, providersByCode.get(modelRecord.getProviderCode())))
                 .toList();
+        log.info(
+                "model.runtime.bundle.ready providerCount={} modelRecordCount={} providerCodes={}",
+                providerConfigs.size(),
+                modelRecordMaps.size(),
+                providersByCode.keySet()
+        );
         return new RuntimeModelBundle(providerConfigs, modelRecordMaps);
     }
 
@@ -187,12 +203,28 @@ public class ModelConfigService {
         if (providerRepository.findByProviderCode(providerCode).isPresent()) {
             throw badRequest("Provider already exists: " + providerCode);
         }
+        log.info(
+                "model.provider.save.start userId={} providerCode={} providerType={} baseUrl={} enabled={}",
+                userId,
+                providerCode,
+                request.getProviderType(),
+                request.getBaseUrl(),
+                request.getEnabled()
+        );
         LlmProviderConfig provider = new LlmProviderConfig();
         applyProviderRequest(provider, request, true);
         provider.setCreatedBy(normalizeUserId(userId));
         provider.setCreatedAt(LocalDateTime.now());
         provider.setUpdatedAt(LocalDateTime.now());
         LlmProviderConfig saved = providerRepository.save(provider);
+        log.info(
+                "model.provider.save.persisted providerCode={} id={} type={} secretMode={} enabled={}",
+                saved.getProviderCode(),
+                saved.getId(),
+                saved.getProviderType(),
+                secretMode(saved.getApiKeySecretRef()),
+                saved.isEnabled()
+        );
         auditService.logAction(1L, normalizeUserId(userId), "model.provider.create", "llm_provider_config", providerCode, null, 200);
         return providerToResponseMap(saved);
     }
@@ -227,7 +259,15 @@ public class ModelConfigService {
         LlmProviderConfig provider = providerRepository.findByProviderCode(providerCode)
                 .orElseThrow(() -> badRequest("Provider not found: " + providerCode));
         String modelCode = resolveProviderValidationModelCode(providerCode, request);
+        log.info(
+                "model.provider.validate.prepare providerCode={} providerType={} modelCode={} customBody={}",
+                providerCode,
+                provider.getProviderType(),
+                modelCode,
+                request.getRequestBody() != null && !request.getRequestBody().isEmpty()
+        );
         int statusCode = unifiedModelService.validateProviderConnection(provider, modelCode, request.getRequestBody());
+        log.info("model.provider.validate.done providerCode={} modelCode={} statusCode={}", providerCode, modelCode, statusCode);
         return validationResponse(true, providerCode, modelCode, statusCode);
     }
 
@@ -255,7 +295,16 @@ public class ModelConfigService {
         modelRecord.setCreatedAt(LocalDateTime.now());
         modelRecord.setUpdatedAt(LocalDateTime.now());
         LlmModelRecord saved = modelRecordRepository.save(modelRecord);
+        log.info(
+                "model.record.save.persisted modelCode={} providerCode={} upstreamModelCode={} enabled={} defaultOptionsLength={}",
+                saved.getModelCode(),
+                saved.getProviderCode(),
+                saved.getUpstreamModelCode(),
+                saved.isEnabled(),
+                saved.getDefaultOptionsJson() == null ? 0 : saved.getDefaultOptionsJson().length()
+        );
         upsertInternalProvider(saved, userId);
+        log.info("model.record.internal_provider.synced modelCode={} providerCode={}", saved.getModelCode(), saved.getProviderCode());
         auditService.logAction(1L, normalizeUserId(userId), "model.record.create", "llm_model_record", modelCode, null, 200);
         return modelRecordToAdminResponseMap(saved, findProviderSnapshot(saved));
     }
@@ -292,9 +341,16 @@ public class ModelConfigService {
         LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
                 .orElseThrow(() -> badRequest("Model record not found: " + modelCode));
         LlmProviderConfig provider = requireProvider(modelRecord.getProviderCode());
+        String upstreamModelCode = firstNonBlank(modelRecord.getUpstreamModelCode(), modelRecord.getModelCode());
+        log.info(
+                "model.record.validate.prepare modelCode={} providerCode={} upstreamModelCode={}",
+                modelRecord.getModelCode(),
+                provider.getProviderCode(),
+                upstreamModelCode
+        );
         int statusCode = unifiedModelService.validateProviderConnection(
                 provider,
-                firstNonBlank(modelRecord.getUpstreamModelCode(), modelRecord.getModelCode()),
+                upstreamModelCode,
                 Map.of()
         );
         return validationResponse(true, provider.getProviderCode(), modelRecord.getModelCode(), statusCode);
@@ -306,6 +362,13 @@ public class ModelConfigService {
         if (messages == null || messages.isEmpty()) {
             messages = List.of(Map.of("role", "user", "content", firstNonBlank(request.getMessage(), "ping")));
         }
+        log.info(
+                "model.record.test.prepare modelCode={} messageCount={} hasOptions={} hasSystemPrompt={}",
+                modelCode,
+                messages.size(),
+                request.getOptions() != null && !request.getOptions().isEmpty(),
+                request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()
+        );
         UnifiedModelResult result = unifiedModelService.invokeChat(new UnifiedModelRequest(
                 modelCode,
                 messages,
@@ -321,6 +384,13 @@ public class ModelConfigService {
         response.put("upstream_model_code", result.upstreamModelCode());
         response.put("answer", result.text());
         response.put("usage", result.usage());
+        log.info(
+                "model.record.test.done modelCode={} providerCode={} answerLength={} usageKeys={}",
+                result.modelCode(),
+                result.providerCode(),
+                result.text() == null ? 0 : result.text().length(),
+                result.usage() == null ? java.util.Set.of() : result.usage().keySet()
+        );
         return response;
     }
 
