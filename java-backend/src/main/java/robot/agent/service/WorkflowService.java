@@ -254,13 +254,14 @@ public class WorkflowService {
         WorkflowVersion version = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, request.getVersion())
                 .orElseGet(WorkflowVersion::new);
         String normalizedDefinitionJson = normalizeDefinitionJsonForPersist(request.getDefinition());
+        String resolvedEntryRuleJson = resolveEntryRuleForPersist(request.getEntryRule(), workflowCode, workflow.getName());
         version.setWorkflowCode(workflowCode);
         version.setVersion(request.getVersion());
         version.setDefinition(normalizedDefinitionJson);
-        version.setEntryRule(request.getEntryRule());
+        version.setEntryRule(resolvedEntryRuleJson);
         version.setEditorMeta(request.getEditorMeta());
         version.setConfig(request.getConfig());
-        version.setWorkflowSnapshot(resolveWorkflowSnapshotForPersist(workflow, request, normalizedDefinitionJson));
+        version.setWorkflowSnapshot(resolveWorkflowSnapshotForPersist(workflow, request, normalizedDefinitionJson, resolvedEntryRuleJson));
         version.setStatus(WorkflowVersionStatus.DRAFT);
         version.setCreatedBy(userId);
         if (version.getCreatedAt() == null) {
@@ -559,7 +560,7 @@ public class WorkflowService {
             throw new RuntimeException("No workflow versions available");
         }
 
-        String normalizedContent = content == null ? "" : content.toLowerCase(Locale.ROOT);
+        String normalizedContent = normalizeText(content);
         List<Map<String, Object>> workflowDefinitions = versions.stream()
                 .map(version -> attachWorkflowConfig(
                         normalizeWorkflowDefinition(parseJsonObject(version.getDefinition())),
@@ -568,73 +569,418 @@ public class WorkflowService {
                 .toList();
         String routingModelCode = modelConfigService.resolveRoutingModelCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingModelCode);
-        ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingModelCode, runtimeBundle);
-        List<WorkflowScore> scoredVersions = versions.stream()
-                .map(version -> new WorkflowScore(
-                        version,
-                        scoreEntryRule(version.getEntryRule(), normalizedContent),
-                        scoreModelMatch(version, modelIntent),
-                        extractPriority(version.getEntryRule())
-                ))
-                .sorted(Comparator.comparingInt(WorkflowScore::totalScore).reversed())
-                .toList();
-
-        WorkflowScore best = scoredVersions.get(0);
-        List<String> candidates = scoredVersions.stream()
-                .limit(3)
-                .map(score -> score.version().getWorkflowCode())
-                .distinct()
-                .toList();
-
-        String decision = "start";
-        String reason = best.entryRuleScore() > 0
-                ? "entry_rule_and_model"
-                : (modelIntent.workflowCode().equals(best.version().getWorkflowCode()) ? "model_fallback" : "default_fallback");
-        double confidence = best.totalScore() > 0 ? modelIntent.confidence() : 0.55d;
-        DynamicThreshold dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
-
-        if (best.entryRuleScore() == 0 && modelIntent.confidence() < 0.6d) {
-            WorkflowVersion fallbackVersion = versions.stream()
-                    .filter(version -> "general_query".equals(version.getWorkflowCode()))
-                    .findFirst()
-                    .orElse(best.version());
-            best = new WorkflowScore(fallbackVersion, 0, 0, extractPriority(fallbackVersion.getEntryRule()));
-            decision = "fallback";
-            reason = "low_confidence_fallback";
-            confidence = Math.max(modelIntent.confidence(), 0.55d);
-            dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
-        } else if (!dynamicThreshold.accepted()) {
-            WorkflowVersion fallbackVersion = versions.stream()
-                    .filter(version -> "general_query".equals(version.getWorkflowCode()))
-                    .findFirst()
-                    .orElse(best.version());
-            best = new WorkflowScore(fallbackVersion, 0, 0, extractPriority(fallbackVersion.getEntryRule()));
-            decision = "fallback";
-            reason = "dynamic_threshold_fallback";
-            confidence = Math.max(confidence, 0.55d);
-            dynamicThreshold = resolveDynamicThreshold(best.version().getWorkflowCode(), modelIntent.intentCode(), confidence, normalizedContent);
+        List<RoutingDecision.IntentCandidate> regexCandidates = collectRegexCandidates(versions, normalizedContent);
+        if (!regexCandidates.isEmpty()) {
+            return buildAcceptedRoutingDecision(regexCandidates, versions, activeExecution, "regex_match", 1.0d, "regex");
         }
 
+        List<RoutingDecision.IntentCandidate> ragCandidates = collectRagCandidates(versions, normalizedContent);
+        if (!ragCandidates.isEmpty() && ragCandidates.get(0).confidence() >= ragAcceptThreshold()) {
+            return buildAcceptedRoutingDecision(
+                    ragCandidates,
+                    versions,
+                    activeExecution,
+                    "rag_match",
+                    ragAcceptThreshold(),
+                    "rag_accept_threshold"
+            );
+        }
+
+        ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingModelCode, runtimeBundle, ragCandidates);
+        return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution);
+    }
+
+    private RoutingDecision buildAcceptedRoutingDecision(
+            List<RoutingDecision.IntentCandidate> candidates,
+            List<WorkflowVersion> versions,
+            Execution activeExecution,
+            String reason,
+            double threshold,
+            String thresholdSource
+    ) {
+        RoutingDecision.IntentCandidate primary = candidates.get(0);
+        WorkflowVersion selected = selectWorkflowVersion(versions, primary.targetCode());
+        String decision = "start";
+        String finalReason = reason;
         if (activeExecution != null
                 && !activeExecution.getStatus().isTerminal()
                 && activeExecution.getStatus() != ExecutionStatus.SUSPENDED
-                && !activeExecution.getWorkflowCode().equals(best.version().getWorkflowCode())
-                && dynamicThreshold.accepted()) {
+                && selected != null
+                && !activeExecution.getWorkflowCode().equals(selected.getWorkflowCode())) {
             decision = "switch_required";
-            reason = "active_execution_conflict";
+            finalReason = "active_execution_conflict";
         }
-
         return new RoutingDecision(
                 decision,
-                best.version().getWorkflowCode(),
-                best.version().getVersion(),
-                confidence,
-                dynamicThreshold.threshold(),
-                dynamicThreshold.thresholdSource(),
-                reason,
-                candidates,
-                best.priority()
+                selected == null ? primary.targetCode() : selected.getWorkflowCode(),
+                selected == null ? null : selected.getVersion(),
+                primary.confidence(),
+                threshold,
+                thresholdSource,
+                finalReason,
+                topCandidateWorkflowCodes(candidates, 3),
+                selected == null ? 0 : extractPriority(selected.getEntryRule()),
+                primary.intentCode(),
+                primary.targetType(),
+                primary.targetCode(),
+                null,
+                secondaryCandidates(candidates)
         );
+    }
+
+    private RoutingDecision buildLlmRoutingDecision(
+            ModelIntent modelIntent,
+            List<RoutingDecision.IntentCandidate> ragCandidates,
+            List<WorkflowVersion> versions,
+            Execution activeExecution
+    ) {
+        if (!modelIntent.matched()) {
+            return new RoutingDecision(
+                    "clarification_required",
+                    null,
+                    null,
+                    Math.max(modelIntent.confidence(), 0.0d),
+                    llmAcceptThreshold(),
+                    "llm_accept_threshold",
+                    "llm_no_match",
+                    topCandidateWorkflowCodes(ragCandidates, 3),
+                    0,
+                    null,
+                    modelIntent.targetType(),
+                    null,
+                    defaultClarificationQuestion(modelIntent.clarificationQuestion()),
+                    ragCandidates
+            );
+        }
+
+        RoutingDecision.IntentCandidate llmPrimary = new RoutingDecision.IntentCandidate(
+                firstNonBlank(modelIntent.intentCode(), modelIntent.workflowCode()),
+                firstNonBlank(modelIntent.targetType(), "workflow"),
+                modelIntent.workflowCode(),
+                modelIntent.confidence(),
+                "llm",
+                firstNonBlank(modelIntent.reason(), "llm_match")
+        );
+
+        List<RoutingDecision.IntentCandidate> mergedCandidates = new ArrayList<>();
+        mergedCandidates.add(llmPrimary);
+        for (RoutingDecision.IntentCandidate candidate : ragCandidates) {
+            if (!Objects.equals(candidate.targetCode(), llmPrimary.targetCode())) {
+                mergedCandidates.add(candidate);
+            }
+        }
+        return buildAcceptedRoutingDecision(
+                mergedCandidates,
+                versions,
+                activeExecution,
+                "llm_match",
+                llmAcceptThreshold(),
+                "llm_accept_threshold"
+        );
+    }
+
+    private List<RoutingDecision.IntentCandidate> collectRegexCandidates(
+            List<WorkflowVersion> versions,
+            String normalizedContent
+    ) {
+        if (normalizedContent.isBlank()) {
+            return List.of();
+        }
+        List<RegexCandidate> regexCandidates = new ArrayList<>();
+        for (WorkflowVersion version : versions) {
+            try {
+                JsonNode entryRule = readJsonObject(version.getEntryRule());
+                List<String> intentCodes = readStringArray(entryRule.path("intent_codes"));
+                List<String> keywords = readStringArray(entryRule.path("keywords"));
+                List<String> regexPatterns = readStringArray(entryRule.path("regex_patterns"));
+                List<String> evidence = new ArrayList<>();
+                for (String keyword : keywords) {
+                    if (!keyword.isBlank() && normalizedContent.contains(normalizeText(keyword))) {
+                        evidence.add("keyword:" + keyword);
+                    }
+                }
+                for (String intentCode : intentCodes) {
+                    if (!intentCode.isBlank() && normalizedContent.contains(normalizeText(intentCode))) {
+                        evidence.add("intent_code:" + intentCode);
+                    }
+                }
+                for (String regexPattern : regexPatterns) {
+                    if (regexPattern == null || regexPattern.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        if (java.util.regex.Pattern.compile(regexPattern, java.util.regex.Pattern.CASE_INSENSITIVE)
+                                .matcher(normalizedContent)
+                                .find()) {
+                            evidence.add("regex:" + regexPattern);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (!evidence.isEmpty()) {
+                    String intentCode = intentCodes.isEmpty() ? version.getWorkflowCode() : intentCodes.get(0);
+                    RoutingDecision.IntentCandidate candidate = new RoutingDecision.IntentCandidate(
+                            intentCode,
+                            "workflow",
+                            version.getWorkflowCode(),
+                            1.0d,
+                            "regex",
+                            String.join("; ", evidence)
+                    );
+                    regexCandidates.add(new RegexCandidate(candidate, evidence.size(), extractPriority(version.getEntryRule())));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return regexCandidates.stream()
+                .sorted(Comparator.comparingInt(RegexCandidate::evidenceCount).reversed()
+                        .thenComparing(Comparator.comparingInt(RegexCandidate::priority).reversed())
+                        .thenComparing(item -> item.candidate().targetCode()))
+                .map(RegexCandidate::candidate)
+                .collect(Collectors.toMap(
+                        RoutingDecision.IntentCandidate::targetCode,
+                        candidate -> candidate,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ))
+                .values()
+                .stream()
+                .toList();
+    }
+
+    private List<RoutingDecision.IntentCandidate> collectRagCandidates(
+            List<WorkflowVersion> versions,
+            String normalizedContent
+    ) {
+        if (normalizedContent.isBlank()) {
+            return List.of();
+        }
+        Set<String> messageTokens = tokenize(normalizedContent);
+        if (messageTokens.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Workflow> workflowsByCode = new HashMap<>();
+        for (WorkflowVersion version : versions) {
+            String workflowCode = version.getWorkflowCode();
+            if (workflowCode == null || workflowsByCode.containsKey(workflowCode)) {
+                continue;
+            }
+            Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode).orElse(null);
+            workflowsByCode.put(workflowCode, workflow);
+        }
+        List<RagCandidate> scored = new ArrayList<>();
+        for (WorkflowVersion version : versions) {
+            Workflow workflow = workflowsByCode.get(version.getWorkflowCode());
+            List<String> phrases = collectRagPhrases(version, workflow);
+            if (phrases.isEmpty()) {
+                continue;
+            }
+            Set<String> phraseTokens = new LinkedHashSet<>();
+            for (String phrase : phrases) {
+                phraseTokens.addAll(tokenize(phrase));
+            }
+            if (phraseTokens.isEmpty()) {
+                continue;
+            }
+            Set<String> overlap = new LinkedHashSet<>(messageTokens);
+            overlap.retainAll(phraseTokens);
+            int phraseHits = 0;
+            String bestEvidence = null;
+            for (String phrase : phrases) {
+                String normalizedPhrase = normalizeText(phrase);
+                if (!normalizedPhrase.isBlank() && normalizedContent.contains(normalizedPhrase)) {
+                    phraseHits++;
+                    if (bestEvidence == null) {
+                        bestEvidence = phrase;
+                    }
+                }
+            }
+            double overlapScore = (double) overlap.size() / (double) messageTokens.size();
+            double phraseScore = phrases.isEmpty() ? 0.0d : (double) phraseHits / (double) phrases.size();
+            double confidence = Math.max(0.0d, Math.min(1.0d, overlapScore * 0.8d + phraseScore * 0.2d));
+            if (bestEvidence != null) {
+                String normalizedEvidence = normalizeText(bestEvidence);
+                if (!normalizedEvidence.isBlank()
+                        && normalizedEvidence.length() >= 4
+                        && normalizedContent.contains(normalizedEvidence)) {
+                    confidence = Math.min(1.0d, confidence + 0.2d);
+                }
+            }
+            if (confidence <= 0.0d) {
+                continue;
+            }
+            JsonNode entryRule = parseEntryRuleJson(version.getEntryRule());
+            List<String> intentCodes = readStringArray(entryRule.path("intent_codes"));
+            RoutingDecision.IntentCandidate candidate = new RoutingDecision.IntentCandidate(
+                    intentCodes.isEmpty() ? version.getWorkflowCode() : intentCodes.get(0),
+                    "workflow",
+                    version.getWorkflowCode(),
+                    confidence,
+                    "rag",
+                    firstNonBlank(bestEvidence, overlap.isEmpty() ? null : String.join(",", overlap))
+            );
+            scored.add(new RagCandidate(candidate, extractPriority(version.getEntryRule())));
+        }
+        return scored.stream()
+                .sorted(Comparator.comparingDouble((RagCandidate item) -> item.candidate().confidence()).reversed()
+                        .thenComparing(Comparator.comparingInt(RagCandidate::priority).reversed())
+                        .thenComparing(item -> item.candidate().targetCode()))
+                .map(RagCandidate::candidate)
+                .collect(Collectors.toMap(
+                        RoutingDecision.IntentCandidate::targetCode,
+                        candidate -> candidate,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ))
+                .values()
+                .stream()
+                .limit(ragTopK())
+                .toList();
+    }
+
+    private JsonNode parseEntryRuleJson(String entryRuleJson) {
+        try {
+            return readJsonObject(entryRuleJson);
+        } catch (Exception ignored) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private List<String> collectRagPhrases(WorkflowVersion version, Workflow workflow) {
+        List<String> phrases = new ArrayList<>();
+        phrases.add(version.getWorkflowCode());
+        if (workflow != null) {
+            if (workflow.getName() != null) {
+                phrases.add(workflow.getName());
+            }
+            if (workflow.getDescription() != null) {
+                phrases.add(workflow.getDescription());
+            }
+        }
+        JsonNode entryRule = parseEntryRuleJson(version.getEntryRule());
+        phrases.addAll(readStringArray(entryRule.path("intent_codes")));
+        phrases.addAll(readStringArray(entryRule.path("keywords")));
+        phrases.addAll(readStringArray(entryRule.path("examples")));
+        return phrases.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private List<String> readStringArray(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item != null && item.isTextual()) {
+                String value = item.asText("");
+                if (!value.isBlank()) {
+                    values.add(value.trim());
+                }
+            }
+        }
+        return values;
+    }
+
+    private Set<String> tokenize(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        String normalized = value.toLowerCase(Locale.ROOT);
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        Arrays.stream(normalized.split("[^\\p{IsAlphabetic}\\p{IsDigit}\\u4e00-\\u9fff]+"))
+                .map(String::trim)
+                .filter(token -> !token.isBlank())
+                .forEach(tokens::add);
+        StringBuilder cjkBlock = new StringBuilder();
+        for (int index = 0; index < normalized.length(); index++) {
+            char ch = normalized.charAt(index);
+            if (isCjk(ch)) {
+                cjkBlock.append(ch);
+            } else if (!cjkBlock.isEmpty()) {
+                collectCjkTokens(cjkBlock.toString(), tokens);
+                cjkBlock.setLength(0);
+            }
+        }
+        if (!cjkBlock.isEmpty()) {
+            collectCjkTokens(cjkBlock.toString(), tokens);
+        }
+        return tokens;
+    }
+
+    private void collectCjkTokens(String text, Set<String> tokens) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        for (int index = 0; index < text.length(); index++) {
+            tokens.add(String.valueOf(text.charAt(index)));
+            if (index + 1 < text.length()) {
+                tokens.add(text.substring(index, index + 2));
+            }
+        }
+    }
+
+    private boolean isCjk(char ch) {
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+        return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS;
+    }
+
+    private String normalizeText(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT).trim();
+    }
+
+    private int ragTopK() {
+        return 5;
+    }
+
+    private double ragAcceptThreshold() {
+        return 0.80d;
+    }
+
+    private double llmAcceptThreshold() {
+        return 0.70d;
+    }
+
+    private String defaultClarificationQuestion(String question) {
+        return firstNonBlank(question, "我还不确定你想办理什么业务，可以再具体说明一下吗？");
+    }
+
+    private List<String> topCandidateWorkflowCodes(List<RoutingDecision.IntentCandidate> candidates, int limit) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        return candidates.stream()
+                .map(RoutingDecision.IntentCandidate::targetCode)
+                .filter(Objects::nonNull)
+                .distinct()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    private List<RoutingDecision.IntentCandidate> secondaryCandidates(List<RoutingDecision.IntentCandidate> candidates) {
+        if (candidates == null || candidates.size() <= 1) {
+            return List.of();
+        }
+        return candidates.subList(1, candidates.size())
+                .stream()
+                .filter(candidate -> candidate != null && candidate.targetCode() != null)
+                .toList();
+    }
+
+    private WorkflowVersion selectWorkflowVersion(List<WorkflowVersion> versions, String workflowCode) {
+        return versions.stream()
+                .filter(version -> Objects.equals(version.getWorkflowCode(), workflowCode))
+                .findFirst()
+                .orElse(null);
     }
 
     private List<WorkflowVersion> resolveCurrentWorkflowVersions() {
@@ -777,17 +1123,25 @@ public class WorkflowService {
             String normalizedContent,
             List<WorkflowVersion> versions,
             String routingModelCode,
-            ModelConfigService.RuntimeModelBundle runtimeBundle
+            ModelConfigService.RuntimeModelBundle runtimeBundle,
+            List<RoutingDecision.IntentCandidate> ragCandidates
     ) {
         if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelRecords().isEmpty()) {
-            return fallbackModelIntent(versions, normalizedContent, "model_config_unavailable");
+            return fallbackModelIntent("model_config_unavailable");
         }
-        List<Map<String, Object>> candidates = versions.stream()
-                .map(version -> Map.of(
-                        "workflow_code", version.getWorkflowCode(),
-                        "workflow_version", version.getVersion(),
-                        "entry_rule", parseJsonObject(version.getEntryRule())
-                ))
+        List<Map<String, Object>> candidates = ragCandidates.stream()
+                .limit(ragTopK())
+                .map(candidate -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("workflow_code", candidate.targetCode());
+                    row.put("target_type", candidate.targetType());
+                    row.put("target_code", candidate.targetCode());
+                    row.put("confidence", candidate.confidence());
+                    row.put("evidence", candidate.evidence());
+                    row.put("source", candidate.source());
+                    row.put("intent_code", candidate.intentCode());
+                    return row;
+                })
                 .toList();
         Map<String, Object> response;
         try {
@@ -799,26 +1153,57 @@ public class WorkflowService {
                     "model_records", runtimeBundle.modelRecords()
             )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
         } catch (RuntimeException exception) {
-            return fallbackModelIntent(versions, normalizedContent, "intent_classification_fallback");
+            return fallbackModelIntent("intent_classification_fallback");
         }
         String intentCode = stringValue(response.get("intent_code"));
-        String workflowCode = stringValue(response.get("workflow_code"));
-        double confidence = toDouble(response.get("confidence"), 0.0d);
+        String workflowCode = firstNonBlank(
+                stringValue(response.get("target_code")),
+                stringValue(response.get("workflow_code"))
+        );
+        String targetType = firstNonBlank(stringValue(response.get("target_type")), "workflow");
+        double confidence = Math.max(0.0d, Math.min(1.0d, toDouble(response.get("confidence"), 0.0d)));
         String reason = stringValue(response.get("reason"));
-        if (workflowCode == null) {
-            return fallbackModelIntent(versions, normalizedContent, "missing_workflow_code");
+        boolean matched = Boolean.TRUE.equals(response.get("matched"));
+        boolean needClarification = Boolean.TRUE.equals(response.get("need_clarification"));
+        String clarificationQuestion = stringValue(response.get("clarification_question"));
+        if (!matched) {
+            return new ModelIntent(
+                    false,
+                    null,
+                    null,
+                    targetType,
+                    confidence,
+                    reason,
+                    needClarification,
+                    clarificationQuestion
+            );
         }
-        return new ModelIntent(intentCode == null ? workflowCode : intentCode, workflowCode, confidence, reason);
+        if (workflowCode == null) {
+            return fallbackModelIntent("missing_workflow_code");
+        }
+        return new ModelIntent(
+                true,
+                intentCode == null ? workflowCode : intentCode,
+                workflowCode,
+                targetType,
+                confidence,
+                reason,
+                false,
+                null
+        );
     }
 
-    private ModelIntent fallbackModelIntent(List<WorkflowVersion> versions, String normalizedContent, String reason) {
-        WorkflowVersion preferred = versions.stream()
-                .filter(version -> "general_query".equals(version.getWorkflowCode()))
-                .findFirst()
-                .orElse(versions.get(0));
-        String intentCode = preferred.getWorkflowCode();
-        double confidence = normalizedContent.isBlank() ? 0.55d : 0.6d;
-        return new ModelIntent(intentCode, preferred.getWorkflowCode(), confidence, reason);
+    private ModelIntent fallbackModelIntent(String reason) {
+        return new ModelIntent(
+                false,
+                null,
+                null,
+                "workflow",
+                0.0d,
+                reason,
+                true,
+                null
+        );
     }
 
     private boolean containsAny(String normalizedContent, String... keywords) {
@@ -958,7 +1343,8 @@ public class WorkflowService {
     private String resolveWorkflowSnapshotForPersist(
             Workflow workflow,
             CreateWorkflowVersionRequest request,
-            String normalizedDefinitionJson
+            String normalizedDefinitionJson,
+            String entryRuleJson
     ) {
         String workflowCode = workflow.getWorkflowCode();
         String workflowName = firstNonBlank(
@@ -973,7 +1359,7 @@ public class WorkflowService {
                     workflowName,
                     workflowVersion,
                     normalizedDefinitionJson,
-                    request.getEntryRule(),
+                    entryRuleJson,
                     request.getEditorMeta(),
                     request.getConfig()
             );
@@ -983,10 +1369,23 @@ public class WorkflowService {
                 workflowCode,
                 workflowName,
                 workflowVersion,
-                request.getEntryRule(),
+                entryRuleJson,
                 request.getEditorMeta(),
                 request.getConfig()
         );
+    }
+
+    private String resolveEntryRuleForPersist(String entryRuleJson, String workflowCode, String workflowName) {
+        Map<String, Object> entryRule = parseJsonObject(entryRuleJson);
+        if (entryRule.isEmpty()) {
+            entryRule.put("intent_codes", List.of("general_agent_request"));
+            String keyword = firstNonBlank(workflowName, workflowCode, "workflow");
+            entryRule.put("keywords", List.of(keyword));
+            entryRule.put("regex_patterns", List.of());
+            entryRule.put("examples", List.of());
+            entryRule.put("priority", 100);
+        }
+        return writeJsonObject(entryRule);
     }
 
     private String normalizeProvidedWorkflowSnapshot(
@@ -1016,7 +1415,7 @@ public class WorkflowService {
 
         Map<String, Object> normalizedDesigner = new LinkedHashMap<>(providedDesigner);
         normalizedDesigner.put("definition", normalizedDefinition);
-        if (!normalizedDesigner.containsKey("entry_rule")) {
+        if (asMap(normalizedDesigner.get("entry_rule")).isEmpty()) {
             normalizedDesigner.put("entry_rule", parseJsonObject(fallbackEntryRuleJson));
         }
         if (!normalizedDesigner.containsKey("workflow_config")) {
@@ -1610,13 +2009,35 @@ public class WorkflowService {
         }
     }
 
-    private record ModelIntent(String intentCode, String workflowCode, double confidence, String reason) {
+    private record ModelIntent(
+            boolean matched,
+            String intentCode,
+            String workflowCode,
+            String targetType,
+            double confidence,
+            String reason,
+            boolean needClarification,
+            String clarificationQuestion
+    ) {
     }
 
     private record WorkflowScore(WorkflowVersion version, int entryRuleScore, int modelScore, int priority) {
         int totalScore() {
             return entryRuleScore + modelScore;
         }
+    }
+
+    private record RegexCandidate(
+            RoutingDecision.IntentCandidate candidate,
+            int evidenceCount,
+            int priority
+    ) {
+    }
+
+    private record RagCandidate(
+            RoutingDecision.IntentCandidate candidate,
+            int priority
+    ) {
     }
 
     private record DynamicThreshold(double threshold, String thresholdSource, boolean accepted) {

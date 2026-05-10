@@ -11,8 +11,23 @@ public record RoutingDecision(
         String thresholdSource,
         String reason,
         List<String> candidateWorkflows,
-        int priority
+        int priority,
+        String intentCode,
+        String targetType,
+        String targetCode,
+        String clarificationQuestion,
+        List<IntentCandidate> intentCandidateQueue
 ) {
+    public record IntentCandidate(
+            String intentCode,
+            String targetType,
+            String targetCode,
+            double confidence,
+            String source,
+            String evidence
+    ) {
+    }
+
     public boolean isSwitchRequired() {
         return "switch_required".equalsIgnoreCase(decision);
     }

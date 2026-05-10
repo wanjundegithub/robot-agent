@@ -71,7 +71,10 @@ class RagEvaluationRequest(BaseModel):
 
 class IntentClassificationRequest(BaseModel):
     message: str
-    candidate_workflows: list[Dict[str, Any]] = Field(default_factory=list)
+    candidate_workflows: list[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Candidate list; each item may include workflow_code, intent_code, target_type, target_code, confidence, evidence.",
+    )
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     routing_model_code: str

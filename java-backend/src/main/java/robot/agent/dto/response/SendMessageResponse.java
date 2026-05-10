@@ -1,6 +1,7 @@
 package robot.agent.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import robot.agent.service.RoutingDecision;
 
 import java.util.List;
 
@@ -26,6 +27,10 @@ public class SendMessageResponse {
     private String thresholdSource;
     @JsonProperty("candidate_workflows")
     private List<String> candidateWorkflows;
+    @JsonProperty("intent_candidate_queue")
+    private List<RoutingDecision.IntentCandidate> intentCandidateQueue;
+    @JsonProperty("clarification_question")
+    private String clarificationQuestion;
     @JsonProperty("active_execution_id")
     private String activeExecutionId;
     private Integer priority;
@@ -84,6 +89,12 @@ public class SendMessageResponse {
 
     public List<String> getCandidateWorkflows() { return candidateWorkflows; }
     public void setCandidateWorkflows(List<String> candidateWorkflows) { this.candidateWorkflows = candidateWorkflows; }
+
+    public List<RoutingDecision.IntentCandidate> getIntentCandidateQueue() { return intentCandidateQueue; }
+    public void setIntentCandidateQueue(List<RoutingDecision.IntentCandidate> intentCandidateQueue) { this.intentCandidateQueue = intentCandidateQueue; }
+
+    public String getClarificationQuestion() { return clarificationQuestion; }
+    public void setClarificationQuestion(String clarificationQuestion) { this.clarificationQuestion = clarificationQuestion; }
 
     public String getActiveExecutionId() { return activeExecutionId; }
     public void setActiveExecutionId(String activeExecutionId) { this.activeExecutionId = activeExecutionId; }

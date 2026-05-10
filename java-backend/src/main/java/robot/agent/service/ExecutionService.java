@@ -32,11 +32,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class ExecutionService {
 
     private static final Logger log = LoggerFactory.getLogger(ExecutionService.class);
+    private static final String INTENT_CANDIDATE_QUEUE_KEY = "intent_candidate_queue";
 
     private final SessionService sessionService;
     private final WorkflowService workflowService;
@@ -100,7 +102,11 @@ public class ExecutionService {
         String effectiveUserId = request.getUserId() == null || request.getUserId().isBlank()
                 ? session.getUserId()
                 : request.getUserId();
-        if (request.getMessageId() != null && !request.getMessageId().isBlank()) {
+        CandidateActionResult candidateActionResult = handleIntentCandidateAction(session, request, effectiveUserId);
+        if (candidateActionResult != null && candidateActionResult.response() != null) {
+            return candidateActionResult.response();
+        }
+        if (candidateActionResult == null && request.getMessageId() != null && !request.getMessageId().isBlank()) {
             Execution existingExecution = executionRepository.findBySessionIdAndClientMessageId(session.getId(), request.getMessageId())
                     .orElse(null);
             if (existingExecution != null) {
@@ -109,13 +115,17 @@ public class ExecutionService {
         }
 
         Execution activeExecution = resolveActiveExecution(session);
-        boolean explicitWorkflowExecution = request.getWorkflowCode() != null
+        RoutingDecision forcedRoutingDecision = candidateActionResult == null ? null : candidateActionResult.routingDecision();
+        boolean explicitWorkflowExecution = forcedRoutingDecision != null
+                || (request.getWorkflowCode() != null
                 && !request.getWorkflowCode().isBlank()
                 && request.getWorkflowVersion() != null
-                && !request.getWorkflowVersion().isBlank();
-        RoutingDecision routingDecision = explicitWorkflowExecution
+                && !request.getWorkflowVersion().isBlank());
+        RoutingDecision routingDecision = forcedRoutingDecision != null
+                ? forcedRoutingDecision
+                : (explicitWorkflowExecution
                 ? buildExplicitRoutingDecision(request, activeExecution)
-                : workflowService.routeMessage(request.getContent(), activeExecution);
+                : workflowService.routeMessage(request.getContent(), activeExecution));
         log.info(
                 "execution.route sessionId={} workflowCode={} workflowVersion={} decision={} reason={} confidence={}",
                 session.getId(),
@@ -125,6 +135,12 @@ public class ExecutionService {
                 routingDecision.reason(),
                 routingDecision.confidence()
         );
+
+        if ("clarification_required".equalsIgnoreCase(routingDecision.decision())) {
+            storeIntentCandidateQueue(session, routingDecision.intentCandidateQueue());
+            return buildClarificationRequiredResponse(session, activeExecution, routingDecision);
+        }
+
         String requestedToolCode = confirmationService.resolveRequestedToolCode(
                 request.getRequestedToolCode(),
                 request.getContent()
@@ -272,6 +288,7 @@ public class ExecutionService {
         execution.setCreatedAt(LocalDateTime.now());
         Execution saved = executionRepository.save(execution);
 
+        storeIntentCandidateQueue(session, routingDecision.intentCandidateQueue());
         sessionService.updateCurrentExecutionId(session, saved.getId());
 
         ExecuteRequest executeRequest = new ExecuteRequest();
@@ -339,6 +356,59 @@ public class ExecutionService {
         log.info("execution.started executionId={} sessionId={} workflowCode={} workflowVersion={}", saved.getId(), session.getId(), saved.getWorkflowCode(), saved.getWorkflowVersion());
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, 200);
         return buildSendMessageResponse(saved, routingDecision, activeExecution, experimentAssignment);
+    }
+
+    private CandidateActionResult handleIntentCandidateAction(
+            Session session,
+            SendMessageRequest request,
+            String effectiveUserId
+    ) {
+        String action = request == null ? null : request.getIntentCandidateAction();
+        if (action == null || action.isBlank()) {
+            return null;
+        }
+        List<RoutingDecision.IntentCandidate> queue = readIntentCandidateQueue(session);
+        if (queue.isEmpty()) {
+            clearIntentCandidateQueue(session);
+            return null;
+        }
+        String normalizedAction = action.trim().toLowerCase();
+        String targetCode = request.getIntentCandidateTargetCode();
+
+        if ("accept".equals(normalizedAction)) {
+            int acceptedIndex = findCandidateIndex(queue, targetCode);
+            if (acceptedIndex < 0) {
+                acceptedIndex = 0;
+            }
+            RoutingDecision.IntentCandidate accepted = queue.remove(acceptedIndex);
+            storeIntentCandidateQueue(session, queue);
+            RoutingDecision routingDecision = buildRoutingDecisionFromCandidate(accepted);
+            return new CandidateActionResult(routingDecision, null);
+        }
+
+        if ("reject".equals(normalizedAction)) {
+            int rejectedIndex = findCandidateIndex(queue, targetCode);
+            if (rejectedIndex < 0) {
+                rejectedIndex = 0;
+            }
+            queue.remove(rejectedIndex);
+            storeIntentCandidateQueue(session, queue);
+            if (!queue.isEmpty()) {
+                SendMessageResponse response = buildCandidateConfirmationResponse(session, queue.get(0), queue);
+                auditService.logAction(
+                        session.getWorkspaceId(),
+                        effectiveUserId,
+                        "execution.intent_candidate_rejected",
+                        "session",
+                        session.getId(),
+                        Map.of("remaining_candidates", queue.size()),
+                        200
+                );
+                return new CandidateActionResult(null, response);
+            }
+            clearIntentCandidateQueue(session);
+        }
+        return null;
     }
 
     @Transactional
@@ -704,6 +774,8 @@ public class ExecutionService {
         response.setThresholdSource(routingDecision.thresholdSource());
         response.setRouteReason(routingDecision.reason());
         response.setCandidateWorkflows(routingDecision.candidateWorkflows());
+        response.setIntentCandidateQueue(routingDecision.intentCandidateQueue());
+        response.setClarificationQuestion(routingDecision.clarificationQuestion());
         response.setActiveExecutionId(activeExecution == null ? null : activeExecution.getId());
         response.setPriority(routingDecision.priority());
         return response;
@@ -732,6 +804,8 @@ public class ExecutionService {
             response.setThresholdSource(routingDecision.thresholdSource());
             response.setRouteReason(routingDecision.reason());
             response.setCandidateWorkflows(routingDecision.candidateWorkflows());
+            response.setIntentCandidateQueue(routingDecision.intentCandidateQueue());
+            response.setClarificationQuestion(routingDecision.clarificationQuestion());
             response.setPriority(routingDecision.priority());
         }
         if (experimentAssignment != null) {
@@ -812,6 +886,8 @@ public class ExecutionService {
         response.setThresholdSource(routingDecision.thresholdSource());
         response.setRouteReason(routingDecision.reason());
         response.setCandidateWorkflows(routingDecision.candidateWorkflows());
+        response.setIntentCandidateQueue(routingDecision.intentCandidateQueue());
+        response.setClarificationQuestion(routingDecision.clarificationQuestion());
         response.setPriority(routingDecision.priority());
         response.setRequestedToolCode(requestedToolCode);
         return response;
@@ -839,8 +915,136 @@ public class ExecutionService {
                 "manual_canvas",
                 reason,
                 List.of(workflowCode),
-                100
+                100,
+                workflowCode,
+                "workflow",
+                workflowCode,
+                null,
+                List.of()
         );
+    }
+
+    private SendMessageResponse buildClarificationRequiredResponse(
+            Session session,
+            Execution activeExecution,
+            RoutingDecision routingDecision
+    ) {
+        SendMessageResponse response = buildRouteDecisionResponse(session, activeExecution, routingDecision);
+        response.setExecutionId(null);
+        response.setStatus("clarification_required");
+        response.setRouteDecision("clarification_required");
+        return response;
+    }
+
+    private SendMessageResponse buildCandidateConfirmationResponse(
+            Session session,
+            RoutingDecision.IntentCandidate nextCandidate,
+            List<RoutingDecision.IntentCandidate> queue
+    ) {
+        SendMessageResponse response = new SendMessageResponse();
+        response.setSessionId(session.getId());
+        response.setExecutionId(null);
+        response.setStatus("candidate_confirmation_required");
+        response.setRouteDecision("candidate_confirmation_required");
+        response.setRouteReason("candidate_confirmation");
+        response.setWorkflowCode(nextCandidate.targetCode());
+        response.setWorkflowVersion(resolveWorkflowVersion(nextCandidate.targetCode()));
+        response.setRouteConfidence(nextCandidate.confidence());
+        response.setRouteThreshold(0.0d);
+        response.setThresholdSource(nextCandidate.source());
+        response.setCandidateWorkflows(queue.stream()
+                .map(RoutingDecision.IntentCandidate::targetCode)
+                .filter(code -> code != null && !code.isBlank())
+                .distinct()
+                .toList());
+        response.setIntentCandidateQueue(List.copyOf(queue));
+        response.setClarificationQuestion(null);
+        response.setActiveExecutionId(session.getCurrentExecutionId());
+        response.setPriority(0);
+        return response;
+    }
+
+    private List<RoutingDecision.IntentCandidate> readIntentCandidateQueue(Session session) {
+        Map<String, Object> variables = parseJson(session.getVariables());
+        Object value = variables.get(INTENT_CANDIDATE_QUEUE_KEY);
+        if (!(value instanceof List<?> queueList) || queueList.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return queueList.stream()
+                .map(item -> objectMapper.convertValue(item, RoutingDecision.IntentCandidate.class))
+                .filter(item -> item != null && item.targetCode() != null && !item.targetCode().isBlank())
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    private void clearIntentCandidateQueue(Session session) {
+        Map<String, Object> variables = parseJson(session.getVariables());
+        variables.remove(INTENT_CANDIDATE_QUEUE_KEY);
+        session.setVariables(writeJson(variables));
+        sessionService.updateCurrentExecutionId(session, session.getCurrentExecutionId());
+    }
+
+    private void storeIntentCandidateQueue(Session session, List<RoutingDecision.IntentCandidate> queue) {
+        Map<String, Object> variables = parseJson(session.getVariables());
+        if (queue == null || queue.isEmpty()) {
+            variables.remove(INTENT_CANDIDATE_QUEUE_KEY);
+        } else {
+            variables.put(INTENT_CANDIDATE_QUEUE_KEY, queue);
+        }
+        session.setVariables(writeJson(variables));
+        sessionService.updateCurrentExecutionId(session, session.getCurrentExecutionId());
+    }
+
+    private int findCandidateIndex(List<RoutingDecision.IntentCandidate> queue, String targetCode) {
+        if (targetCode == null || targetCode.isBlank()) {
+            return -1;
+        }
+        for (int index = 0; index < queue.size(); index++) {
+            RoutingDecision.IntentCandidate candidate = queue.get(index);
+            if (targetCode.equals(candidate.targetCode())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private RoutingDecision buildRoutingDecisionFromCandidate(RoutingDecision.IntentCandidate candidate) {
+        String targetCode = candidate.targetCode();
+        String version = resolveWorkflowVersion(targetCode);
+        return new RoutingDecision(
+                "start",
+                targetCode,
+                version,
+                candidate.confidence(),
+                0.0d,
+                candidate.source(),
+                "candidate_confirmation",
+                List.of(targetCode),
+                0,
+                candidate.intentCode(),
+                firstNonBlank(candidate.targetType(), "workflow"),
+                targetCode,
+                null,
+                List.of()
+        );
+    }
+
+    private String resolveWorkflowVersion(String workflowCode) {
+        if (workflowCode == null || workflowCode.isBlank()) {
+            return null;
+        }
+        return workflowService.getWorkflowByCode(workflowCode).getCurrentVersion();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private ExecutionStatus toExecutionStatus(String statusValue) {
@@ -916,6 +1120,12 @@ public class ExecutionService {
     }
 
     private record ExperimentAssignment(String experimentId, String experimentGroup) {
+    }
+
+    private record CandidateActionResult(
+            RoutingDecision routingDecision,
+            SendMessageResponse response
+    ) {
     }
 
     private SessionMessageResponse buildSessionMessage(

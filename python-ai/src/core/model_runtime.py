@@ -102,13 +102,27 @@ async def classify_intent_with_model_code(
         "task": "intent_routing",
         "message": message,
         "candidate_workflows": candidate_workflows,
-        "required_fields": ["intent_code", "workflow_code", "confidence", "reason"],
+        "required_fields": [
+            "matched",
+            "intent_code",
+            "workflow_code",
+            "target_type",
+            "target_code",
+            "confidence",
+            "reason",
+            "need_clarification",
+            "clarification_question",
+        ],
     }
     content = await execute_model_completion(
         model_code=routing_model_code,
         provider_configs=provider_configs,
         model_records=model_records,
-        system_prompt="You are an intent router. Choose the best workflow_code from candidates and return JSON only.",
+        system_prompt=(
+            "You are an intent router. Return JSON only. "
+            "You must choose workflow_code only from provided candidate_workflows. "
+            "If no candidate is reliable, return matched=false."
+        ),
         user_prompt=json.dumps(prompt, ensure_ascii=False),
         response_format={"type": "json_object"},
     )
@@ -116,9 +130,63 @@ async def classify_intent_with_model_code(
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ModelExecutionError(f"Intent classification returned invalid JSON: {content}") from exc
-    if "workflow_code" not in parsed:
-        raise ModelExecutionError("Intent classification missing workflow_code")
-    return parsed
+    return _normalize_intent_result(parsed)
+
+
+def _normalize_intent_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    matched = bool(parsed.get("matched"))
+    confidence = _clamp_confidence(parsed.get("confidence"))
+    reason = parsed.get("reason")
+    normalized_reason = str(reason).strip() if reason is not None else ""
+
+    if matched:
+        workflow_code = parsed.get("workflow_code")
+        if workflow_code is None or not str(workflow_code).strip():
+            raise ModelExecutionError("Intent classification missing workflow_code when matched=true")
+        workflow_code = str(workflow_code).strip()
+        intent_code = parsed.get("intent_code")
+        target_type = parsed.get("target_type")
+        target_code = parsed.get("target_code")
+        return {
+            "matched": True,
+            "intent_code": str(intent_code).strip() if intent_code is not None else None,
+            "workflow_code": workflow_code,
+            "target_type": str(target_type).strip() if target_type is not None and str(target_type).strip() else "workflow",
+            "target_code": str(target_code).strip() if target_code is not None and str(target_code).strip() else workflow_code,
+            "confidence": confidence,
+            "reason": normalized_reason,
+            "need_clarification": bool(parsed.get("need_clarification", False)),
+            "clarification_question": parsed.get("clarification_question"),
+        }
+
+    clarification_question = parsed.get("clarification_question")
+    normalized_question = str(clarification_question).strip() if clarification_question is not None else ""
+    if not normalized_question:
+        normalized_question = "请问您想办理哪类业务？"
+
+    return {
+        "matched": False,
+        "intent_code": None,
+        "workflow_code": None,
+        "target_type": None,
+        "target_code": None,
+        "confidence": confidence,
+        "reason": normalized_reason,
+        "need_clarification": True,
+        "clarification_question": normalized_question,
+    }
+
+
+def _clamp_confidence(confidence: Any) -> float:
+    try:
+        value = float(confidence)
+    except (TypeError, ValueError):
+        return 0.0
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
 
 
 async def execute_model_completion(

@@ -23,6 +23,10 @@ public class SendMessageRequest {
     private String confirmationId;
     @JsonProperty("cancel_confirmation")
     private Boolean cancelConfirmation;
+    @JsonProperty("intent_candidate_action")
+    private String intentCandidateAction;
+    @JsonProperty("intent_candidate_target_code")
+    private String intentCandidateTargetCode;
     @JsonProperty("workflow_code")
     private String workflowCode;
     @JsonProperty("workflow_id")
@@ -62,6 +66,12 @@ public class SendMessageRequest {
 
     public Boolean getCancelConfirmation() { return cancelConfirmation; }
     public void setCancelConfirmation(Boolean cancelConfirmation) { this.cancelConfirmation = cancelConfirmation; }
+
+    public String getIntentCandidateAction() { return intentCandidateAction; }
+    public void setIntentCandidateAction(String intentCandidateAction) { this.intentCandidateAction = intentCandidateAction; }
+
+    public String getIntentCandidateTargetCode() { return intentCandidateTargetCode; }
+    public void setIntentCandidateTargetCode(String intentCandidateTargetCode) { this.intentCandidateTargetCode = intentCandidateTargetCode; }
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }

@@ -65,6 +65,8 @@ export async function sendMessage(
     cancelConfirmation?: boolean
     workflowId?: number | null
     sessionId?: string
+    intentCandidateAction?: 'accept' | 'reject'
+    intentCandidateTargetCode?: string | null
   }
 ): Promise<SendMessageResponse> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
@@ -81,6 +83,8 @@ export async function sendMessage(
       cancel_confirmation: options?.cancelConfirmation ?? false,
       session_id: options?.sessionId ?? sessionId,
       workflow_id: options?.workflowId ?? null,
+      intent_candidate_action: options?.intentCandidateAction ?? null,
+      intent_candidate_target_code: options?.intentCandidateTargetCode ?? null,
     }),
   })
 
@@ -475,7 +479,6 @@ export async function saveWorkflowDraft(
     workflowName: string
     version: string
     definition: Record<string, unknown>
-    entryRule: Record<string, unknown>
     workflowConfig: Record<string, unknown>
     workflowSnapshot: Record<string, unknown>
     currentUserId: string
@@ -499,7 +502,6 @@ export async function saveWorkflowDraft(
       workflow_name: payload.workflowName,
       version: payload.version,
       definition: JSON.stringify(payload.definition),
-      entry_rule: JSON.stringify(payload.entryRule),
       editor_meta: JSON.stringify(
         editorMetaFromDefinition || {
           layout_engine: 'reactflow',

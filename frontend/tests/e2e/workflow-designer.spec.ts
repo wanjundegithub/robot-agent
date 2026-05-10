@@ -463,6 +463,10 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-version-toggle')).toHaveCount(0)
     await expect(page.getByTestId('workflow-name-input')).toBeVisible()
     await expect(page.getByTestId('workflow-publish')).toBeVisible()
+    await expect(page.getByTestId('workflow-info-panel')).toContainText('维护名称并发布版本')
+    await expect(page.getByTestId('workflow-info-panel')).not.toContainText('Intent Entry Rule')
+    await expect(page.getByTestId('workflow-info-panel')).not.toContainText('编号')
+    await expect(page.getByTestId('workflow-info-panel')).not.toContainText('版本列表入口只保留编辑、发布和删除')
     await expect(page.getByTestId('workflow-save-draft')).toHaveCount(0)
     await expect(page.getByTestId('workflow-validate')).toHaveCount(0)
 

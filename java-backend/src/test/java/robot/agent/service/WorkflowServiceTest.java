@@ -727,6 +727,73 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void saveWorkflowDraftCreatesDefaultEntryRuleWhenRequestOmitsIt() throws Exception {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow existingWorkflow = new Workflow();
+        existingWorkflow.setWorkflowCode("backend_rule_flow");
+        existingWorkflow.setName("后台规则流程");
+        existingWorkflow.setWorkspaceId(1L);
+        existingWorkflow.setStatus(WorkflowStatus.DRAFT);
+        when(workflowRepository.findByWorkflowCode("backend_rule_flow")).thenReturn(Optional.of(existingWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("backend_rule_flow", "v1")).thenReturn(Optional.empty());
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)).thenReturn(List.of());
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        CreateWorkflowVersionRequest request = new CreateWorkflowVersionRequest();
+        request.setVersion("v1");
+        request.setWorkflowName("后台规则流程");
+        request.setDefinition("""
+                {
+                  "schema_version":"workflow-designer/v2",
+                  "main_graph_id":"main",
+                  "graphs":{
+                    "main":{
+                      "graph_id":"main",
+                      "graph_type":"main",
+                      "entry_node_id":"start",
+                      "nodes":{
+                        "start":{"id":"start","type":"start","config":{"prompt":"开始"}},
+                        "end":{"id":"end","type":"end","config":{"prompt":"结束","output_format":{}}}
+                      },
+                      "edges":[{"id":"e1","source":"start","target":"end"}]
+                    }
+                  }
+                }
+                """);
+        request.setConfig("{}");
+
+        workflowService.saveWorkflowDraft("tester", "backend_rule_flow", request);
+
+        ArgumentCaptor<WorkflowVersion> captor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(captor.capture());
+        WorkflowVersion persisted = captor.getValue();
+        Map<String, Object> entryRule = objectMapper.readValue(persisted.getEntryRule(), Map.class);
+        assertThat(entryRule).containsEntry("priority", 100);
+        assertThat((List<String>) entryRule.get("intent_codes")).containsExactly("general_agent_request");
+        assertThat((List<String>) entryRule.get("keywords")).containsExactly("后台规则流程");
+
+        Map<String, Object> snapshot = objectMapper.readValue(persisted.getWorkflowSnapshot(), Map.class);
+        Map<String, Object> designer = (Map<String, Object>) snapshot.get("designer");
+        assertThat((Map<String, Object>) designer.get("entry_rule")).containsEntry("priority", 100);
+    }
+
+    @Test
     void publishWorkflowBackfillsWorkflowSnapshotForLegacyVersion() throws Exception {
         WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
         WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
@@ -1148,9 +1215,289 @@ class WorkflowServiceTest {
 
         RoutingDecision decision = workflowService.routeMessage("hi", null);
 
-        assertThat(decision.workflowCode()).isEqualTo("general_query");
-        assertThat(decision.reason()).isEqualTo("model_fallback");
-        assertThat(decision.confidence()).isGreaterThanOrEqualTo(0.55d);
+        assertThat(decision.decision()).isEqualTo("clarification_required");
+        assertThat(decision.reason()).isEqualTo("llm_no_match");
+        assertThat(decision.clarificationQuestion()).isNotBlank();
+    }
+
+    @Test
+    void routeMessage_regexMatchDoesNotCallPythonClassifyIntent() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = publishedWorkflow("order_query", "v1", "订单查询", "查询订单状态");
+        WorkflowVersion version = publishedVersion(
+                "order_query",
+                "v1",
+                """
+                        {
+                          "intent_codes": ["intent_order_query"],
+                          "keywords": ["查询订单"],
+                          "regex_patterns": ["订单\\\\d+"],
+                          "priority": 100
+                        }
+                        """
+        );
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(workflow));
+        when(workflowRepository.findByWorkflowCode("order_query"))
+                .thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("order_query", "v1"))
+                .thenReturn(Optional.of(version));
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection()))
+                .thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider", "x")), List.of(Map.of("model", "y"))));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        RoutingDecision decision = workflowService.routeMessage("帮我查询订单123456", null);
+
+        verify(pythonClient, never()).classifyIntent(any());
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.reason()).isEqualTo("regex_match");
+        assertThat(decision.workflowCode()).isEqualTo("order_query");
+        assertThat(decision.intentCode()).isEqualTo("intent_order_query");
+        assertThat(decision.targetType()).isEqualTo("workflow");
+        assertThat(decision.intentCandidateQueue()).isEmpty();
+    }
+
+    @Test
+    void routeMessage_ragAcceptDoesNotCallPythonClassifyIntent() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = publishedWorkflow("refund_policy", "v1", "退款政策", "支持退款规则和政策查询");
+        WorkflowVersion version = publishedVersion(
+                "refund_policy",
+                "v1",
+                """
+                        {
+                          "intent_codes": ["intent_refund_policy"],
+                          "keywords": ["退款处理", "规则说明"],
+                          "examples": ["退款政策是什么", "退票规则"],
+                          "priority": 50
+                        }
+                        """
+        );
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(workflow));
+        when(workflowRepository.findByWorkflowCode("refund_policy"))
+                .thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("refund_policy", "v1"))
+                .thenReturn(Optional.of(version));
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection()))
+                .thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider", "x")), List.of(Map.of("model", "y"))));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        RoutingDecision decision = workflowService.routeMessage("退款政策是什么", null);
+
+        verify(pythonClient, never()).classifyIntent(any());
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.reason()).isEqualTo("rag_match");
+        assertThat(decision.workflowCode()).isEqualTo("refund_policy");
+    }
+
+    @Test
+    void routeMessage_ragBelowThresholdCallsPythonWithTopKCandidates() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflowA = publishedWorkflow("order_query", "v1", "订单查询", "查询订单状态");
+        Workflow workflowB = publishedWorkflow("cancel_booking", "v1", "取消预约", "取消预约服务");
+        WorkflowVersion versionA = publishedVersion(
+                "order_query",
+                "v1",
+                """
+                        {
+                          "intent_codes": ["intent_order_query"],
+                          "keywords": ["订单状态查询", "订单进度查询"],
+                          "examples": ["查订单状态", "订单到哪了"],
+                          "priority": 100
+                        }
+                        """
+        );
+        WorkflowVersion versionB = publishedVersion(
+                "cancel_booking",
+                "v1",
+                """
+                        {
+                          "intent_codes": ["intent_cancel_booking"],
+                          "keywords": ["取消预约单", "撤销预约申请"],
+                          "examples": ["取消我的预约", "撤销预约单"],
+                          "priority": 80
+                        }
+                        """
+        );
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(workflowA, workflowB));
+        when(workflowRepository.findByWorkflowCode("order_query"))
+                .thenReturn(Optional.of(workflowA));
+        when(workflowRepository.findByWorkflowCode("cancel_booking"))
+                .thenReturn(Optional.of(workflowB));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("order_query", "v1"))
+                .thenReturn(Optional.of(versionA));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("cancel_booking", "v1"))
+                .thenReturn(Optional.of(versionB));
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection()))
+                .thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider", "x")), List.of(Map.of("model", "y"))));
+        when(pythonClient.classifyIntent(ArgumentMatchers.anyMap()))
+                .thenReturn(Mono.just(Map.of(
+                        "matched", true,
+                        "workflow_code", "order_query",
+                        "target_type", "workflow",
+                        "target_code", "order_query",
+                        "intent_code", "intent_order_query",
+                        "confidence", 0.78d,
+                        "reason", "llm selected order query"
+                )));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        workflowService.routeMessage("处理一下订单和预约问题", null);
+
+        ArgumentCaptor<Map<String, Object>> requestCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonClient).classifyIntent(requestCaptor.capture());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) requestCaptor.getValue().get("candidate_workflows");
+        assertThat(candidates).isNotEmpty();
+        assertThat(candidates.size()).isLessThanOrEqualTo(5);
+        assertThat(candidates.get(0)).containsKeys("workflow_code", "target_type", "target_code", "confidence", "evidence");
+    }
+
+    @Test
+    void routeMessage_pythonNoMatchReturnsClarificationRequired() {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow workflow = publishedWorkflow("general_query", "v1", "通用咨询", "一般问题");
+        WorkflowVersion version = publishedVersion(
+                "general_query",
+                "v1",
+                """
+                        {
+                          "intent_codes": ["general_query"],
+                          "keywords": ["帮助"],
+                          "examples": ["请帮帮我"],
+                          "priority": 10
+                        }
+                        """
+        );
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(workflow));
+        when(workflowRepository.findByWorkflowCode("general_query"))
+                .thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("general_query", "v1"))
+                .thenReturn(Optional.of(version));
+        when(modelConfigService.resolveRoutingModelCode(ArgumentMatchers.anyCollection()))
+                .thenReturn("intent-router-v1");
+        when(modelConfigService.buildRuntimeBundle(ArgumentMatchers.anyCollection(), ArgumentMatchers.eq("intent-router-v1")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider", "x")), List.of(Map.of("model", "y"))));
+        when(pythonClient.classifyIntent(ArgumentMatchers.anyMap()))
+                .thenReturn(Mono.just(Map.of(
+                        "matched", false,
+                        "need_clarification", true,
+                        "clarification_question", "请问你是想查订单还是取消预约？",
+                        "confidence", 0.2d,
+                        "reason", "ambiguous request"
+                )));
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        RoutingDecision decision = workflowService.routeMessage("帮我处理一下", null);
+
+        assertThat(decision.decision()).isEqualTo("clarification_required");
+        assertThat(decision.reason()).isEqualTo("llm_no_match");
+        assertThat(decision.clarificationQuestion()).isEqualTo("请问你是想查订单还是取消预约？");
+    }
+
+    private Workflow publishedWorkflow(String code, String version, String name, String description) {
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode(code);
+        workflow.setStatus(WorkflowStatus.PUBLISHED);
+        workflow.setCurrentVersion(version);
+        workflow.setName(name);
+        workflow.setDescription(description);
+        return workflow;
+    }
+
+    private WorkflowVersion publishedVersion(String workflowCode, String version, String entryRule) {
+        WorkflowVersion workflowVersion = new WorkflowVersion();
+        workflowVersion.setWorkflowCode(workflowCode);
+        workflowVersion.setVersion(version);
+        workflowVersion.setStatus(WorkflowVersionStatus.PUBLISHED);
+        workflowVersion.setEntryRule(entryRule);
+        workflowVersion.setConfig("{}");
+        workflowVersion.setDefinition("""
+                {
+                  "entry": "start",
+                  "nodes": {
+                    "start": {"id": "start", "type": "start", "config": {"prompt": "start"}},
+                    "end": {"id": "end", "type": "end", "config": {"prompt": "end", "output_format": {}}}
+                  },
+                  "transitions": {
+                    "start": "end"
+                  }
+                }
+                """);
+        return workflowVersion;
     }
 
     private WorkflowService newWorkflowService() {

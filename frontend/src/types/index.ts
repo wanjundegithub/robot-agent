@@ -9,6 +9,15 @@ export interface Message {
   executionId?: string
 }
 
+export interface IntentCandidate {
+  intent_code?: string
+  target_type?: string
+  target_code?: string
+  confidence?: number
+  source?: string
+  evidence?: string
+}
+
 export interface SendMessageResponse {
   session_id: string
   execution_id: string | null
@@ -34,6 +43,8 @@ export interface SendMessageResponse {
   protection_reason?: string
   retry_after_seconds?: number
   degradation_message?: string
+  intent_candidate_queue?: IntentCandidate[]
+  clarification_question?: string
 }
 
 export interface FormSubmitResponse {

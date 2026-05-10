@@ -27,6 +27,7 @@ import type {
   FormDefinition,
   GatewayAckEnvelope,
   GatewayErrorEnvelope,
+  IntentCandidate,
   Message,
   MessageDeltaEnvelope,
   SessionSummary,
@@ -117,6 +118,11 @@ const App: React.FC = () => {
     messageId: string
     response: SendMessageResponse
   } | null>(null)
+  const [pendingIntentCandidate, setPendingIntentCandidate] = useState<{
+    content: string
+    messageId: string
+    candidate: IntentCandidate
+  } | null>(null)
   const [resumeOffer, setResumeOffer] = useState<{
     executionId: string
     workflowCode: string
@@ -169,6 +175,7 @@ const App: React.FC = () => {
     setExecutionStatus('idle')
     setPendingSwitch(null)
     setPendingConfirmation(null)
+    setPendingIntentCandidate(null)
     setResumeOffer(null)
     setPendingForm(null)
     setIsLoading(false)
@@ -843,13 +850,19 @@ const App: React.FC = () => {
       confirmationId?: string
       cancelConfirmation?: boolean
       requestedToolCode?: string
+      intentCandidateAction?: 'accept' | 'reject'
+      intentCandidateTargetCode?: string | null
     },
     fixedMessageId?: string
   ) => {
     if (!content.trim()) return
 
     const messageId = fixedMessageId || createId('msg')
-    const shouldAppendUserMessage = !options?.confirmSwitch && !options?.confirmationId && !options?.cancelConfirmation
+    const shouldAppendUserMessage =
+      !options?.confirmSwitch &&
+      !options?.confirmationId &&
+      !options?.cancelConfirmation &&
+      !options?.intentCandidateAction
     const baselineMessages = normalizeSessionMessages(messages)
     let appendedUserMessage: Message | null = null
     let activeSessionId = sessionId
@@ -913,6 +926,8 @@ const App: React.FC = () => {
         requested_tool_code: options?.requestedToolCode ?? null,
         confirmation_id: options?.confirmationId ?? null,
         cancel_confirmation: options?.cancelConfirmation ?? false,
+        intent_candidate_action: options?.intentCandidateAction ?? null,
+        intent_candidate_target_code: options?.intentCandidateTargetCode ?? null,
         workflow_id: boundWorkflowId ?? null,
         workflow_code: boundWorkflowCode,
         workflow_version: boundWorkflowVersion,
@@ -929,6 +944,7 @@ const App: React.FC = () => {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setExecutionStatus('permission_denied')
         setPendingConfirmation(null)
+        setPendingIntentCandidate(null)
         pushGovernanceNotice('权限不足', response.permission_reason || '当前操作被策略阻止。')
         appendSystemMessage(`权限不足：${response.permission_reason || '当前用户无权执行此操作。'}`)
         return
@@ -937,6 +953,7 @@ const App: React.FC = () => {
       if (response.status === 'confirmation_required') {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setPendingConfirmation({ content, messageId, response })
+        setPendingIntentCandidate(null)
         setExecutionStatus('confirmation_required')
         pushGovernanceNotice(
           '需要确认',
@@ -948,6 +965,7 @@ const App: React.FC = () => {
 
       if (response.status === 'confirmation_cancelled') {
         setPendingConfirmation(null)
+        setPendingIntentCandidate(null)
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setExecutionStatus('idle')
         pushGovernanceNotice('已取消确认', '敏感操作已取消，流程不会继续执行。')
@@ -959,6 +977,7 @@ const App: React.FC = () => {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setExecutionStatus(response.status)
         setPendingConfirmation(null)
+        setPendingIntentCandidate(null)
         const detail =
           response.degradation_message ||
           response.protection_reason ||
@@ -971,6 +990,7 @@ const App: React.FC = () => {
       if (response.status === 'switch_required') {
         setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
         setPendingSwitch({ content, messageId, response })
+        setPendingIntentCandidate(null)
         setExecutionStatus('switch_required')
         appendSystemMessage(
           `检测到新的意图，将切换到工作流 ${response.workflow_code}。请确认是否保存当前流程并切换。`
@@ -978,8 +998,41 @@ const App: React.FC = () => {
         return
       }
 
+      if (response.status === 'clarification_required') {
+        setMessages((prev) => {
+          const next = prev.filter((message) => message.id !== pendingMessageId)
+          const clarification = (response.clarification_question || '').trim()
+          if (!clarification) {
+            return next
+          }
+          return [
+            ...next,
+            {
+              id: createId('clarify'),
+              type: 'ai',
+              content: clarification,
+              timestamp: new Date().toISOString(),
+            },
+          ]
+        })
+        setPendingSwitch(null)
+        setPendingConfirmation(null)
+        setPendingIntentCandidate(null)
+        setExecutionStatus('clarification_required')
+        return
+      }
+
       setPendingSwitch(null)
       setPendingConfirmation(null)
+      if (Array.isArray(response.intent_candidate_queue) && response.intent_candidate_queue.length > 0) {
+        setPendingIntentCandidate({
+          content,
+          messageId,
+          candidate: response.intent_candidate_queue[0],
+        })
+      } else {
+        setPendingIntentCandidate(null)
+      }
       if (response.execution_id) {
         setExecutionId(response.execution_id)
       }
@@ -1308,6 +1361,60 @@ const App: React.FC = () => {
               }
             >
               确认
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pendingIntentCandidate && (
+        <div className="panel-card prompt-card">
+          <div className="panel-title mb-2">候选意图确认</div>
+          <div className="text-sm text-slate-700">
+            检测到一个候选流程：
+            {' '}
+            <strong>{pendingIntentCandidate.candidate.target_code || '未知'}</strong>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            意图：{pendingIntentCandidate.candidate.intent_code || '未知'} / 置信度：
+            {' '}
+            {pendingIntentCandidate.candidate.confidence != null
+              ? pendingIntentCandidate.candidate.confidence.toFixed(2)
+              : '未知'}
+            {' '} / 来源：{pendingIntentCandidate.candidate.source || '未知'}
+          </div>
+          {pendingIntentCandidate.candidate.evidence && (
+            <div className="mt-2 text-xs text-slate-500">
+              证据：{pendingIntentCandidate.candidate.evidence}
+            </div>
+          )}
+          <div className="prompt-actions">
+            <button
+              className="prompt-secondary"
+              onClick={() =>
+                void handleSendMessage(
+                  pendingIntentCandidate.content,
+                  {
+                    intentCandidateAction: 'reject',
+                    intentCandidateTargetCode: pendingIntentCandidate.candidate.target_code || null,
+                  }
+                )
+              }
+            >
+              跳过
+            </button>
+            <button
+              className="prompt-primary"
+              onClick={() =>
+                void handleSendMessage(
+                  pendingIntentCandidate.content,
+                  {
+                    intentCandidateAction: 'accept',
+                    intentCandidateTargetCode: pendingIntentCandidate.candidate.target_code || null,
+                  }
+                )
+              }
+            >
+              继续办理
             </button>
           </div>
         </div>

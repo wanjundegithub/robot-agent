@@ -10,6 +10,7 @@ import robot.agent.dto.request.SendMessageRequest;
 import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.response.SendMessageResponse;
 import robot.agent.model.Execution;
+import robot.agent.model.Workflow;
 import robot.agent.model.Session;
 import robot.agent.model.WorkflowVersion;
 import robot.agent.repository.ExecutionNodeLogRepository;
@@ -18,10 +19,12 @@ import robot.agent.repository.ExecutionRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.LinkedHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -79,7 +82,12 @@ class ExecutionServiceTest {
                 "dynamic:test",
                 "entry_rule_and_model",
                 List.of("general_query"),
-                100
+                100,
+                "general_query",
+                "workflow",
+                "general_query",
+                null,
+                List.of()
         );
         WorkflowService.RuntimeExecutionBundle runtimeBundle = new WorkflowService.RuntimeExecutionBundle(
                 Map.of("nodes", Map.of(), "entry", "start"),
@@ -179,7 +187,12 @@ class ExecutionServiceTest {
                 "manual",
                 "canvas_selected_workflow",
                 List.of("cap_workflow"),
-                100
+                100,
+                "cap_workflow",
+                "workflow",
+                "cap_workflow",
+                null,
+                List.of()
         );
         Map<String, Object> rawDefinition = Map.of(
                 "entry", "start",
@@ -345,5 +358,367 @@ class ExecutionServiceTest {
         assertThat(requestCaptor.getValue().getWorkflowDefinition()).containsKey("graphs");
         assertThat(requestCaptor.getValue().getModelRecords()).isEmpty();
         assertThat(requestCaptor.getValue().getRoutingModelCode()).isEqualTo("routing-default");
+    }
+
+    @Test
+    void startExecution_storesSecondaryIntentCandidatesInSessionVariables() throws Exception {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        Session session = new Session("session-1", 1L, "user-1");
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-queue-1",
+                        "message", "query order and cancel booking",
+                        "user_id", "user-1"
+                ),
+                SendMessageRequest.class
+        );
+        RoutingDecision.IntentCandidate secondary = new RoutingDecision.IntentCandidate(
+                "intent_cancel_booking",
+                "workflow",
+                "booking_cancel",
+                0.71d,
+                "rag",
+                "cancel booking"
+        );
+        RoutingDecision routingDecision = new RoutingDecision(
+                "start",
+                "order_query",
+                "v1",
+                0.92d,
+                0.8d,
+                "rag_accept_threshold",
+                "rag_match",
+                List.of("order_query", "booking_cancel"),
+                50,
+                "intent_order_query",
+                "workflow",
+                "order_query",
+                null,
+                List.of(secondary)
+        );
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = new WorkflowService.RuntimeExecutionBundle(
+                Map.of("nodes", Map.of(), "entry", "start"),
+                Map.of(),
+                Map.of(),
+                Map.of("order_query@v1", Map.of()),
+                List.of(),
+                List.of(),
+                "routing-default"
+        );
+
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(executionRepository.findBySessionIdAndClientMessageId("session-1", "msg-queue-1")).thenReturn(Optional.empty());
+        when(executionRepository.findBySessionIdOrderByCreatedAtDesc("session-1")).thenReturn(List.of());
+        when(workflowService.routeMessage(eq("query order and cancel booking"), eq(null))).thenReturn(routingDecision);
+        when(accessControlService.evaluateExecutionAccess("user-1", 1L, "order_query", null, "user-1"))
+                .thenReturn(new AccessControlService.AuthorizationDecision(true, "allow", "policy_allow_execution", java.util.Set.of("viewer"), Map.of()));
+        when(confirmationService.resolveRequestedToolCode(null, "query order and cancel booking")).thenReturn(null);
+        when(confirmationService.evaluate("session-1", "user-1", "query order and cancel booking", null, null, false))
+                .thenReturn(new ConfirmationService.ConfirmationEvaluation("approved", null, null, null, null));
+        when(entryProtectionService.evaluateExecutionStart("user-1", "session-1", "order_query", null))
+                .thenReturn(new EntryProtectionService.ProtectionDecision(true, "allowed", null, null, null));
+        when(workflowService.buildRuntimeExecutionBundle("order_query", "v1")).thenReturn(runtimeBundle);
+        when(capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition()))
+                .thenReturn(runtimeBundle.workflowDefinition());
+        when(executionRepository.save(any(Execution.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionService.updateCurrentExecutionId(eq(session), any(String.class))).thenAnswer(invocation -> {
+            session.setCurrentExecutionId(invocation.getArgument(1));
+            return session;
+        });
+        when(pythonClient.execute(any())).thenReturn(Flux.<ServerSentEvent<String>>empty());
+
+        executionService.startExecution("session-1", request);
+
+        Map<String, Object> variables = objectMapper.readValue(
+                session.getVariables(),
+                new TypeReference<Map<String, Object>>() {}
+        );
+        assertThat(variables).containsKey("intent_candidate_queue");
+        List<Map<String, Object>> queue = objectMapper.convertValue(
+                variables.get("intent_candidate_queue"),
+                new TypeReference<List<Map<String, Object>>>() {}
+        );
+        assertThat(queue).hasSize(1);
+        assertThat(queue.get(0)).containsEntry("targetCode", "booking_cancel");
+    }
+
+    @Test
+    void startExecution_acceptActionStartsQueuedWorkflow() {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        List<Map<String, Object>> queue = List.of(
+                Map.of(
+                        "intentCode", "intent_cancel_booking",
+                        "targetType", "workflow",
+                        "targetCode", "booking_cancel",
+                        "confidence", 0.71d,
+                        "source", "rag",
+                        "evidence", "cancel booking"
+                )
+        );
+        Session session = new Session("session-1", 1L, "user-1");
+        session.setVariables(writeVariables(Map.of("intent_candidate_queue", queue)));
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-accept-1",
+                        "message", "继续",
+                        "user_id", "user-1",
+                        "intent_candidate_action", "accept",
+                        "intent_candidate_target_code", "booking_cancel"
+                ),
+                SendMessageRequest.class
+        );
+        WorkflowService.RuntimeExecutionBundle runtimeBundle = new WorkflowService.RuntimeExecutionBundle(
+                Map.of("nodes", Map.of(), "entry", "start"),
+                Map.of(),
+                Map.of(),
+                Map.of("booking_cancel@v1", Map.of()),
+                List.of(),
+                List.of(),
+                "routing-default"
+        );
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(executionRepository.findBySessionIdAndClientMessageId("session-1", "msg-accept-1")).thenReturn(Optional.empty());
+        when(executionRepository.findBySessionIdOrderByCreatedAtDesc("session-1")).thenReturn(List.of());
+        when(workflowService.getWorkflowByCode("booking_cancel"))
+                .thenReturn(robot.agent.dto.response.WorkflowResponse.fromEntity(workflow("booking_cancel", "v1")));
+        when(workflowService.requirePublishedWorkflowVersion("booking_cancel", "v1"))
+                .thenReturn(new WorkflowVersion());
+        when(accessControlService.evaluateExecutionAccess("user-1", 1L, "booking_cancel", null, "user-1"))
+                .thenReturn(new AccessControlService.AuthorizationDecision(true, "allow", "policy_allow_execution", java.util.Set.of("viewer"), Map.of()));
+        when(confirmationService.resolveRequestedToolCode(null, "继续")).thenReturn(null);
+        when(confirmationService.evaluate("session-1", "user-1", "继续", null, null, false))
+                .thenReturn(new ConfirmationService.ConfirmationEvaluation("approved", null, null, null, null));
+        when(entryProtectionService.evaluateExecutionStart("user-1", "session-1", "booking_cancel", null))
+                .thenReturn(new EntryProtectionService.ProtectionDecision(true, "allowed", null, null, null));
+        when(workflowService.buildRuntimeExecutionBundleForExplicitExecution("booking_cancel", "v1")).thenReturn(runtimeBundle);
+        when(capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition()))
+                .thenReturn(runtimeBundle.workflowDefinition());
+        when(executionRepository.save(any(Execution.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionService.updateCurrentExecutionId(eq(session), any(String.class))).thenAnswer(invocation -> {
+            session.setCurrentExecutionId(invocation.getArgument(1));
+            return session;
+        });
+        when(pythonClient.execute(any())).thenReturn(Flux.<ServerSentEvent<String>>empty());
+
+        SendMessageResponse response = executionService.startExecution("session-1", request);
+
+        verify(workflowService, never()).routeMessage(any(), any());
+        verify(executionRepository, never()).findBySessionIdAndClientMessageId("session-1", "msg-accept-1");
+        assertThat(response.getWorkflowCode()).isEqualTo("booking_cancel");
+        assertThat(response.getRouteReason()).isEqualTo("candidate_confirmation");
+    }
+
+    @Test
+    void startExecution_rejectActionReturnsNextCandidateConfirmation() {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        List<Map<String, Object>> queue = List.of(
+                Map.of(
+                        "intentCode", "intent_cancel_booking",
+                        "targetType", "workflow",
+                        "targetCode", "booking_cancel",
+                        "confidence", 0.71d,
+                        "source", "rag",
+                        "evidence", "cancel booking"
+                ),
+                Map.of(
+                        "intentCode", "intent_order_query",
+                        "targetType", "workflow",
+                        "targetCode", "order_query",
+                        "confidence", 0.66d,
+                        "source", "rag",
+                        "evidence", "query order"
+                )
+        );
+        Session session = new Session("session-1", 1L, "user-1");
+        session.setVariables(writeVariables(Map.of("intent_candidate_queue", queue)));
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-reject-1",
+                        "message", "跳过",
+                        "user_id", "user-1",
+                        "intent_candidate_action", "reject",
+                        "intent_candidate_target_code", "booking_cancel"
+                ),
+                SendMessageRequest.class
+        );
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(workflowService.getWorkflowByCode("order_query"))
+                .thenReturn(robot.agent.dto.response.WorkflowResponse.fromEntity(workflow("order_query", "v2")));
+
+        SendMessageResponse response = executionService.startExecution("session-1", request);
+
+        verify(workflowService, never()).routeMessage(any(), any());
+        verify(pythonClient, never()).execute(any());
+        assertThat(response.getStatus()).isEqualTo("candidate_confirmation_required");
+        assertThat(response.getWorkflowCode()).isEqualTo("order_query");
+        assertThat(response.getIntentCandidateQueue()).hasSize(1);
+    }
+
+    @Test
+    void startExecution_clarificationRequiredReturnsWithoutExecutionId() {
+        SessionService sessionService = mock(SessionService.class);
+        WorkflowService workflowService = mock(WorkflowService.class);
+        ExecutionRepository executionRepository = mock(ExecutionRepository.class);
+        ExecutionNodeLogRepository executionNodeLogRepository = mock(ExecutionNodeLogRepository.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        WebSocketPublisher webSocketPublisher = mock(WebSocketPublisher.class);
+        AuditService auditService = mock(AuditService.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        ConfirmationService confirmationService = mock(ConfirmationService.class);
+        EntryProtectionService entryProtectionService = mock(EntryProtectionService.class);
+        CapabilityRuntimeResolver capabilityRuntimeResolver = mock(CapabilityRuntimeResolver.class);
+        CapabilityAuditService capabilityAuditService = mock(CapabilityAuditService.class);
+
+        ExecutionService executionService = new ExecutionService(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService
+        );
+
+        Session session = new Session("session-1", 1L, "user-1");
+        SendMessageRequest request = objectMapper.convertValue(
+                Map.of(
+                        "message_id", "msg-clarify-1",
+                        "message", "???",
+                        "user_id", "user-1"
+                ),
+                SendMessageRequest.class
+        );
+        RoutingDecision routingDecision = new RoutingDecision(
+                "clarification_required",
+                null,
+                null,
+                0.0d,
+                0.7d,
+                "llm_accept_threshold",
+                "llm_no_match",
+                List.of(),
+                0,
+                null,
+                "workflow",
+                null,
+                "请问你想办理哪类业务？",
+                List.of()
+        );
+        when(sessionService.getOrCreateSession("session-1", "user-1")).thenReturn(session);
+        when(executionRepository.findBySessionIdAndClientMessageId("session-1", "msg-clarify-1")).thenReturn(Optional.empty());
+        when(executionRepository.findBySessionIdOrderByCreatedAtDesc("session-1")).thenReturn(List.of());
+        when(workflowService.routeMessage("???", null)).thenReturn(routingDecision);
+
+        SendMessageResponse response = executionService.startExecution("session-1", request);
+
+        verify(pythonClient, never()).execute(any());
+        assertThat(response.getExecutionId()).isNull();
+        assertThat(response.getStatus()).isEqualTo("clarification_required");
+        assertThat(response.getClarificationQuestion()).isEqualTo("请问你想办理哪类业务？");
+    }
+
+    private String writeVariables(Map<String, Object> data) {
+        try {
+            return objectMapper.writeValueAsString(new LinkedHashMap<>(data));
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
+        }
+    }
+
+    private Workflow workflow(String code, String currentVersion) {
+        Workflow workflow = new Workflow();
+        workflow.setWorkflowCode(code);
+        workflow.setCurrentVersion(currentVersion);
+        return workflow;
     }
 }

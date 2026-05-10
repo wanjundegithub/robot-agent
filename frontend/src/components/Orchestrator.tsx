@@ -82,7 +82,6 @@ interface WorkflowDraftPayload {
   workflowName?: string
   workflowVersion: string
   definition: WorkflowDesignerDefinitionV2
-  entryRule: Record<string, unknown>
   workflowConfig: Record<string, unknown>
 }
 
@@ -544,24 +543,14 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     [globalVariables, modelBindings, tempVariables]
   )
 
-  const currentEntryRule = useMemo(
-    () => ({
-      intent_codes: ['general_agent_request'],
-      keywords: workflowName.trim() ? [workflowName.trim()] : ['workflow'],
-      priority: 100,
-    }),
-    [workflowName]
-  )
-
   useEffect(() => {
     onWorkflowDraftChange?.({
       workflowCode: workflowMeta.workflowCode,
       workflowVersion: workflowMeta.draftVersion,
       definition: currentDefinition,
-      entryRule: currentEntryRule,
       workflowConfig: compatibilityWorkflowConfig,
     })
-  }, [compatibilityWorkflowConfig, currentDefinition, currentEntryRule, onWorkflowDraftChange, workflowMeta])
+  }, [compatibilityWorkflowConfig, currentDefinition, onWorkflowDraftChange, workflowMeta])
 
   useEffect(() => {
     onWorkflowSidebarStateChange?.({
@@ -640,7 +629,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       workflowName: basics.workflowName,
       workflowVersion: version,
       definition,
-      entryRule: currentEntryRule,
       workflowConfig: compatibilityWorkflowConfig,
     })
 
@@ -648,7 +636,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       workflowName: basics.workflowName,
       version,
       definition,
-      entryRule: currentEntryRule,
       workflowConfig: compatibilityWorkflowConfig,
       workflowSnapshot: workflowSnapshot as unknown as Record<string, unknown>,
       currentUserId,
@@ -1307,13 +1294,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="panel-title">工作流信息</div>
-          <div className="mt-2 text-sm text-slate-500">维护名称并发布版本，版本列表入口只保留编辑、发布和删除。</div>
+          <div className="mt-2 text-sm text-slate-500">维护名称并发布版本</div>
         </div>
-        {workflowMeta.workflowId && (
-          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
-            编号 {workflowMeta.workflowId}
-          </div>
-        )}
       </div>
       <div className="space-y-3">
         <input
@@ -1821,7 +1803,7 @@ function buildWorkflowSnapshot(payload: WorkflowDraftPayload): WorkflowSnapshotV
     },
     designer: {
       definition: payload.definition,
-      entry_rule: payload.entryRule,
+      entry_rule: {},
       workflow_config: payload.workflowConfig,
       editor_meta: asRecord(payload.definition.editor_meta),
     },
