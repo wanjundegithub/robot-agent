@@ -163,6 +163,7 @@ public class WorkflowService {
             workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
                     workflowCode,
                     workflow.getName(),
+                    workflow.getDescription(),
                     version,
                     workflowVersion.getDefinition(),
                     workflowVersion.getEntryRule(),
@@ -199,6 +200,7 @@ public class WorkflowService {
             workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
                     workflowCode,
                     workflow.getName(),
+                    workflow.getDescription(),
                     version,
                     workflowVersion.getDefinition(),
                     workflowVersion.getEntryRule(),
@@ -232,7 +234,7 @@ public class WorkflowService {
                     Workflow created = new Workflow();
                     created.setWorkflowCode(workflowCode);
                     created.setName(resolveWorkflowName(request, workflowCode));
-                    created.setDescription("Auto-created draft workflow");
+                    created.setDescription(resolveWorkflowDescription(request));
                     created.setWorkspaceId(1L);
                     created.setStatus(WorkflowStatus.DRAFT);
                     created.setCreatedBy(userId);
@@ -240,9 +242,18 @@ public class WorkflowService {
                     created.setUpdatedAt(LocalDateTime.now());
                     return workflowRepository.save(created);
                 });
+        boolean workflowMetadataChanged = false;
         if (request.getWorkflowName() != null && !request.getWorkflowName().isBlank()
                 && !request.getWorkflowName().equals(workflow.getName())) {
             workflow.setName(request.getWorkflowName().trim());
+            workflowMetadataChanged = true;
+        }
+        if (request.getWorkflowDescription() != null
+                && !request.getWorkflowDescription().trim().equals(String.valueOf(workflow.getDescription() == null ? "" : workflow.getDescription()))) {
+            workflow.setDescription(request.getWorkflowDescription().trim());
+            workflowMetadataChanged = true;
+        }
+        if (workflowMetadataChanged) {
             workflow.setUpdatedAt(LocalDateTime.now());
             workflow = workflowRepository.save(workflow);
         }
@@ -384,6 +395,15 @@ public class WorkflowService {
             return request.getWorkflowName().trim();
         }
         return workflowCode;
+    }
+
+    private String resolveWorkflowDescription(CreateWorkflowVersionRequest request) {
+        if (request.getWorkflowDescription() != null) {
+            return request.getWorkflowDescription().trim();
+        }
+        Map<String, Object> definition = parseJsonObject(request.getDefinition());
+        String description = stringValue(definition.get("workflow_description"));
+        return description == null ? "" : description;
     }
 
     public WorkflowVersion getWorkflowVersionEntity(String workflowCode, String version) {
@@ -1352,11 +1372,17 @@ public class WorkflowService {
                 workflow.getName(),
                 workflowCode
         );
+        String workflowDescription = firstNonBlank(
+                request.getWorkflowDescription() == null ? null : request.getWorkflowDescription().trim(),
+                workflow.getDescription(),
+                ""
+        );
         String workflowVersion = request.getVersion();
         if (request.getWorkflowSnapshot() == null || request.getWorkflowSnapshot().isBlank()) {
             return buildCompatibilityWorkflowSnapshot(
                     workflowCode,
                     workflowName,
+                    workflowDescription,
                     workflowVersion,
                     normalizedDefinitionJson,
                     entryRuleJson,
@@ -1368,6 +1394,7 @@ public class WorkflowService {
                 request.getWorkflowSnapshot(),
                 workflowCode,
                 workflowName,
+                workflowDescription,
                 workflowVersion,
                 entryRuleJson,
                 request.getEditorMeta(),
@@ -1392,6 +1419,7 @@ public class WorkflowService {
             String snapshotJson,
             String workflowCode,
             String workflowName,
+            String workflowDescription,
             String workflowVersion,
             String fallbackEntryRuleJson,
             String fallbackEditorMetaJson,
@@ -1411,6 +1439,7 @@ public class WorkflowService {
         Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(providedDefinition);
         normalizedDefinition.put("workflow_code", workflowCode);
         normalizedDefinition.put("workflow_name", workflowName);
+        normalizedDefinition.put("workflow_description", workflowDescription);
         normalizedDefinition.put("workflow_version", workflowVersion);
 
         Map<String, Object> normalizedDesigner = new LinkedHashMap<>(providedDesigner);
@@ -1427,7 +1456,7 @@ public class WorkflowService {
 
         Map<String, Object> normalizedSnapshot = new LinkedHashMap<>(providedSnapshot);
         normalizedSnapshot.put("schema_version", WORKFLOW_SNAPSHOT_SCHEMA_V1);
-        normalizedSnapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowVersion));
+        normalizedSnapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowDescription, workflowVersion));
         normalizedSnapshot.put("designer", normalizedDesigner);
         return writeJsonObject(normalizedSnapshot);
     }
@@ -1435,6 +1464,7 @@ public class WorkflowService {
     private String buildCompatibilityWorkflowSnapshot(
             String workflowCode,
             String workflowName,
+            String workflowDescription,
             String workflowVersion,
             String definitionJson,
             String entryRuleJson,
@@ -1444,11 +1474,12 @@ public class WorkflowService {
         Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(parseJsonObjectStrict(definitionJson));
         normalizedDefinition.put("workflow_code", workflowCode);
         normalizedDefinition.put("workflow_name", workflowName);
+        normalizedDefinition.put("workflow_description", workflowDescription);
         normalizedDefinition.put("workflow_version", workflowVersion);
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("schema_version", WORKFLOW_SNAPSHOT_SCHEMA_V1);
-        snapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowVersion));
+        snapshot.put("workflow", workflowMetadataMap(workflowCode, workflowName, workflowDescription, workflowVersion));
 
         Map<String, Object> designer = new LinkedHashMap<>();
         designer.put("definition", normalizedDefinition);
@@ -1459,10 +1490,11 @@ public class WorkflowService {
         return writeJsonObject(snapshot);
     }
 
-    private Map<String, Object> workflowMetadataMap(String workflowCode, String workflowName, String workflowVersion) {
+    private Map<String, Object> workflowMetadataMap(String workflowCode, String workflowName, String workflowDescription, String workflowVersion) {
         Map<String, Object> workflowMeta = new LinkedHashMap<>();
         workflowMeta.put("workflow_code", workflowCode);
         workflowMeta.put("workflow_name", workflowName);
+        workflowMeta.put("workflow_description", workflowDescription);
         workflowMeta.put("workflow_version", workflowVersion);
         return workflowMeta;
     }
@@ -1529,6 +1561,7 @@ public class WorkflowService {
         normalized.put("editor_meta", editorMeta);
         normalized.put("workflow_code", source.get("workflow_code"));
         normalized.put("workflow_name", source.get("workflow_name"));
+        normalized.put("workflow_description", source.get("workflow_description"));
         if (!legacyConfig.isEmpty()) {
             normalized.put("config", legacyConfig);
         }
@@ -1572,6 +1605,8 @@ public class WorkflowService {
         Map<String, Object> graph = new LinkedHashMap<>();
         graph.put("graph_id", firstNonBlank(stringValue(rawGraph.get("graph_id")), graphId));
         graph.put("graph_type", firstNonBlank(stringValue(rawGraph.get("graph_type")), mainGraph ? "main" : "subflow"));
+        graph.put("graph_name", stringValue(rawGraph.get("graph_name")));
+        graph.put("graph_description", stringValue(rawGraph.get("graph_description")));
         graph.put("entry_node_id", firstNonBlank(
                 stringValue(rawGraph.get("entry_node_id")),
                 stringValue(rawGraph.get("entry")),
@@ -1587,13 +1622,18 @@ public class WorkflowService {
         for (Map.Entry<String, Object> nodeEntry : rawNodes.entrySet()) {
             String nodeId = nodeEntry.getKey();
             Map<String, Object> rawNode = asMap(nodeEntry.getValue());
-            Map<String, Object> node = new LinkedHashMap<>(rawNode);
+        Map<String, Object> node = new LinkedHashMap<>(rawNode);
             String normalizedType = normalizeNodeType(stringValue(rawNode.get("type")));
             if (normalizedType != null) {
                 node.put("type", normalizedType);
             }
             node.put("id", firstNonBlank(stringValue(rawNode.get("id")), nodeId));
             Map<String, Object> config = normalizeModelReferences(new LinkedHashMap<>(asMap(rawNode.get("config"))));
+            String description = stringValue(rawNode.get("description"));
+            if (description != null) {
+                node.put("description", description);
+                config.putIfAbsent("description", description);
+            }
             if ("sub_agent".equals(normalizedType)) {
                 String subgraphId = resolveSubgraphId(config);
                 if (subgraphId != null) {
@@ -1614,13 +1654,25 @@ public class WorkflowService {
         List<Map<String, Object>> normalizedEdges = new ArrayList<>();
         int index = 0;
         for (Map<String, Object> edge : edges) {
-            String source = firstNonBlank(stringValue(edge.get("source")), stringValue(edge.get("from")));
-            String target = firstNonBlank(stringValue(edge.get("target")), stringValue(edge.get("to")));
+            String source = firstNonBlank(
+                    stringValue(edge.get("source")),
+                    stringValue(edge.get("source_node_id")),
+                    stringValue(edge.get("from"))
+            );
+            String target = firstNonBlank(
+                    stringValue(edge.get("target")),
+                    stringValue(edge.get("target_node_id")),
+                    stringValue(edge.get("to"))
+            );
             if (source == null || target == null) {
                 continue;
             }
             Map<String, Object> normalizedEdge = new LinkedHashMap<>(edge);
-            normalizedEdge.put("id", firstNonBlank(stringValue(edge.get("id")), source + "_to_" + target + "_" + (++index)));
+            normalizedEdge.put("id", firstNonBlank(
+                    stringValue(edge.get("id")),
+                    stringValue(edge.get("edge_id")),
+                    source + "_to_" + target + "_" + (++index)
+            ));
             normalizedEdge.put("source", source);
             normalizedEdge.put("target", target);
             normalizedEdges.add(normalizedEdge);
@@ -1730,6 +1782,12 @@ public class WorkflowService {
             List<Map<String, Object>> issues
     ) {
         Map<String, Object> nodes = asMap(graph.get("nodes"));
+        if (stringValue(graph.get("graph_name")) == null) {
+            issues.add(issue(null, "graphs." + graphId + ".graph_name", "图 " + graphId + " 缺少流程名称"));
+        }
+        if (stringValue(graph.get("graph_description")) == null) {
+            issues.add(issue(null, "graphs." + graphId + ".graph_description", "图 " + graphId + " 缺少流程描述"));
+        }
         if (nodes.isEmpty()) {
             issues.add(issue(null, "graphs." + graphId + ".nodes", "图 " + graphId + " 至少需要一个节点"));
             return;

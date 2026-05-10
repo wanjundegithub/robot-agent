@@ -3,6 +3,8 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -18,6 +20,7 @@ import robot.agent.repository.LlmModelRecordRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -32,6 +35,7 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 @Service
 @Transactional(readOnly = true)
 public class UnifiedModelService {
+    private static final Logger log = LoggerFactory.getLogger(UnifiedModelService.class);
 
     private final LlmModelRecordRepository modelRecordRepository;
     private final LlmProviderConfigRepository providerRepository;
@@ -58,6 +62,7 @@ public class UnifiedModelService {
     }
 
     public UnifiedModelResult invokeChat(UnifiedModelRequest request) {
+        long startedAt = System.currentTimeMillis();
         String modelCode = required(request.modelCode(), "model_code");
         LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(modelCode)
                 .orElseThrow(() -> stableError("MODEL_NOT_FOUND", "Model record not found: " + modelCode));
@@ -87,11 +92,27 @@ public class UnifiedModelService {
                 messages,
                 effectiveOptions
         );
+        log.info(
+                "model.invoke.request mode=managed modelCode={} providerCode={} providerType={} upstreamModelCode={} timeoutSec={} messageCount={}",
+                modelRecord.getModelCode(),
+                provider.getProviderCode(),
+                provider.getProviderType(),
+                upstreamModelCode,
+                timeoutSec,
+                messages.size()
+        );
         Map<String, Object> payload = postForMap(providerRequest, timeoutSec);
         String providerProtocol = resolveProviderProtocol(normalizeProviderType(provider.getProviderType()));
         String text = extractText(providerProtocol, payload);
         Map<String, Object> usage = extractUsage(providerProtocol, payload);
 
+        log.info(
+                "model.invoke.completed mode=managed modelCode={} providerCode={} durationMs={} usageKeys={}",
+                modelRecord.getModelCode(),
+                provider.getProviderCode(),
+                System.currentTimeMillis() - startedAt,
+                usage.keySet()
+        );
         return new UnifiedModelResult(
                 modelRecord.getModelCode(),
                 provider.getProviderCode(),
@@ -110,6 +131,7 @@ public class UnifiedModelService {
             List<? extends Map<String, ?>> messages,
             Map<String, ?> options
     ) {
+        long startedAt = System.currentTimeMillis();
         LlmProviderConfig provider = new LlmProviderConfig();
         provider.setProviderType(required(providerType, "provider"));
         provider.setBaseUrl(required(baseUrl, "base_url").replaceAll("/+$", ""));
@@ -130,10 +152,24 @@ public class UnifiedModelService {
                 normalizeMessages(messages),
                 effectiveOptions
         );
+        log.info(
+                "model.invoke.request mode=direct providerType={} modelName={} timeoutSec={} messageCount={}",
+                providerType,
+                modelName,
+                timeoutSec,
+                messages == null ? 0 : messages.size()
+        );
         Map<String, Object> payload = postForMap(providerRequest, timeoutSec);
         String providerProtocol = resolveProviderProtocol(normalizeProviderType(provider.getProviderType()));
         String text = extractText(providerProtocol, payload);
         Map<String, Object> usage = extractUsage(providerProtocol, payload);
+        log.info(
+                "model.invoke.completed mode=direct providerType={} modelName={} durationMs={} usageKeys={}",
+                providerType,
+                modelName,
+                System.currentTimeMillis() - startedAt,
+                usage.keySet()
+        );
         return new UnifiedModelResult(
                 "draft-" + normalizeProviderType(providerType),
                 "draft-provider",
@@ -145,9 +181,17 @@ public class UnifiedModelService {
     }
 
     public int validateProviderConnection(LlmProviderConfig provider, String modelCode, Map<String, Object> requestBodyOverride) {
+        long startedAt = System.currentTimeMillis();
         String providerType = normalizeProviderType(required(provider.getProviderType(), "provider_type"));
         String providerProtocol = resolveProviderProtocol(providerType);
         ProviderRequest providerRequest = buildProbeRequest(provider, providerProtocol, required(modelCode, "model_code"), requestBodyOverride);
+        log.info(
+                "model.provider.validate.request providerCode={} providerType={} modelCode={} customBody={}",
+                provider.getProviderCode(),
+                providerType,
+                modelCode,
+                requestBodyOverride != null && !requestBodyOverride.isEmpty()
+        );
         try {
             ResponseEntity<Void> response = webClient.post()
                     .uri(providerRequest.url())
@@ -160,6 +204,14 @@ public class UnifiedModelService {
             if (response == null || !response.getStatusCode().is2xxSuccessful()) {
                 throw stableError("PROVIDER_REQUEST_FAILED", "Provider validation request failed");
             }
+            log.info(
+                    "model.provider.validate.completed providerCode={} providerType={} modelCode={} status={} durationMs={}",
+                    provider.getProviderCode(),
+                    providerType,
+                    modelCode,
+                    response.getStatusCode().value(),
+                    System.currentTimeMillis() - startedAt
+            );
             return response.getStatusCode().value();
         } catch (WebClientResponseException exception) {
             throw stableError("PROVIDER_REQUEST_FAILED", responseMessage(exception));
@@ -277,7 +329,10 @@ public class UnifiedModelService {
     }
 
     private Map<String, Object> postForMap(ProviderRequest providerRequest, int timeoutSec) {
+        long startedAt = System.currentTimeMillis();
         try {
+            String endpoint = sanitizeUrlForLog(providerRequest.url());
+            log.debug("model.provider.request endpoint={} timeoutSec={} bodyKeys={}", endpoint, timeoutSec, providerRequest.body().keySet());
             Map<String, Object> payload = webClient.post()
                     .uri(providerRequest.url())
                     .contentType(MediaType.APPLICATION_JSON)
@@ -286,13 +341,51 @@ public class UnifiedModelService {
                     .retrieve()
                     .bodyToMono(new TypeReferenceReference())
                     .block(Duration.ofSeconds(Math.max(5, timeoutSec + 5)));
-            return payload == null ? Map.of() : payload;
+            Map<String, Object> result = payload == null ? Map.of() : payload;
+            log.debug(
+                    "model.provider.response endpoint={} durationMs={} responseKeys={}",
+                    endpoint,
+                    System.currentTimeMillis() - startedAt,
+                    result.keySet()
+            );
+            return result;
         } catch (WebClientResponseException exception) {
             throw stableError("PROVIDER_REQUEST_FAILED", responseMessage(exception));
         } catch (ResponseStatusException exception) {
             throw exception;
         } catch (Exception exception) {
             throw stableError("PROVIDER_REQUEST_FAILED", exception.getMessage());
+        }
+    }
+
+    private String sanitizeUrlForLog(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        try {
+            URI uri = URI.create(url);
+            String query = uri.getRawQuery();
+            if (query == null || query.isBlank()) {
+                return new URI(uri.getScheme(), uri.getAuthority(), uri.getPath(), null, null).toString();
+            }
+            String sanitizedQuery = java.util.Arrays.stream(query.split("&"))
+                    .map(parameter -> {
+                        int separatorIndex = parameter.indexOf('=');
+                        String key = separatorIndex < 0 ? parameter : parameter.substring(0, separatorIndex);
+                        String normalizedKey = key.toLowerCase(Locale.ROOT);
+                        if (normalizedKey.contains("key")
+                                || normalizedKey.contains("token")
+                                || normalizedKey.contains("secret")
+                                || normalizedKey.contains("password")) {
+                            return key + "=***";
+                        }
+                        return parameter;
+                    })
+                    .collect(java.util.stream.Collectors.joining("&"));
+            return new URI(uri.getScheme(), uri.getAuthority(), uri.getPath(), sanitizedQuery, null).toString();
+        } catch (Exception exception) {
+            int queryIndex = url.indexOf('?');
+            return queryIndex < 0 ? url : url.substring(0, queryIndex) + "?***";
         }
     }
 

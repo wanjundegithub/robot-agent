@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -24,6 +25,13 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
+from src.core.logging_utils import (
+    configure_logging,
+    duration_ms,
+    new_request_id,
+    reset_request_id,
+    set_request_id,
+)
 from src.core.model_runtime import classify_intent_with_model_code
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
 from src.core.protection import ProtectionError, runtime_protection_manager
@@ -32,7 +40,7 @@ from src.core.scheduler import WorkflowScheduler
 from src.core.telemetry import metrics_app, workflow_telemetry
 
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Workflow Engine API", version="3.0.0")
@@ -49,11 +57,45 @@ registry = ExecutionRegistry()
 scheduler = WorkflowScheduler()
 
 
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = new_request_id(request.headers.get("x-request-id"))
+    token = set_request_id(request_id)
+    start = time.perf_counter()
+    logger.info("Inbound request method=%s path=%s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed = duration_ms(start)
+        logger.exception(
+            "Request failed method=%s path=%s status=%s durationMs=%.2f",
+            request.method,
+            request.url.path,
+            500,
+            elapsed,
+        )
+        reset_request_id(token)
+        raise
+    elapsed = duration_ms(start)
+    response.headers["X-Request-Id"] = request_id
+    logger.info(
+        "Request completed method=%s path=%s status=%s durationMs=%.2f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed,
+    )
+    reset_request_id(token)
+    return response
+
+
 @app.on_event("startup")
 async def startup() -> None:
+    logger.info("python-ai service startup begin")
     initialize_idempotency_store()
     initialize_knowledge_store()
     workflow_telemetry.initialize()
+    logger.info("python-ai service startup complete")
 
 
 @app.post("/api/execute")

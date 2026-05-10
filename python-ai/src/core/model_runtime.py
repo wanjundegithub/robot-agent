@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from typing import Any, Dict, List
 from urllib.parse import quote
 
 import httpx
+from src.core.logging_utils import duration_ms, safe_url, sanitize_dict, summarize_payload
 
 
 class ModelConfigError(Exception):
@@ -14,6 +17,9 @@ class ModelConfigError(Exception):
 
 class ModelExecutionError(Exception):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 def _provider_extra_headers(provider: Dict[str, Any]) -> Dict[str, Any]:
@@ -209,6 +215,7 @@ async def _invoke_provider(
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
 ) -> str:
+    start_time = time.perf_counter()
     provider_type = str(provider.get("provider_type", "")).strip().lower()
     protocol = _provider_protocol(provider)
     if provider_type not in {"openai", "openai_compatible", "gemini", "claude", "deepseek", "doubao", "qwen", "custom"}:
@@ -308,9 +315,40 @@ async def _invoke_provider(
         request_url = f"{_join_url(base_url, gemini_path)}?{quote(query_auth_name, safe='')}={quote(api_key, safe='')}"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(request_url, headers=headers, json=body)
-        response.raise_for_status()
-        payload = response.json()
+        log_headers = sanitize_dict(headers)
+        logger.info(
+            "Model API request providerType=%s protocol=%s model=%s url=%s timeoutSec=%.2f headers=%s payload=%s",
+            provider_type,
+            protocol,
+            upstream_model_code,
+            safe_url(request_url),
+            timeout,
+            log_headers,
+            summarize_payload(body),
+        )
+        try:
+            response = await client.post(request_url, headers=headers, json=body)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            logger.exception(
+                "Model API request failed providerType=%s protocol=%s model=%s url=%s durationMs=%.2f",
+                provider_type,
+                protocol,
+                upstream_model_code,
+                safe_url(request_url),
+                duration_ms(start_time),
+            )
+            raise
+    logger.info(
+        "Model API response providerType=%s protocol=%s model=%s status=%s durationMs=%.2f payload=%s",
+        provider_type,
+        protocol,
+        upstream_model_code,
+        response.status_code,
+        duration_ms(start_time),
+        summarize_payload(payload),
+    )
 
     try:
         if protocol in {"openai", "openai_compatible", "deepseek", "qwen"}:

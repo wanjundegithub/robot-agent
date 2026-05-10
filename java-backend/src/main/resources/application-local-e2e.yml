@@ -19,6 +19,10 @@ spring:
         format_sql: true
 
 logging:
+  file:
+    name: logs/java-backend.log
+  pattern:
+    level: "%5p [corr:%X{correlationId:-}] [req:%X{requestId:-}]"
   level:
     robot.agent: INFO
 

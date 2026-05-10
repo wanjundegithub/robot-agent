@@ -19,6 +19,10 @@ server:
   port: 8080
 
 logging:
+  file:
+    name: logs/java-backend.log
+  pattern:
+    level: "%5p [corr:%X{correlationId:-}] [req:%X{requestId:-}]"
   level:
     robot.agent: DEBUG
 

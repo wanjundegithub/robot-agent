@@ -1,8 +1,12 @@
 from typing import Dict, Any
+import logging
 import httpx
 from src.core.protection import runtime_protection_manager, tool_confirmation_gate
 from src.core.tool_registry import tool_registry
+from src.core.logging_utils import duration_ms, safe_url, sanitize_dict, summarize_payload
 from .base import BaseNode
+
+logger = logging.getLogger(__name__)
 
 
 class ToolNode(BaseNode):
@@ -137,6 +141,16 @@ class ToolNode(BaseNode):
         }
 
     async def _make_request(self, client: httpx.AsyncClient, params: Dict[str, Any]):
+        import time
+        start = time.perf_counter()
+        logger.info(
+            "Node tool HTTP request method=%s url=%s params=%s headers=%s payload=%s",
+            params["method"],
+            safe_url(str(params["url"])),
+            summarize_payload(params.get("params")),
+            sanitize_dict(params.get("headers", {})),
+            summarize_payload(params.get("json")),
+        )
         if params["json"]:
             response = await client.request(
                 method=params["method"],
@@ -152,6 +166,13 @@ class ToolNode(BaseNode):
                 params=params["params"],
                 headers=params["headers"]
             )
+        logger.info(
+            "Node tool HTTP response method=%s url=%s status=%s durationMs=%.2f",
+            params["method"],
+            safe_url(str(params["url"])),
+            response.status_code,
+            duration_ms(start),
+        )
         return response
 
     async def _parse_response(self, response: httpx.Response) -> Dict[str, Any]:

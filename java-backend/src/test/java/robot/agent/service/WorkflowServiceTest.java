@@ -176,6 +176,57 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void validateWorkflowDefinitionRequiresGraphNamesAndDescriptions() {
+        WorkflowService workflowService = newWorkflowService();
+        String definition = """
+                {
+                  "schema_version": "workflow-designer/v2",
+                  "main_graph_id": "main",
+                  "graphs": {
+                    "main": {
+                      "graph_id": "main",
+                      "graph_type": "main",
+                      "graph_name": "",
+                      "graph_description": "",
+                      "entry_node_id": "coordinator_main",
+                      "nodes": {
+                        "coordinator_main": {"id": "coordinator_main", "type": "coordinator", "config": {"prompt": "路由到子代理"}},
+                        "sub_agent_booking": {"id": "sub_agent_booking", "type": "sub_agent", "config": {"prompt": "进入订票子流程", "subgraph_id": "sub_booking"}}
+                      },
+                      "edges": [
+                        {"id": "e1", "source": "coordinator_main", "target": "sub_agent_booking"}
+                      ]
+                    },
+                    "sub_booking": {
+                      "graph_id": "sub_booking",
+                      "graph_type": "subflow",
+                      "graph_name": "订票子流程",
+                      "graph_description": "",
+                      "entry_node_id": "start_sub",
+                      "nodes": {
+                        "start_sub": {"id": "start_sub", "type": "start", "config": {"prompt": "开始子流程"}},
+                        "end_sub": {"id": "end_sub", "type": "end", "config": {"prompt": "结束子流程", "output_format": {}}}
+                      },
+                      "edges": [
+                        {"id": "s1", "source": "start_sub", "target": "end_sub"}
+                      ]
+                    }
+                  }
+                }
+                """;
+
+        List<Map<String, Object>> issues = workflowService.validateWorkflowDefinition(definition, "{}");
+
+        assertThat(issues)
+                .extracting(item -> item.get("message"))
+                .contains(
+                        "图 main 缺少流程名称",
+                        "图 main 缺少流程描述",
+                        "图 sub_booking 缺少流程描述"
+                );
+    }
+
+    @Test
     void validateWorkflowDefinitionChecksCapabilityToolFieldsInV2Graph() {
         WorkflowService workflowService = newWorkflowService();
         String definition = """
@@ -727,6 +778,24 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void workflowVersionResponseIncludesWorkflowDescription() {
+        Workflow workflow = new Workflow();
+        workflow.setId(42L);
+        workflow.setWorkflowCode("response_flow");
+        workflow.setName("响应工作流");
+        workflow.setDescription("响应工作流描述");
+
+        WorkflowVersion version = new WorkflowVersion();
+        version.setWorkflowCode("response_flow");
+        version.setVersion("v1");
+        version.setStatus(WorkflowVersionStatus.DRAFT);
+
+        WorkflowVersionResponse response = WorkflowVersionResponse.fromEntity(version, workflow);
+
+        assertThat(response.getWorkflowDescription()).isEqualTo("响应工作流描述");
+    }
+
+    @Test
     void saveWorkflowDraftCreatesDefaultEntryRuleWhenRequestOmitsIt() throws Exception {
         WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
         WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
@@ -791,6 +860,88 @@ class WorkflowServiceTest {
         Map<String, Object> snapshot = objectMapper.readValue(persisted.getWorkflowSnapshot(), Map.class);
         Map<String, Object> designer = (Map<String, Object>) snapshot.get("designer");
         assertThat((Map<String, Object>) designer.get("entry_rule")).containsEntry("priority", 100);
+    }
+
+    @Test
+    void saveWorkflowDraftPersistsWorkflowDescriptionAndNodeDescriptions() throws Exception {
+        WorkflowRepository workflowRepository = mock(WorkflowRepository.class);
+        WorkflowVersionRepository workflowVersionRepository = mock(WorkflowVersionRepository.class);
+        AccessControlService accessControlService = mock(AccessControlService.class);
+        AuditService auditService = mock(AuditService.class);
+        PythonClient pythonClient = mock(PythonClient.class);
+        ModelConfigService modelConfigService = mock(ModelConfigService.class);
+
+        Workflow existingWorkflow = new Workflow();
+        existingWorkflow.setWorkflowCode("description_flow");
+        existingWorkflow.setName("旧名称");
+        existingWorkflow.setDescription("旧描述");
+        existingWorkflow.setWorkspaceId(1L);
+        existingWorkflow.setStatus(WorkflowStatus.DRAFT);
+        when(workflowRepository.findByWorkflowCode("description_flow")).thenReturn(Optional.of(existingWorkflow));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("description_flow", "v1")).thenReturn(Optional.empty());
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.PUBLISHED)).thenReturn(List.of());
+
+        WorkflowService workflowService = new WorkflowService(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService
+        );
+
+        CreateWorkflowVersionRequest request = new CreateWorkflowVersionRequest();
+        request.setVersion("v1");
+        request.setWorkflowName("新名称");
+        request.setWorkflowDescription("新工作流描述");
+        request.setDefinition("""
+                {
+                  "schema_version":"workflow-designer/v2",
+                  "workflow_description":"新工作流描述",
+                  "main_graph_id":"main",
+                  "graphs":{
+                    "main":{
+                      "graph_id":"main",
+                      "graph_type":"main",
+                      "graph_name":"主流程",
+                      "graph_description":"主流程描述",
+                      "entry_node_id":"coordinator_main",
+                      "nodes":{
+                        "coordinator_main":{"id":"coordinator_main","type":"coordinator","name":"协调节点","description":"协调节点描述","config":{"prompt":"协调节点描述","description":"协调节点描述"}},
+                        "sub_agent_main":{"id":"sub_agent_main","type":"sub_agent","name":"子代理节点","description":"子代理节点描述","config":{"prompt":"子代理节点描述","description":"子代理节点描述","subgraph_id":"subgraph_1"}}
+                      },
+                      "edges":[{"edge_id":"e_coordinator_sub","source_node_id":"coordinator_main","target_node_id":"sub_agent_main"}]
+                    }
+                  }
+                }
+                """);
+        request.setConfig("{}");
+
+        workflowService.saveWorkflowDraft("tester", "description_flow", request);
+
+        assertThat(existingWorkflow.getName()).isEqualTo("新名称");
+        assertThat(existingWorkflow.getDescription()).isEqualTo("新工作流描述");
+
+        ArgumentCaptor<WorkflowVersion> captor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(captor.capture());
+        Map<String, Object> definition = objectMapper.readValue(captor.getValue().getDefinition(), Map.class);
+        assertThat(definition).containsEntry("workflow_description", "新工作流描述");
+        Map<String, Object> graphs = (Map<String, Object>) definition.get("graphs");
+        Map<String, Object> mainGraph = (Map<String, Object>) graphs.get("main");
+        Map<String, Object> nodes = (Map<String, Object>) mainGraph.get("nodes");
+        Map<String, Object> coordinator = (Map<String, Object>) nodes.get("coordinator_main");
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) mainGraph.get("edges");
+        assertThat(coordinator).containsEntry("name", "协调节点");
+        assertThat(coordinator).containsEntry("description", "协调节点描述");
+        assertThat((Map<String, Object>) coordinator.get("config")).containsEntry("description", "协调节点描述");
+        assertThat(nodes).containsKey("sub_agent_main");
+        assertThat(edges).hasSize(1);
+        assertThat(edges.get(0)).containsEntry("source", "coordinator_main");
+        assertThat(edges.get(0)).containsEntry("target", "sub_agent_main");
+        assertThat(edges.get(0)).containsEntry("id", "e_coordinator_sub");
     }
 
     @Test

@@ -70,13 +70,26 @@ public class RobotChannelInitializer extends ChannelInitializer<Channel> {
 
         @Override
         protected void channelRead0(ChannelHandlerContext context, TextWebSocketFrame frame) {
+            long startedAt = System.currentTimeMillis();
             NettyGatewayHub.GatewayConnection connection = gatewayHub.getByChannel(context.channel());
             if (connection == null) {
                 connection = gatewayHub.register(context.channel(), null, null);
             }
             NettyGatewayHub.GatewayConnection finalConnection = connection;
+            log.info(
+                    "gateway.channel.inbound connectionId={} frameSize={} sessionId={} executionId={}",
+                    finalConnection.connectionId(),
+                    frame.text() == null ? 0 : frame.text().length(),
+                    finalConnection.sessionId(),
+                    finalConnection.executionId()
+            );
 
             gatewayActionService.handle(frame.text(), finalConnection)
+                    .doOnSuccess(ignored -> log.info(
+                            "gateway.channel.handled connectionId={} durationMs={}",
+                            finalConnection.connectionId(),
+                            System.currentTimeMillis() - startedAt
+                    ))
                     .doOnError(error -> log.warn(
                             "gateway.channel.handle_failed connectionId={} message={}",
                             finalConnection.connectionId(),
@@ -102,6 +115,7 @@ public class RobotChannelInitializer extends ChannelInitializer<Channel> {
                         firstQueryValue(decoder.parameters(), "session_id"),
                         firstQueryValue(decoder.parameters(), "execution_id")
                 );
+                log.info("gateway.channel.handshake channel={} requestUri={}", context.channel().id(), handshake.requestUri());
             }
             super.userEventTriggered(context, event);
         }

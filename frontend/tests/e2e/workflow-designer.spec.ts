@@ -4,6 +4,7 @@ type PublishedWorkflow = {
   id: number
   workflowCode: string
   name: string
+  description?: string
   status: string
   currentVersion: string
   createdBy: string
@@ -14,6 +15,7 @@ type WorkflowVersionFixture = {
   workflowId: number
   workflowCode: string
   workflowName: string
+  workflowDescription?: string
   version: string
   status: string
   definition: string
@@ -32,6 +34,7 @@ const createPublishedWorkflow = (index: number): PublishedWorkflow => ({
   id: index,
   workflowCode: `workflow_${index}`,
   name: `已发布工作流 ${index}`,
+  description: `已发布工作流 ${index} 描述`,
   status: 'PUBLISHED',
   currentVersion: `v20260430000${index}`,
   createdBy: 'demo-user',
@@ -42,12 +45,14 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
   workflowId: workflow.id,
   workflowCode: workflow.workflowCode,
   workflowName: workflow.name,
+  workflowDescription: workflow.description,
   version: workflow.currentVersion,
   status: 'PUBLISHED',
   definition: JSON.stringify({
     schema_version: 'workflow-designer/v2',
     workflow_code: workflow.workflowCode,
     workflow_name: workflow.name,
+    workflow_description: workflow.description,
     workflow_version: workflow.currentVersion,
     main_graph_id: 'main',
     graphs: {
@@ -55,18 +60,54 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
         graph_id: 'main',
         graph_type: 'MAIN',
         graph_name: '主流程',
+        graph_description: '主流程描述',
         entry_node_id: 'coordinator_main',
         nodes: {
           coordinator_main: {
             id: 'coordinator_main',
             type: 'coordinator',
             name: '协调节点',
+            description: '协调节点描述',
             config: {
-              prompt: '根据用户意图选择要进入的子代理流程。',
+              prompt: '协调节点描述',
+              description: '协调节点描述',
+            },
+          },
+          sub_agent_main: {
+            id: 'sub_agent_main',
+            type: 'sub_agent',
+            name: '子流程名称',
+            description: '子代理节点描述',
+            config: {
+              prompt: '子代理节点描述',
+              description: '子代理节点描述',
+              subgraph_id: 'subgraph_saved',
             },
           },
         },
-        edges: [],
+        edges: [{ edge_id: 'e1', source_node_id: 'coordinator_main', target_node_id: 'sub_agent_main' }],
+      },
+      subgraph_saved: {
+        graph_id: 'subgraph_saved',
+        graph_type: 'SUBGRAPH',
+        graph_name: '子流程名称',
+        graph_description: '子流程描述',
+        entry_node_id: 'start_sub',
+        nodes: {
+          start_sub: {
+            id: 'start_sub',
+            type: 'start',
+            name: '开始节点',
+            config: { prompt: '开始' },
+          },
+          end_sub: {
+            id: 'end_sub',
+            type: 'end',
+            name: '结束节点',
+            config: { prompt: '结束', output_format: {} },
+          },
+        },
+        edges: [{ edge_id: 's1', source_node_id: 'start_sub', target_node_id: 'end_sub' }],
       },
     },
     variables: {
@@ -100,7 +141,7 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
   }),
   editorMeta: JSON.stringify({
     current_graph_id: 'main',
-    graph_order: ['main'],
+    graph_order: ['main', 'subgraph_saved'],
   }),
 })
 
@@ -288,7 +329,21 @@ test.describe('workflow designer v2 contract', () => {
 
     await page.getByTestId('workflow-list-edit-workflow_1').click()
     await expect(page.getByTestId('workflow-name-input')).toHaveValue('已发布工作流 1')
+    await expect(page.getByTestId('workflow-description-input')).toHaveValue('已发布工作流 1 描述')
     await expect(page.getByTestId('workflow-current-graph')).toContainText('主流程')
+    await expect(page.locator('.react-flow__node')).toHaveCount(2)
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    await expect(page.getByTestId('workflow-current-graph-name-input')).toHaveValue('主流程')
+    await expect(page.getByTestId('workflow-current-graph-description-input')).toHaveValue('主流程描述')
+    await page.locator('.react-flow__node').filter({ hasText: '子流程名称' }).click()
+    await expect(page.getByPlaceholder('节点名称')).toHaveValue('子流程名称')
+    await expect(page.getByTestId('workflow-node-description-input')).toHaveValue('子代理节点描述')
+    await page.getByTestId('workflow-graph-nav-subgraph_saved').click()
+    await expect(page.locator('.react-flow__node')).toHaveCount(2)
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    await expect(page.getByTestId('workflow-current-graph-name-input')).toHaveValue('子流程名称')
+    await expect(page.getByTestId('workflow-current-graph-description-input')).toHaveValue('子流程描述')
+    await page.getByTestId('workflow-breadcrumb-main').click()
     await expect(page.getByTestId('workflow-link-chat')).toHaveCount(0)
 
     await page.getByTestId('workflow-back-list').click()
@@ -463,6 +518,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-version-toggle')).toHaveCount(0)
     await expect(page.getByTestId('workflow-name-input')).toBeVisible()
     await expect(page.getByTestId('workflow-publish')).toBeVisible()
+    await expect(page.getByRole('button', { name: '新增子流程' })).toHaveCount(0)
     await expect(page.getByTestId('workflow-info-panel')).toContainText('维护名称并发布版本')
     await expect(page.getByTestId('workflow-info-panel')).not.toContainText('Intent Entry Rule')
     await expect(page.getByTestId('workflow-info-panel')).not.toContainText('编号')
@@ -563,10 +619,10 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-add-node-end')).toHaveCount(0)
 
     await page.getByTestId('workflow-add-node-sub_agent').click()
-    await page.getByTestId('workflow-subgraph-id-input').fill('subgraph_a')
+    await page.getByPlaceholder('节点名称').fill('子流程 A')
     await page.getByTestId('workflow-open-subgraph').click()
 
-    await expect(page.getByTestId('workflow-breadcrumb-subgraph_a')).toBeVisible()
+    await expect(page.locator('[data-testid^="workflow-breadcrumb-subgraph_sub_agent_"]')).toBeVisible()
     await expect(page.getByTestId('workflow-add-node-start')).toBeVisible()
     await expect(page.getByTestId('workflow-add-node-message')).toBeVisible()
     await expect(page.getByTestId('workflow-add-node-function')).toBeVisible()
@@ -677,7 +733,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(1)
 
     await page.getByTestId('workflow-add-node-sub_agent').click()
-    await page.getByTestId('workflow-subgraph-id-input').fill('subgraph_capability')
+    await page.getByPlaceholder('节点名称').fill('能力子流程')
     await page.getByTestId('workflow-open-subgraph').click()
     await page.getByTestId('workflow-add-node-tool').click()
 
@@ -796,18 +852,26 @@ test.describe('workflow designer v2 contract', () => {
 
     await openNewWorkflowEditor(page)
 
-    await page.getByTestId('workflow-name-input').fill('Nested Graph Contract')
+    await page.getByTestId('workflow-current-graph-name-input').fill('Nested Graph Contract')
+    await page.getByTestId('workflow-current-graph-description-input').fill('工作流描述')
+    await expect(page.getByTestId('workflow-name-input')).toHaveValue('Nested Graph Contract')
+    await expect(page.getByTestId('workflow-description-input')).toHaveValue('工作流描述')
     await page.getByTestId('workflow-add-node-sub_agent').click()
-    await page.getByTestId('workflow-subgraph-id-input').fill('subgraph_a')
+    await expect(page.getByTestId('workflow-subgraph-id-input')).toHaveCount(0)
+    await page.getByPlaceholder('节点名称').fill('子流程复核')
+    await page.getByTestId('workflow-node-description-input').fill('子代理节点描述')
     await page.getByTestId('workflow-open-subgraph').click()
-    await expect(page.getByTestId('workflow-breadcrumb-subgraph_a')).toBeVisible()
+    await expect(page.getByTestId('workflow-breadcrumb-main')).toBeVisible()
+    await expect(page.locator('[data-testid^="workflow-breadcrumb-subgraph_sub_agent_"]')).toBeVisible()
 
     const graphNameInput = page.getByTestId('workflow-current-graph-name-input')
-    await expect(graphNameInput).toHaveValue('未命名子流程')
+    const graphDescriptionInput = page.getByTestId('workflow-current-graph-description-input')
+    await expect(graphNameInput).toHaveValue('子流程复核')
     await graphNameInput.fill('')
     await expect(graphNameInput).toHaveValue('')
     await graphNameInput.fill('子流程复核')
     await expect(graphNameInput).toHaveValue('子流程复核')
+    await graphDescriptionInput.fill('子流程复核描述')
 
     await page.getByTestId('workflow-breadcrumb-main').click()
     await page.getByTestId('workflow-publish').click()
@@ -820,19 +884,32 @@ test.describe('workflow designer v2 contract', () => {
     const definitionLlmDefaults = (definitionBindings.llm_defaults || {}) as Record<string, unknown>
 
     expect(definition.schema_version).toBe('workflow-designer/v2')
+    expect(draftPayload?.workflow_name).toBe('Nested Graph Contract')
+    expect(draftPayload?.workflow_description).toBe('工作流描述')
+    expect(definition.workflow_name).toBe('Nested Graph Contract')
+    expect(definition.workflow_description).toBe('工作流描述')
     expect(definition.main_graph_id).toBe('main')
     expect(Array.isArray(graphs)).toBe(false)
     expect(graphs.main).toBeTruthy()
-    expect(graphs.subgraph_a).toBeTruthy()
+    const subgraphId = Object.keys(graphs).find((graphId) => graphId !== 'main')
+    expect(subgraphId).toBeTruthy()
     const mainGraph = graphs.main as Record<string, unknown>
-    const subGraph = graphs.subgraph_a as Record<string, unknown>
+    const subGraph = graphs[subgraphId as string] as Record<string, unknown>
     expect(mainGraph.graph_id).toBe('main')
     expect(mainGraph.graph_type).toBe('MAIN')
+    expect(mainGraph.graph_name).toBe('Nested Graph Contract')
+    expect(mainGraph.graph_description).toBe('工作流描述')
     expect(mainGraph.entry_node_id).toBeTruthy()
     expect(Array.isArray(mainGraph.edges)).toBe(true)
-    expect(subGraph.graph_id).toBe('subgraph_a')
+    const mainNodes = mainGraph.nodes as Record<string, Record<string, unknown>>
+    const savedSubAgent = Object.values(mainNodes).find((node) => node.type === 'sub_agent')
+    expect(savedSubAgent?.name).toBe('子流程复核')
+    expect(savedSubAgent?.description).toBe('子代理节点描述')
+    expect((savedSubAgent?.config as Record<string, unknown>).description).toBe('子代理节点描述')
+    expect(subGraph.graph_id).toBe(subgraphId)
     expect(subGraph.graph_type).toBe('SUBGRAPH')
     expect(subGraph.graph_name).toBe('子流程复核')
+    expect(subGraph.graph_description).toBe('子流程复核描述')
     expect(Array.isArray(subGraph.edges)).toBe(true)
     expect(mainGraph).not.toHaveProperty('transitions')
     expect(mainGraph).not.toHaveProperty('entry')
@@ -1000,6 +1077,8 @@ test.describe('workflow designer v2 contract', () => {
 
     await openNewWorkflowEditor(page)
     await page.getByTestId('workflow-name-input').fill('Publish Without Chat Link')
+    await page.getByTestId('workflow-current-graph-name-input').fill('发布主流程')
+    await page.getByTestId('workflow-current-graph-description-input').fill('发布主流程描述')
     await page.getByTestId('workflow-publish').click()
 
     await expect.poll(() => publishRequest).not.toBeNull()

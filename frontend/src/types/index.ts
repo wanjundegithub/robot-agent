@@ -267,6 +267,7 @@ export interface WorkflowVersionSummary {
   workflowId?: number | null
   workflowCode: string
   workflowName?: string | null
+  workflowDescription?: string | null
   version: string
   status: string
   definition?: string
@@ -281,6 +282,7 @@ export interface WorkflowVersionSummary {
 export interface WorkflowEditorSelection {
   workflowCode: string
   workflowName?: string | null
+  workflowDescription?: string | null
   publishedVersion?: string
   version: WorkflowVersionSummary
 }
@@ -290,6 +292,7 @@ export interface WorkflowDesignerGraphDefinition {
   graph_type: 'MAIN' | 'SUBGRAPH' | string
   entry_node_id: string
   graph_name?: string
+  graph_description?: string
   nodes: Record<string, unknown>
   edges: Array<Record<string, unknown>>
   id?: string
@@ -302,6 +305,7 @@ export interface WorkflowDesignerDefinitionV2 {
   schema_version: 'workflow-designer/v2'
   workflow_code: string
   workflow_name: string
+  workflow_description?: string
   workflow_version: string
   main_graph_id: string
   graphs: Record<string, WorkflowDesignerGraphDefinition>
@@ -323,6 +327,7 @@ export interface WorkflowSnapshotV1 {
   workflow: {
     workflow_code: string
     workflow_name: string
+    workflow_description?: string
     workflow_version: string
   }
   designer: {

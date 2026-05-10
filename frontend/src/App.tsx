@@ -19,6 +19,7 @@ import {
   getSessionsByUserId,
   getWorkflowVersions,
 } from './services/api'
+import { downloadCallLogs, logGatewayEvent } from './services/callLogger'
 import { displayExecutionStatus, displaySessionStatus, displaySocketState, displayUserLabel } from './utils/displayText'
 import type {
   ExecutionDetail,
@@ -60,9 +61,11 @@ const isDisplayableWorkflow = (workflow: WorkflowSummary) => {
 const gatewayLog = (event: string, details?: Record<string, unknown>) => {
   if (details) {
     console.info(`[gateway] ${event}`, details)
+    logGatewayEvent(`gateway.${event}`, 'event', details)
     return
   }
   console.info(`[gateway] ${event}`)
+  logGatewayEvent(`gateway.${event}`, 'event')
 }
 
 const createWelcomeMessage = (): Message => ({
@@ -1228,6 +1231,7 @@ const App: React.FC = () => {
       setWorkflowEditorSelection({
         workflowCode: workflow.workflowCode,
         workflowName: workflow.name,
+        workflowDescription: workflow.description,
         publishedVersion: workflow.currentVersion,
         version: { ...selectedVersion },
       })
@@ -1750,6 +1754,13 @@ const App: React.FC = () => {
             type="button"
           >
             新建会话
+          </button>
+          <button
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+            onClick={() => downloadCallLogs()}
+            type="button"
+          >
+            下载调用日志
           </button>
         </div>
       </header>

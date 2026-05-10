@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import time
 from typing import Any, Dict
 
 import httpx
+from src.core.logging_utils import duration_ms, safe_url, sanitize_dict, summarize_payload
 
 from .idempotency import get_idempotency_store
 from .retry import RetryableExecutionError, execute_with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutorRegistry:
@@ -34,6 +39,7 @@ class ToolExecutorRegistry:
         return await execute_with_retry(retry_policy, _run)
 
     async def _execute_once(self, tool_code: str, params: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        start_time = time.perf_counter()
         invoke_type = str(config.get("invoke_type", "")).lower()
         if invoke_type == "function":
             function_name = str(config.get("function_name", "")).strip()
@@ -55,6 +61,15 @@ class ToolExecutorRegistry:
         method = str(config.get("method", "POST")).upper()
         timeout = float(config.get("timeout", 15))
         headers = {str(key): str(value) for key, value in dict(config.get("headers", {})).items()}
+        logger.info(
+            "Tool request toolCode=%s invokeType=%s method=%s url=%s headers=%s payload=%s",
+            tool_code,
+            invoke_type or "http",
+            method,
+            safe_url(str(url)),
+            sanitize_dict(headers),
+            summarize_payload(params),
+        )
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(
@@ -64,6 +79,14 @@ class ToolExecutorRegistry:
                 params=params if method == "GET" else None,
                 headers=headers,
             )
+        logger.info(
+            "Tool response toolCode=%s invokeType=%s status=%s durationMs=%.2f payload=%s",
+            tool_code,
+            invoke_type or "http",
+            response.status_code,
+            duration_ms(start_time),
+            summarize_payload(response.text),
+        )
         if response.status_code >= 500:
             raise RetryableExecutionError("internal_error", f"Tool server error {response.status_code}: {response.text}")
         if response.status_code >= 400:
@@ -75,10 +98,23 @@ class ToolExecutorRegistry:
         return {"raw_response": response.text}
 
     async def _execute_json_endpoint(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        start_time = time.perf_counter()
         if not url:
             raise RetryableExecutionError("validation_error", "Tool endpoint is required")
+        logger.info(
+            "Tool endpoint request url=%s payload=%s",
+            safe_url(url),
+            summarize_payload(body),
+        )
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(url, json=body)
+        logger.info(
+            "Tool endpoint response url=%s status=%s durationMs=%.2f payload=%s",
+            safe_url(url),
+            response.status_code,
+            duration_ms(start_time),
+            summarize_payload(response.text),
+        )
         if response.status_code >= 500:
             raise RetryableExecutionError("internal_error", f"Tool server error {response.status_code}: {response.text}")
         if response.status_code >= 400:

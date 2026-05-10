@@ -7,6 +7,8 @@ public class CreateWorkflowVersionRequest {
     private String workflowCode;
     @JsonProperty("workflow_name")
     private String workflowName;
+    @JsonProperty("workflow_description")
+    private String workflowDescription;
     private String version;
     private String definition;
     @JsonProperty("entry_rule")
@@ -22,6 +24,9 @@ public class CreateWorkflowVersionRequest {
 
     public String getWorkflowName() { return workflowName; }
     public void setWorkflowName(String workflowName) { this.workflowName = workflowName; }
+
+    public String getWorkflowDescription() { return workflowDescription; }
+    public void setWorkflowDescription(String workflowDescription) { this.workflowDescription = workflowDescription; }
 
     public String getVersion() { return version; }
     public void setVersion(String version) { this.version = version; }

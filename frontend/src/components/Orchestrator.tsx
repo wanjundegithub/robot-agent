@@ -66,6 +66,7 @@ interface CanvasNodeData {
 interface WorkflowGraphState {
   id: string
   name: string
+  description: string
   nodes: Node<CanvasNodeData>[]
   edges: Edge[]
 }
@@ -80,6 +81,7 @@ interface ModelBindingsState {
 interface WorkflowDraftPayload {
   workflowCode: string
   workflowName?: string
+  workflowDescription?: string
   workflowVersion: string
   definition: WorkflowDesignerDefinitionV2
   workflowConfig: Record<string, unknown>
@@ -96,6 +98,7 @@ interface HydratedWorkflowState {
   workflowId: number | null
   workflowCode: string
   workflowName: string
+  workflowDescription: string
   draftVersion: string
   publishedVersion: string | null
   globalVariables: VariableDefinition[]
@@ -117,6 +120,7 @@ export interface WorkflowSidebarState {
   draftVersion: string
   publishedVersion: string | null
   workflowName: string
+  workflowDescription: string
   saveStatus: string
   isSaving: boolean
   isPublishing: boolean
@@ -344,6 +348,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const [currentGraphId, setCurrentGraphId] = useState(MAIN_GRAPH_ID)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [workflowName, setWorkflowName] = useState('')
+  const [workflowDescription, setWorkflowDescription] = useState('')
   const [workflowMeta, setWorkflowMeta] = useState<WorkflowMetaState>({
     workflowId: null,
     workflowCode: '',
@@ -398,6 +403,24 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     setGraphs((prev) => {
       const current = prev[currentGraphId] ?? createInitialGraph(currentGraphId)
       return { ...prev, [currentGraphId]: updater(current) }
+    })
+  }
+
+  const updateWorkflowName = (name: string) => {
+    setWorkflowName(name)
+    setGraphs((prev) => {
+      const mainGraph = prev[MAIN_GRAPH_ID] ?? createInitialGraph(MAIN_GRAPH_ID)
+      if (mainGraph.name === name) return prev
+      return { ...prev, [MAIN_GRAPH_ID]: { ...mainGraph, name } }
+    })
+  }
+
+  const updateWorkflowDescription = (description: string) => {
+    setWorkflowDescription(description)
+    setGraphs((prev) => {
+      const mainGraph = prev[MAIN_GRAPH_ID] ?? createInitialGraph(MAIN_GRAPH_ID)
+      if (mainGraph.description === description) return prev
+      return { ...prev, [MAIN_GRAPH_ID]: { ...mainGraph, description } }
     })
   }
 
@@ -470,6 +493,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       ['coordinator', 'sub_agent'].includes((node.data as CanvasNodeData).nodeType)
     )
     const subflowGraphs = Object.values(graphs).filter((graph) => graph.id !== MAIN_GRAPH_ID)
+    const allGraphsHaveNames = Object.values(graphs).every((graph) => graph.name.trim().length > 0)
+    const allGraphsHaveDescriptions = Object.values(graphs).every((graph) => graph.description.trim().length > 0)
     const subflowStructureValid = subflowGraphs.every((graph) => {
       const startCount = graph.nodes.filter(
         (node) => (node.data as CanvasNodeData).nodeType === 'start'
@@ -480,6 +505,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       return startCount === 1 && endCount === 1
     })
     return [
+      { label: '每个流程都必须填写名称', valid: allGraphsHaveNames },
+      { label: '每个流程都必须填写描述', valid: allGraphsHaveDescriptions },
       { label: '主流程必须至少包含一个协调节点', valid: coordinatorCount >= 1 },
       { label: '主流程仅允许协调节点和子代理节点', valid: mainNodeTypesValid },
       { label: '每个子流程都必须保留唯一的开始和结束节点', valid: subflowStructureValid },
@@ -496,6 +523,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       schema_version: WORKFLOW_SCHEMA_VERSION,
       workflow_code: workflowMeta.workflowCode,
       workflow_name: workflowName.trim(),
+      workflow_description: workflowDescription.trim(),
       workflow_version: workflowMeta.draftVersion,
       main_graph_id: MAIN_GRAPH_ID,
       graphs: Object.fromEntries(
@@ -528,6 +556,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     workflowMeta.draftVersion,
     workflowMeta.workflowCode,
     workflowName,
+    workflowDescription,
   ])
 
   const compatibilityWorkflowConfig = useMemo(
@@ -546,6 +575,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   useEffect(() => {
     onWorkflowDraftChange?.({
       workflowCode: workflowMeta.workflowCode,
+      workflowDescription: workflowDescription.trim(),
       workflowVersion: workflowMeta.draftVersion,
       definition: currentDefinition,
       workflowConfig: compatibilityWorkflowConfig,
@@ -559,6 +589,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       draftVersion: workflowMeta.draftVersion,
       publishedVersion: workflowMeta.publishedVersion,
       workflowName,
+      workflowDescription,
       saveStatus,
       isSaving,
       isPublishing,
@@ -574,6 +605,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     validationIssues,
     workflowMeta,
     workflowName,
+    workflowDescription,
   ])
 
   useEffect(() => {
@@ -584,6 +616,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     setCurrentGraphId(hydrated.currentGraphId)
     setSelectedNodeId(null)
     setWorkflowName(hydrated.workflowName)
+    setWorkflowDescription(hydrated.workflowDescription)
     setWorkflowMeta({
       workflowId: hydrated.workflowId,
       workflowCode: hydrated.workflowCode,
@@ -599,7 +632,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   }, [editorSelection])
 
   const ensureWorkflowBasics = () => {
-    const trimmedName = workflowName.trim()
+    const trimmedName = workflowName.trim() || (graphs[MAIN_GRAPH_ID]?.name || '').trim()
     if (!trimmedName) {
       setSaveStatus('请先填写工作流名称。')
       return null
@@ -617,16 +650,19 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const persistDraft = async (version: string) => {
     const basics = ensureWorkflowBasics()
     if (!basics) return null
+    const resolvedWorkflowDescription = workflowDescription.trim() || (graphs[MAIN_GRAPH_ID]?.description || '').trim()
 
     const definition = {
       ...currentDefinition,
       workflow_code: basics.workflowCode,
       workflow_name: basics.workflowName,
+      workflow_description: resolvedWorkflowDescription,
       workflow_version: version,
     }
     const workflowSnapshot = buildWorkflowSnapshot({
       workflowCode: basics.workflowCode,
       workflowName: basics.workflowName,
+      workflowDescription: resolvedWorkflowDescription,
       workflowVersion: version,
       definition,
       workflowConfig: compatibilityWorkflowConfig,
@@ -634,6 +670,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
     const response = await saveWorkflowDraft(basics.workflowCode, {
       workflowName: basics.workflowName,
+      workflowDescription: resolvedWorkflowDescription,
       version,
       definition,
       workflowConfig: compatibilityWorkflowConfig,
@@ -648,7 +685,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       publishedVersion: version === DRAFT_VERSION ? prev.publishedVersion : version,
     }))
     if (response.workflowName) {
-      setWorkflowName(response.workflowName)
+      updateWorkflowName(response.workflowName)
+    }
+    if (typeof response.workflowDescription === 'string') {
+      updateWorkflowDescription(response.workflowDescription)
     }
     return {
       ...response,
@@ -680,6 +720,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const basics = ensureWorkflowBasics()
     if (!basics) return
 
+    const localIssues = collectGraphMetadataValidationIssues(graphs)
+    if (localIssues.length > 0) {
+      setValidationIssues(localIssues)
+      setSaveStatus(`发现 ${localIssues.length} 个校验问题。`)
+      return
+    }
+
     try {
       const response = await validateWorkflowDraft(basics.workflowCode, {
         definition: {
@@ -701,6 +748,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const handlePublish = async () => {
     const basics = ensureWorkflowBasics()
     if (!basics) return
+
+    const localIssues = collectGraphMetadataValidationIssues(graphs)
+    if (localIssues.length > 0) {
+      setValidationIssues(localIssues)
+      setSaveStatus(`发布被阻止，仍有 ${localIssues.length} 个校验问题待处理。`)
+      return
+    }
 
     setIsPublishing(true)
     try {
@@ -943,37 +997,44 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   }
 
   const renameCurrentGraph = (name: string) => {
+    if (currentGraphId === MAIN_GRAPH_ID) {
+      setWorkflowName(name)
+    }
     updateCurrentGraph((graph) => ({
       ...graph,
       name,
     }))
   }
 
-  const normalizeCurrentGraphName = () => {
-    updateCurrentGraph((graph) => {
-      const normalized = graph.name.trim()
-      return {
-        ...graph,
-        name: normalized || defaultGraphName(graph.id),
-      }
-    })
+  const updateSelectedNodeDescription = (description: string) => {
+    if (!selectedNodeId) return
+    updateCurrentGraph((graph) => ({
+      ...graph,
+      nodes: graph.nodes.map((node) => {
+        if (node.id !== selectedNodeId) return node
+        const data = node.data as CanvasNodeData
+        return {
+          ...node,
+          data: {
+            ...data,
+            config: {
+              ...data.config,
+              description,
+            },
+          },
+        }
+      }),
+    }))
   }
 
-  const createSubgraph = () => {
-    let index = subgraphIds.length + 1
-    let graphId = `subgraph_${index}`
-    while (graphs[graphId]) {
-      index += 1
-      graphId = `subgraph_${index}`
+  const updateCurrentGraphDescription = (description: string) => {
+    if (currentGraphId === MAIN_GRAPH_ID) {
+      setWorkflowDescription(description)
     }
-
-    setGraphs((prev) => ({
-      ...prev,
-      [graphId]: createInitialGraph(graphId, `子流程 ${index}`),
+    updateCurrentGraph((graph) => ({
+      ...graph,
+      description,
     }))
-    setGraphOrder((prev) => uniqueGraphOrder([...prev, graphId]))
-    setCurrentGraphId(graphId)
-    setSelectedNodeId(null)
   }
 
   const bindAndOpenSubgraph = () => {
@@ -983,7 +1044,16 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const nextConfig = structuredClone(selectedNodeData.config || {})
     nextConfig.subgraph_id = subgraphId
     replaceSelectedConfig(nextConfig)
-    openGraph(subgraphId)
+    setGraphs((prev) => {
+      if (prev[subgraphId]) return prev
+      return {
+        ...prev,
+        [subgraphId]: createInitialGraph(subgraphId, selectedNodeData.label),
+      }
+    })
+    setGraphOrder((prev) => (prev.includes(subgraphId) ? prev : [...prev, subgraphId]))
+    setCurrentGraphId(subgraphId)
+    setSelectedNodeId(null)
   }
 
   const handleNodeClick = (_event: unknown, node: Node<CanvasNodeData>) => {
@@ -1033,33 +1103,21 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                 <input
                   value={currentGraph.name}
                   onChange={(event) => renameCurrentGraph(event.target.value)}
-                  onBlur={normalizeCurrentGraphName}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   data-testid="workflow-current-graph-name-input"
-                  placeholder={currentGraphId === MAIN_GRAPH_ID ? '主流程' : '子流程名称'}
+                  placeholder={currentGraphId === MAIN_GRAPH_ID ? '流程名称' : '子流程名称'}
                 />
               </label>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                  <div className="text-xs text-slate-400">流程类型</div>
-                  <div className="mt-1 text-sm font-medium text-slate-700">
-                    {currentGraphId === MAIN_GRAPH_ID ? '主流程' : '子流程'}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                  <div className="text-xs text-slate-400">节点数量</div>
-                  <div className="mt-1 text-sm font-medium text-slate-700">{currentGraph.nodes.length} 个</div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                  <div className="text-xs text-slate-400">连线数量</div>
-                  <div className="mt-1 text-sm font-medium text-slate-700">{currentGraph.edges.length} 条</div>
-                </div>
-              </div>
-              <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-xs leading-6 text-slate-500">
-                {currentGraphId === MAIN_GRAPH_ID
-                  ? '主流程只负责协调和分发子代理节点，协调节点可以连接多个子代理节点。'
-                  : '子流程用于承接主流程委派的局部任务，建议保持结构紧凑，避免承担过多无关逻辑。'}
-              </div>
+              <label className="block space-y-2">
+                <span className="text-xs font-medium text-slate-500">流程描述</span>
+                <textarea
+                  value={currentGraph.description}
+                  onChange={(event) => updateCurrentGraphDescription(event.target.value)}
+                  className="min-h-[96px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  data-testid="workflow-current-graph-description-input"
+                  placeholder={currentGraphId === MAIN_GRAPH_ID ? '流程描述' : '子流程描述'}
+                />
+              </label>
             </div>
           </div>
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-5 text-sm text-slate-500">
@@ -1082,7 +1140,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         />
         <div className="text-xs text-slate-400">节点类型：{displayNodeType(nodeType)}</div>
 
-        {(nodeType === 'start' || nodeType === 'coordinator' || nodeType === 'sub_agent' || nodeType === 'end') && (
+        {(nodeType === 'coordinator' || nodeType === 'sub_agent') && (
+          <textarea
+            value={String(config.description || '')}
+            onChange={(event) => updateSelectedNodeDescription(event.target.value)}
+            className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            data-testid="workflow-node-description-input"
+            placeholder="节点描述"
+          />
+        )}
+
+        {(nodeType === 'start' || nodeType === 'end') && (
           <textarea
             value={String(config.prompt || '')}
             onChange={(event) => updateSelectedConfigField('prompt', event.target.value)}
@@ -1099,18 +1167,9 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         )}
 
         {nodeType === 'sub_agent' && (
-          <>
-            <input
-              value={String(config.subgraph_id || '')}
-              onChange={(event) => updateSelectedConfigField('subgraph_id', event.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-              placeholder="请输入子流程标识"
-              data-testid="workflow-subgraph-id-input"
-            />
-            <button className="prompt-secondary w-full" type="button" onClick={bindAndOpenSubgraph} data-testid="workflow-open-subgraph">
-              进入子流程画布
-            </button>
-          </>
+          <button className="prompt-secondary w-full" type="button" onClick={bindAndOpenSubgraph} data-testid="workflow-open-subgraph">
+            进入子流程画布
+          </button>
         )}
 
         {nodeType === 'message' && (
@@ -1300,10 +1359,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       <div className="space-y-3">
         <input
           value={workflowName}
-          onChange={(event) => setWorkflowName(event.target.value)}
+          onChange={(event) => updateWorkflowName(event.target.value)}
           className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           data-testid="workflow-name-input"
           placeholder="工作流名称"
+        />
+        <textarea
+          value={workflowDescription}
+          onChange={(event) => updateWorkflowDescription(event.target.value)}
+          className="min-h-[80px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          data-testid="workflow-description-input"
+          placeholder="工作流描述"
         />
         <button
           className="prompt-primary w-full"
@@ -1391,7 +1457,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   useImperativeHandle(
     ref,
     () => ({
-      setWorkflowName,
+      setWorkflowName: updateWorkflowName,
       validateDraft: handleValidateDraft,
       saveDraft: handleSaveDraft,
       publish: handlePublish,
@@ -1456,6 +1522,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                   <button
                     key={graphId}
                     type="button"
+                    data-testid={`workflow-graph-nav-${graphId}`}
                     onClick={() => openGraph(graphId)}
                     className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
                       isActive
@@ -1486,10 +1553,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                 )
               })}
             </div>
-
-            <button className="prompt-secondary mt-4 w-full" type="button" onClick={createSubgraph}>
-              新增子流程
-            </button>
           </aside>
 
           <section className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4">
@@ -1585,7 +1648,8 @@ function createInitialGraph(graphId: string, name?: string): WorkflowGraphState 
   const isMainGraph = graphId === MAIN_GRAPH_ID
   return {
     id: graphId,
-    name: name || defaultGraphName(graphId),
+    name: name || '',
+    description: '',
     nodes: structuredClone(isMainGraph ? mainInitialNodes : subflowInitialNodes),
     edges: structuredClone(isMainGraph ? mainInitialEdges : subflowInitialEdges),
   }
@@ -1601,6 +1665,7 @@ function toDefinitionGraph(graph: WorkflowGraphState, variableNameMap: Map<strin
           id: node.id,
           type: data.nodeType,
           name: data.label,
+          description: String(data.config.description || data.config.prompt || ''),
           config: normalizeNodeConfig(data.nodeType, data.config, variableNameMap),
         },
       ]
@@ -1616,7 +1681,8 @@ function toDefinitionGraph(graph: WorkflowGraphState, variableNameMap: Map<strin
   return {
     graph_id: graph.id,
     graph_type: graph.id === MAIN_GRAPH_ID ? 'MAIN' : 'SUBGRAPH',
-    graph_name: graph.name.trim() || defaultGraphName(graph.id),
+    graph_name: graph.name.trim(),
+    graph_description: graph.description.trim(),
     entry_node_id:
       graph.nodes.find((node) => (node.data as CanvasNodeData).nodeType === 'start')?.id || graph.nodes[0]?.id || 'start',
     nodes: nodeMap,
@@ -1651,20 +1717,22 @@ function normalizeNodeConfig(
         initial_variables: mapVariableIdsToObject(config.input_variable_ids, variableNameMap, '', true),
       }
     case 'coordinator':
-      return {
-        prompt: String(config.prompt || ''),
-        user_prompt: String(config.prompt || ''),
-      }
     case 'sub_agent': {
+      const description = String(config.description || config.prompt || '')
       const base: Record<string, unknown> = {
-        prompt: String(config.prompt || ''),
-        user_prompt: String(config.prompt || ''),
+        prompt: description,
+        user_prompt: description,
+        description,
       }
-      const subgraphId = String(config.subgraph_id || '').trim()
-      if (subgraphId) {
-        base.subgraph_id = subgraphId
+      if (nodeType === 'sub_agent') {
+        const subgraphId = String(config.subgraph_id || '').trim()
+        if (subgraphId) {
+          base.subgraph_id = subgraphId
+        }
       }
-      return base
+      return {
+        ...base,
+      }
     }
     case 'message':
       return {
@@ -1775,6 +1843,28 @@ function defaultGraphName(graphId: string) {
   return graphId === MAIN_GRAPH_ID ? '主流程' : '未命名子流程'
 }
 
+function collectGraphMetadataValidationIssues(graphs: Record<string, WorkflowGraphState>): WorkflowValidationIssue[] {
+  return Object.values(graphs).flatMap((graph) => {
+    const issues: WorkflowValidationIssue[] = []
+    const graphLabel = graph.id === MAIN_GRAPH_ID ? '主流程' : `子流程 ${graph.id}`
+    if (!graph.name.trim()) {
+      issues.push({
+        node_id: null,
+        field: `graphs.${graph.id}.graph_name`,
+        message: `${graphLabel}缺少名称`,
+      })
+    }
+    if (!graph.description.trim()) {
+      issues.push({
+        node_id: null,
+        field: `graphs.${graph.id}.graph_description`,
+        message: `${graphLabel}缺少描述`,
+      })
+    }
+    return issues
+  })
+}
+
 function createWorkflowCode() {
   return `workflow_${Date.now()}`
 }
@@ -1799,6 +1889,7 @@ function buildWorkflowSnapshot(payload: WorkflowDraftPayload): WorkflowSnapshotV
     workflow: {
       workflow_code: payload.workflowCode,
       workflow_name: workflowName,
+      workflow_description: payload.workflowDescription || '',
       workflow_version: payload.workflowVersion,
     },
     designer: {
@@ -1847,6 +1938,10 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
       selection.workflowName ||
       selection.version.workflowName ||
       selection.workflowCode,
+    workflowDescription:
+      stringValue(definition.workflow_description) ||
+      selection.version.workflowDescription ||
+      '',
     draftVersion:
       String(selection.version.status || '').toLowerCase() === 'draft' ? selection.version.version : DRAFT_VERSION,
     publishedVersion:
@@ -1954,7 +2049,8 @@ function hydrateGraphs(
       const graphNodes = buildCanvasNodes(asRecord(item.nodes), variableNameToId, positions)
       graphs[graphId] = {
         id: graphId,
-        name: stringValue(item.graph_name) || stringValue(item.name) || defaultGraphName(graphId),
+        name: stringValue(item.graph_name) || stringValue(item.name) || '',
+        description: stringValue(item.graph_description) || stringValue(item.description) || '',
         nodes: graphNodes.length > 0 ? graphNodes : createInitialGraph(graphId).nodes,
         edges: buildCanvasEdgesFromGraphDefinition(item),
       }
@@ -1980,7 +2076,8 @@ function hydrateGraphs(
   const mainNodes = buildCanvasNodes(asRecord(definition.nodes), variableNameToId)
   const mainGraph = {
     id: MAIN_GRAPH_ID,
-    name: defaultGraphName(MAIN_GRAPH_ID),
+    name: '',
+    description: '',
     nodes: mainNodes.length > 0 ? mainNodes : createInitialGraph(MAIN_GRAPH_ID).nodes,
     edges: buildCanvasEdges(asRecord(definition.transitions)),
   }
@@ -2053,7 +2150,10 @@ function buildCanvasNodes(
       data: {
         label: stringValue(node.name) || resolveNodeLabel(nodeType),
         nodeType,
-        config,
+        config: {
+          ...config,
+          description: stringValue(node.description) || stringValue(asRecord(node.config).description) || String(config.description || config.prompt || ''),
+        },
       },
     }
   })
@@ -2122,10 +2222,12 @@ function denormalizeNodeConfig(
     case 'coordinator':
       return {
         prompt: String(config.prompt || config.user_prompt || ''),
+        description: String(config.description || config.prompt || config.user_prompt || ''),
       }
     case 'sub_agent':
       return {
         prompt: String(config.prompt || config.user_prompt || ''),
+        description: String(config.description || config.prompt || config.user_prompt || ''),
         subgraph_id: String(config.subgraph_id || ''),
       }
     case 'message':

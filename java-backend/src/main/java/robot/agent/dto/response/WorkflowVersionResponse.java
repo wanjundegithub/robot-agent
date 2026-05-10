@@ -10,6 +10,7 @@ public class WorkflowVersionResponse {
     private Long workflowId;
     private String workflowCode;
     private String workflowName;
+    private String workflowDescription;
     private String version;
     private WorkflowVersionStatus status;
     private String definition;
@@ -30,6 +31,7 @@ public class WorkflowVersionResponse {
         response.setWorkflowCode(version.getWorkflowCode());
         response.setWorkflowId(workflow != null ? workflow.getId() : null);
         response.setWorkflowName(workflow != null ? workflow.getName() : null);
+        response.setWorkflowDescription(workflow != null ? workflow.getDescription() : null);
         response.setVersion(version.getVersion());
         response.setStatus(version.getStatus());
         response.setDefinition(version.getDefinition());
@@ -54,6 +56,9 @@ public class WorkflowVersionResponse {
 
     public String getWorkflowName() { return workflowName; }
     public void setWorkflowName(String workflowName) { this.workflowName = workflowName; }
+
+    public String getWorkflowDescription() { return workflowDescription; }
+    public void setWorkflowDescription(String workflowDescription) { this.workflowDescription = workflowDescription; }
 
     public String getVersion() { return version; }
     public void setVersion(String version) { this.version = version; }

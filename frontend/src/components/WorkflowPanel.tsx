@@ -208,6 +208,7 @@ const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                 onEditVersion?.({
                                   workflowCode: group.workflow.workflowCode,
                                   workflowName: group.workflow.name,
+                                  workflowDescription: group.workflow.description,
                                   publishedVersion: group.workflow.currentVersion,
                                   version: { ...version },
                                 })
