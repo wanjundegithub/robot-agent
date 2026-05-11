@@ -2,7 +2,6 @@ package robot.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.common.ApplicationConstants;
@@ -32,20 +31,17 @@ public class SessionService {
     private final ExecutionRepository executionRepository;
     private final ObjectMapper objectMapper;
     private final SessionMapper sessionMapper;
-    private final SessionSchemaRepairService sessionSchemaRepairService;
 
     public SessionService(
             SessionRepository sessionRepository,
             ExecutionRepository executionRepository,
             ObjectMapper objectMapper,
-            SessionMapper sessionMapper,
-            SessionSchemaRepairService sessionSchemaRepairService
+            SessionMapper sessionMapper
     ) {
         this.sessionRepository = sessionRepository;
         this.executionRepository = executionRepository;
         this.objectMapper = objectMapper;
         this.sessionMapper = sessionMapper;
-        this.sessionSchemaRepairService = sessionSchemaRepairService;
     }
 
     public SessionResponse createSession(CreateSessionRequest request) {
@@ -171,15 +167,7 @@ public class SessionService {
         Session session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
         LocalDateTime now = LocalDateTime.now();
-        try {
-            markSessionDeleted(sessionId, now);
-        } catch (RuntimeException exception) {
-            if (!isLegacyDeletedStatusFailure(exception)) {
-                throw exception;
-            }
-            sessionSchemaRepairService.ensureDeletedStatusSupported();
-            markSessionDeleted(sessionId, now);
-        }
+        markSessionDeleted(sessionId, now);
         session.setStatus(SessionStatus.DELETED);
         session.setLastActivityAt(now);
     }
@@ -231,22 +219,6 @@ public class SessionService {
         }
     }
 
-    private boolean isLegacyDeletedStatusFailure(RuntimeException exception) {
-        Throwable current = exception;
-        while (current != null) {
-            if (current instanceof DataIntegrityViolationException) {
-                String message = current.getMessage();
-                if (message != null) {
-                    String normalized = message.toLowerCase();
-                    if (normalized.contains("data truncated") && normalized.contains("status")) {
-                        return true;
-                    }
-                }
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
 
     private void markSessionDeleted(String sessionId, LocalDateTime lastActivityAt) {
         sessionMapper.markSessionStatus(sessionId, SessionStatus.DELETED.name(), lastActivityAt);

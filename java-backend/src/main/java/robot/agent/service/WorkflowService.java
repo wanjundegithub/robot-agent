@@ -44,7 +44,6 @@ public class WorkflowService {
     private final AuditService auditService;
     private final PythonClient pythonClient;
     private final ModelConfigService modelConfigService;
-    private final WorkflowSchemaRepairService workflowSchemaRepairService;
 
     @Autowired
     public WorkflowService(
@@ -54,8 +53,7 @@ public class WorkflowService {
             AccessControlService accessControlService,
             AuditService auditService,
             PythonClient pythonClient,
-            ModelConfigService modelConfigService,
-            WorkflowSchemaRepairService workflowSchemaRepairService
+            ModelConfigService modelConfigService
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowVersionRepository = workflowVersionRepository;
@@ -64,29 +62,8 @@ public class WorkflowService {
         this.auditService = auditService;
         this.pythonClient = pythonClient;
         this.modelConfigService = modelConfigService;
-        this.workflowSchemaRepairService = workflowSchemaRepairService;
     }
 
-    public WorkflowService(
-            WorkflowRepository workflowRepository,
-            WorkflowVersionRepository workflowVersionRepository,
-            ObjectMapper objectMapper,
-            AccessControlService accessControlService,
-            AuditService auditService,
-            PythonClient pythonClient,
-            ModelConfigService modelConfigService
-    ) {
-        this(
-                workflowRepository,
-                workflowVersionRepository,
-                objectMapper,
-                accessControlService,
-                auditService,
-                pythonClient,
-                modelConfigService,
-                null
-        );
-    }
 
     public WorkflowResponse createWorkflow(String userId, String workflowCode, String name, String description, Long workspaceId) {
         Long effectiveWorkspaceId = workspaceId != null ? workspaceId : ApplicationConstants.DEFAULT_WORKSPACE_ID;
@@ -135,9 +112,6 @@ public class WorkflowService {
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.delete");
 
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureArchivedWorkflowStatusSupported();
-        }
         workflow.setStatus(WorkflowStatus.ARCHIVED);
         workflow.setCurrentVersion(null);
         workflow.setUpdatedAt(LocalDateTime.now());
@@ -159,9 +133,6 @@ public class WorkflowService {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.publish");
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
         if (workflowVersion.getWorkflowSnapshot() == null || workflowVersion.getWorkflowSnapshot().isBlank()) {
@@ -202,9 +173,6 @@ public class WorkflowService {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseThrow(() -> new RuntimeException("Workflow not found: " + workflowCode));
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.rollback");
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
 
@@ -281,9 +249,6 @@ public class WorkflowService {
             workflow = workflowRepository.save(workflow);
         }
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.version.create");
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
 
         WorkflowVersion version = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, request.getVersion())
                 .orElseGet(WorkflowVersion::new);
@@ -323,9 +288,6 @@ public class WorkflowService {
     }
 
     public WorkflowVersionResponse getWorkflowVersion(String workflowCode, String version) {
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found"));
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
@@ -334,9 +296,6 @@ public class WorkflowService {
     }
 
     public List<WorkflowVersionResponse> getWorkflowVersions(String workflowCode) {
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
         List<WorkflowVersion> versions = workflowVersionRepository.findByWorkflowCodeAndStatusNotOrderByCreatedAtDesc(
                 workflowCode,
                 WorkflowVersionStatus.ARCHIVED
@@ -446,9 +405,6 @@ public class WorkflowService {
     }
 
     public WorkflowVersion getWorkflowVersionEntity(String workflowCode, String version) {
-        if (workflowSchemaRepairService != null) {
-            workflowSchemaRepairService.ensureWorkflowSnapshotColumnSupported();
-        }
         return workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
     }
