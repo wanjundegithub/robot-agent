@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.model.KnowledgeBase;
 import robot.agent.model.KnowledgeBaseStatus;
 import robot.agent.model.KnowledgeVersion;
@@ -28,8 +29,6 @@ import java.util.Map;
 
 @Component
 public class DemoWorkflowDataInitializer implements ApplicationRunner {
-
-    private static final Long DEFAULT_WORKSPACE_ID = 1L;
 
     private final WorkflowRepository workflowRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
@@ -68,10 +67,10 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         createRoleIfMissing("knowledge_admin", "Knowledge Admin", "Can manage knowledge bases and versions.");
         createRoleIfMissing("viewer", "Viewer", "Read-only access to workflow resources.");
 
-        assignRoleIfMissing("demo-admin", DEFAULT_WORKSPACE_ID, "workflow_admin");
-        assignRoleIfMissing("demo-admin", DEFAULT_WORKSPACE_ID, "knowledge_admin");
-        assignRoleIfMissing("demo-admin", DEFAULT_WORKSPACE_ID, "viewer");
-        assignRoleIfMissing("demo-user", DEFAULT_WORKSPACE_ID, "viewer");
+        assignRoleIfMissing("demo-admin", ApplicationConstants.DEFAULT_WORKSPACE_ID, "workflow_admin");
+        assignRoleIfMissing("demo-admin", ApplicationConstants.DEFAULT_WORKSPACE_ID, "knowledge_admin");
+        assignRoleIfMissing("demo-admin", ApplicationConstants.DEFAULT_WORKSPACE_ID, "viewer");
+        assignRoleIfMissing("demo-user", ApplicationConstants.DEFAULT_WORKSPACE_ID, "viewer");
     }
 
     private void createRoleIfMissing(String code, String name, String description) {
@@ -105,7 +104,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode("flight_policy_kb")
                 .orElseGet(() -> {
                     KnowledgeBase base = new KnowledgeBase();
-                    base.setWorkspaceId(DEFAULT_WORKSPACE_ID);
+                    base.setWorkspaceId(ApplicationConstants.DEFAULT_WORKSPACE_ID);
                     base.setKbCode("flight_policy_kb");
                     base.setName("Flight Policy KB");
                     base.setDescription("Flight booking and change policy knowledge base.");
@@ -148,7 +147,7 @@ public class DemoWorkflowDataInitializer implements ApplicationRunner {
         Workflow workflow = workflowRepository.findByWorkflowCode(workflowCode)
                 .orElseGet(() -> {
                     Workflow created = new Workflow();
-                    created.setWorkspaceId(DEFAULT_WORKSPACE_ID);
+                    created.setWorkspaceId(ApplicationConstants.DEFAULT_WORKSPACE_ID);
                     created.setWorkflowCode(workflowCode);
                     created.setName(name);
                     created.setDescription(description);

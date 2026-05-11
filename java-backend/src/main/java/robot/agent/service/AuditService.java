@@ -2,6 +2,7 @@ package robot.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.model.AuditLog;
 import robot.agent.repository.AuditLogRepository;
 
@@ -26,7 +27,7 @@ public class AuditService {
             Integer responseStatus
     ) {
         AuditLog auditLog = new AuditLog();
-        auditLog.setWorkspaceId(workspaceId == null ? 1L : workspaceId);
+        auditLog.setWorkspaceId(workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId);
         auditLog.setUserId(userId);
         auditLog.setAction(action);
         auditLog.setResourceType(resourceType);

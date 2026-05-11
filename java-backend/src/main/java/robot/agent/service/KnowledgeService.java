@@ -2,6 +2,7 @@ package robot.agent.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.dto.request.CreateKnowledgeBaseRequest;
 import robot.agent.dto.request.CreateKnowledgeVersionRequest;
 import robot.agent.dto.response.KnowledgeBaseResponse;
@@ -40,7 +41,7 @@ public class KnowledgeService {
     }
 
     public List<KnowledgeBaseResponse> getKnowledgeBases(Long workspaceId) {
-        Long effectiveWorkspaceId = workspaceId == null ? 1L : workspaceId;
+        Long effectiveWorkspaceId = workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId;
         return knowledgeBaseRepository.findByWorkspaceIdOrderByCreatedAtDesc(effectiveWorkspaceId)
                 .stream()
                 .map(KnowledgeBaseResponse::fromEntity)
@@ -48,7 +49,7 @@ public class KnowledgeService {
     }
 
     public KnowledgeBaseResponse createKnowledgeBase(String userId, CreateKnowledgeBaseRequest request) {
-        Long workspaceId = request.getWorkspaceId() == null ? 1L : request.getWorkspaceId();
+        Long workspaceId = request.getWorkspaceId() == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : request.getWorkspaceId();
         accessControlService.requireAnyRole(userId, workspaceId, Set.of("workflow_admin", "knowledge_admin"));
 
         KnowledgeBase knowledgeBase = new KnowledgeBase();
@@ -62,7 +63,7 @@ public class KnowledgeService {
         knowledgeBase.setCreatedAt(LocalDateTime.now());
 
         KnowledgeBase saved = knowledgeBaseRepository.save(knowledgeBase);
-        auditService.logAction(workspaceId, userId, "knowledge.create", "knowledge_base", saved.getKbCode(), request, 200);
+        auditService.logAction(workspaceId, userId, "knowledge.create", "knowledge_base", saved.getKbCode(), request, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeBaseResponse.fromEntity(saved);
     }
 
@@ -88,7 +89,7 @@ public class KnowledgeService {
         version.setCreatedAt(LocalDateTime.now());
 
         KnowledgeVersion saved = knowledgeVersionRepository.save(version);
-        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.version.create", "knowledge_version", kbCode + ":" + saved.getVersion(), request, 200);
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.version.create", "knowledge_version", kbCode + ":" + saved.getVersion(), request, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeVersionResponse.fromEntity(saved);
     }
 
@@ -105,7 +106,7 @@ public class KnowledgeService {
 
         knowledgeBase.setCurrentVersion(version);
         knowledgeBaseRepository.save(knowledgeBase);
-        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.version.publish", "knowledge_version", kbCode + ":" + version, null, 200);
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.version.publish", "knowledge_version", kbCode + ":" + version, null, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeVersionResponse.fromEntity(savedVersion);
     }
 }

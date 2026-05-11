@@ -3,18 +3,18 @@ package robot.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.dto.request.CreateSessionRequest;
 import robot.agent.dto.response.SessionResponse;
+import robot.agent.mapper.SessionMapper;
 import robot.agent.model.Execution;
 import robot.agent.model.Session;
 import robot.agent.model.SessionStatus;
 import robot.agent.repository.ExecutionRepository;
 import robot.agent.repository.SessionRepository;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -31,27 +31,27 @@ public class SessionService {
     private final SessionRepository sessionRepository;
     private final ExecutionRepository executionRepository;
     private final ObjectMapper objectMapper;
-    private final JdbcTemplate jdbcTemplate;
+    private final SessionMapper sessionMapper;
     private final SessionSchemaRepairService sessionSchemaRepairService;
 
     public SessionService(
             SessionRepository sessionRepository,
             ExecutionRepository executionRepository,
             ObjectMapper objectMapper,
-            JdbcTemplate jdbcTemplate,
+            SessionMapper sessionMapper,
             SessionSchemaRepairService sessionSchemaRepairService
     ) {
         this.sessionRepository = sessionRepository;
         this.executionRepository = executionRepository;
         this.objectMapper = objectMapper;
-        this.jdbcTemplate = jdbcTemplate;
+        this.sessionMapper = sessionMapper;
         this.sessionSchemaRepairService = sessionSchemaRepairService;
     }
 
     public SessionResponse createSession(CreateSessionRequest request) {
         Session session = new Session(
             UUID.randomUUID().toString(),
-            request.getWorkspaceId() != null ? request.getWorkspaceId() : 1L,
+            request.getWorkspaceId() != null ? request.getWorkspaceId() : ApplicationConstants.DEFAULT_WORKSPACE_ID,
             request.getUserId()
         );
         if (request.getVariables() != null) {
@@ -86,7 +86,7 @@ public class SessionService {
                 .orElseGet(() -> {
                     Session session = new Session(
                             sessionId,
-                            1L,
+                            ApplicationConstants.DEFAULT_WORKSPACE_ID,
                             userId == null ? "anonymous" : userId
                     );
                     return sessionRepository.save(session);
@@ -249,11 +249,6 @@ public class SessionService {
     }
 
     private void markSessionDeleted(String sessionId, LocalDateTime lastActivityAt) {
-        jdbcTemplate.update(
-                "UPDATE `session` SET status = ?, last_activity_at = ? WHERE id = ?",
-                SessionStatus.DELETED.name(),
-                Timestamp.valueOf(lastActivityAt),
-                sessionId
-        );
+        sessionMapper.markSessionStatus(sessionId, SessionStatus.DELETED.name(), lastActivityAt);
     }
 }

@@ -14,6 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
@@ -225,7 +226,7 @@ public class ModelConfigService {
                 secretMode(saved.getApiKeySecretRef()),
                 saved.isEnabled()
         );
-        auditService.logAction(1L, normalizeUserId(userId), "model.provider.create", "llm_provider_config", providerCode, null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.provider.create", "llm_provider_config", providerCode, null, ApplicationConstants.HTTP_STATUS_OK);
         return providerToResponseMap(saved);
     }
 
@@ -237,7 +238,7 @@ public class ModelConfigService {
         applyProviderRequest(provider, request, false);
         provider.setUpdatedAt(LocalDateTime.now());
         LlmProviderConfig saved = providerRepository.save(provider);
-        auditService.logAction(1L, normalizeUserId(userId), "model.provider.update", "llm_provider_config", providerCode, null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.provider.update", "llm_provider_config", providerCode, null, ApplicationConstants.HTTP_STATUS_OK);
         return providerToResponseMap(saved);
     }
 
@@ -251,7 +252,7 @@ public class ModelConfigService {
             throw badRequest("provider is still referenced by model records");
         }
         providerRepository.delete(provider);
-        auditService.logAction(1L, normalizeUserId(userId), "model.provider.delete", "llm_provider_config", providerCode, null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.provider.delete", "llm_provider_config", providerCode, null, ApplicationConstants.HTTP_STATUS_OK);
     }
 
     public Map<String, Object> validateProviderConfig(String userId, String providerCode, ValidateModelProviderRequest request) {
@@ -305,7 +306,7 @@ public class ModelConfigService {
         );
         upsertInternalProvider(saved, userId);
         log.info("model.record.internal_provider.synced modelCode={} providerCode={}", saved.getModelCode(), saved.getProviderCode());
-        auditService.logAction(1L, normalizeUserId(userId), "model.record.create", "llm_model_record", modelCode, null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.record.create", "llm_model_record", modelCode, null, ApplicationConstants.HTTP_STATUS_OK);
         return modelRecordToAdminResponseMap(saved, findProviderSnapshot(saved));
     }
 
@@ -318,7 +319,7 @@ public class ModelConfigService {
         modelRecord.setUpdatedAt(LocalDateTime.now());
         LlmModelRecord saved = modelRecordRepository.save(modelRecord);
         upsertInternalProvider(saved, userId);
-        auditService.logAction(1L, normalizeUserId(userId), "model.record.update", "llm_model_record", saved.getModelCode(), null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.record.update", "llm_model_record", saved.getModelCode(), null, ApplicationConstants.HTTP_STATUS_OK);
         return modelRecordToAdminResponseMap(saved, findProviderSnapshot(saved));
     }
 
@@ -333,7 +334,7 @@ public class ModelConfigService {
         }
         providerRepository.findByProviderCode(modelRecord.getProviderCode()).ifPresent(providerRepository::delete);
         modelRecordRepository.delete(modelRecord);
-        auditService.logAction(1L, normalizeUserId(userId), "model.record.delete", "llm_model_record", modelRecord.getModelCode(), null, 200);
+        auditService.logAction(ApplicationConstants.DEFAULT_WORKSPACE_ID, normalizeUserId(userId), "model.record.delete", "llm_model_record", modelRecord.getModelCode(), null, ApplicationConstants.HTTP_STATUS_OK);
     }
 
     public Map<String, Object> validateModelRecord(String userId, String modelCode) {

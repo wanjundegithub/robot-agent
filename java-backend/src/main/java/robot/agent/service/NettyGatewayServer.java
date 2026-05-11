@@ -1,16 +1,18 @@
 package robot.agent.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.EventExecutorGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
+import robot.agent.gateway.GatewayActionHandler;
 import robot.agent.gateway.RobotChannelInitializer;
 
 @Component
@@ -18,25 +20,20 @@ public class NettyGatewayServer implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(NettyGatewayServer.class);
 
-    private final ObjectMapper objectMapper;
-    private final GatewayActionService gatewayActionService;
-    private final NettyGatewayHub gatewayHub;
+    private final GatewayActionHandler gatewayActionHandler;
     private final int gatewayPort;
 
     private volatile boolean running;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
+    private EventExecutorGroup gatewayHandlerGroup;
     private Channel serverChannel;
 
     public NettyGatewayServer(
-            ObjectMapper objectMapper,
-            GatewayActionService gatewayActionService,
-            NettyGatewayHub gatewayHub,
+            GatewayActionHandler gatewayActionHandler,
             @Value("${robot.gateway.port:8091}") int gatewayPort
     ) {
-        this.objectMapper = objectMapper;
-        this.gatewayActionService = gatewayActionService;
-        this.gatewayHub = gatewayHub;
+        this.gatewayActionHandler = gatewayActionHandler;
         this.gatewayPort = gatewayPort;
     }
 
@@ -49,12 +46,13 @@ public class NettyGatewayServer implements SmartLifecycle {
         log.info("gateway.server.start port={}", gatewayPort);
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
+        gatewayHandlerGroup = new DefaultEventExecutorGroup(Math.max(2, Runtime.getRuntime().availableProcessors()));
 
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
-                    .childHandler(new RobotChannelInitializer(objectMapper, gatewayHub, gatewayActionService));
+                    .childHandler(new RobotChannelInitializer(gatewayActionHandler, gatewayHandlerGroup));
             serverChannel = bootstrap.bind(gatewayPort).sync().channel();
             running = true;
         } catch (InterruptedException exception) {
@@ -78,6 +76,10 @@ public class NettyGatewayServer implements SmartLifecycle {
         if (workerGroup != null) {
             workerGroup.shutdownGracefully();
             workerGroup = null;
+        }
+        if (gatewayHandlerGroup != null) {
+            gatewayHandlerGroup.shutdownGracefully();
+            gatewayHandlerGroup = null;
         }
         if (bossGroup != null) {
             bossGroup.shutdownGracefully();

@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
 import robot.agent.dto.response.WorkflowResponse;
 import robot.agent.dto.response.WorkflowVersionResponse;
@@ -88,7 +89,7 @@ public class WorkflowService {
     }
 
     public WorkflowResponse createWorkflow(String userId, String workflowCode, String name, String description, Long workspaceId) {
-        Long effectiveWorkspaceId = workspaceId != null ? workspaceId : 1L;
+        Long effectiveWorkspaceId = workspaceId != null ? workspaceId : ApplicationConstants.DEFAULT_WORKSPACE_ID;
         accessControlService.requireWorkflowAdminAction(userId, effectiveWorkspaceId, workflowCode, "workflow.create");
 
         Workflow workflow = new Workflow();
@@ -102,7 +103,7 @@ public class WorkflowService {
         workflow.setUpdatedAt(LocalDateTime.now());
 
         Workflow saved = workflowRepository.save(workflow);
-        auditService.logAction(effectiveWorkspaceId, userId, "workflow.create", "workflow_definition", workflowCode, null, 200);
+        auditService.logAction(effectiveWorkspaceId, userId, "workflow.create", "workflow_definition", workflowCode, null, ApplicationConstants.HTTP_STATUS_OK);
         return WorkflowResponse.fromEntity(saved);
     }
 
@@ -149,7 +150,7 @@ public class WorkflowService {
                 "workflow_definition",
                 workflowCode,
                 null,
-                200
+                ApplicationConstants.HTTP_STATUS_OK
         );
     }
 
@@ -192,7 +193,7 @@ public class WorkflowService {
                 workflowVersion.getStatus(),
                 saved.getCurrentVersion()
         );
-        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.publish", "workflow_definition", workflowCode, version, 200);
+        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.publish", "workflow_definition", workflowCode, version, ApplicationConstants.HTTP_STATUS_OK);
 
         return WorkflowResponse.fromEntity(saved);
     }
@@ -233,7 +234,7 @@ public class WorkflowService {
         workflow.setStatus(WorkflowStatus.PUBLISHED);
         workflow.setUpdatedAt(LocalDateTime.now());
         Workflow saved = workflowRepository.save(workflow);
-        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.rollback", "workflow_definition", workflowCode, version, 200);
+        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.rollback", "workflow_definition", workflowCode, version, ApplicationConstants.HTTP_STATUS_OK);
         return WorkflowResponse.fromEntity(saved);
     }
 
@@ -257,7 +258,7 @@ public class WorkflowService {
                     created.setWorkflowCode(workflowCode);
                     created.setName(resolveWorkflowName(request, workflowCode));
                     created.setDescription(resolveWorkflowDescription(request));
-                    created.setWorkspaceId(1L);
+                    created.setWorkspaceId(ApplicationConstants.DEFAULT_WORKSPACE_ID);
                     created.setStatus(WorkflowStatus.DRAFT);
                     created.setCreatedBy(userId);
                     created.setCreatedAt(LocalDateTime.now());
@@ -317,7 +318,7 @@ public class WorkflowService {
                 saved.getWorkflowSnapshot() == null ? 0 : saved.getWorkflowSnapshot().length(),
                 saved.getConfig() == null ? 0 : saved.getConfig().length()
         );
-        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.version.save_draft", "workflow_version", workflowCode + ":" + request.getVersion(), request, 200);
+        auditService.logAction(workflow.getWorkspaceId(), userId, "workflow.version.save_draft", "workflow_version", workflowCode + ":" + request.getVersion(), request, ApplicationConstants.HTTP_STATUS_OK);
         return WorkflowVersionResponse.fromEntity(saved, workflow);
     }
 
@@ -384,7 +385,7 @@ public class WorkflowService {
                 "workflow_version",
                 workflowCode + ":" + version,
                 null,
-                200
+                ApplicationConstants.HTTP_STATUS_OK
         );
         return WorkflowVersionResponse.fromEntity(savedVersion, workflow);
     }
@@ -424,7 +425,7 @@ public class WorkflowService {
                 "workflow_version",
                 workflowCode + ":" + version,
                 null,
-                200
+                ApplicationConstants.HTTP_STATUS_OK
         );
     }
 

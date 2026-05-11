@@ -1,7 +1,7 @@
 package robot.agent.service;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import robot.agent.mapper.WorkflowSchemaMapper;
 
 import java.util.List;
 import java.util.Locale;
@@ -10,14 +10,14 @@ import java.util.Map;
 @Service
 public class WorkflowSchemaRepairService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final WorkflowSchemaMapper workflowSchemaMapper;
 
-    public WorkflowSchemaRepairService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public WorkflowSchemaRepairService(WorkflowSchemaMapper workflowSchemaMapper) {
+        this.workflowSchemaMapper = workflowSchemaMapper;
     }
 
     public void ensureArchivedWorkflowStatusSupported() {
-        List<Map<String, Object>> columns = jdbcTemplate.queryForList("SHOW COLUMNS FROM workflow_definition LIKE 'status'");
+        List<Map<String, Object>> columns = workflowSchemaMapper.findWorkflowStatusColumns();
         if (columns.isEmpty()) {
             return;
         }
@@ -28,14 +28,14 @@ public class WorkflowSchemaRepairService {
             return;
         }
 
-        jdbcTemplate.execute("ALTER TABLE workflow_definition MODIFY COLUMN status ENUM('DRAFT','PUBLISHED','ARCHIVED') NOT NULL");
+        workflowSchemaMapper.supportArchivedWorkflowStatus();
     }
 
     public void ensureWorkflowSnapshotColumnSupported() {
-        List<Map<String, Object>> columns = jdbcTemplate.queryForList("SHOW COLUMNS FROM workflow_version LIKE 'workflow_snapshot'");
+        List<Map<String, Object>> columns = workflowSchemaMapper.findWorkflowSnapshotColumns();
         if (!columns.isEmpty()) {
             return;
         }
-        jdbcTemplate.execute("ALTER TABLE workflow_version ADD COLUMN workflow_snapshot JSON NULL");
+        workflowSchemaMapper.addWorkflowSnapshotColumn();
     }
 }

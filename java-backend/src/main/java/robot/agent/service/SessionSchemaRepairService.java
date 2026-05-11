@@ -1,7 +1,7 @@
 package robot.agent.service;
 
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import robot.agent.mapper.SessionMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -10,14 +10,14 @@ import java.util.Locale;
 @Service
 public class SessionSchemaRepairService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final SessionMapper sessionMapper;
 
-    public SessionSchemaRepairService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public SessionSchemaRepairService(SessionMapper sessionMapper) {
+        this.sessionMapper = sessionMapper;
     }
 
     public void ensureDeletedStatusSupported() {
-        List<Map<String, Object>> columns = jdbcTemplate.queryForList("SHOW COLUMNS FROM session LIKE 'status'");
+        List<Map<String, Object>> columns = sessionMapper.findStatusColumns();
         if (columns.isEmpty()) {
             return;
         }
@@ -28,6 +28,6 @@ public class SessionSchemaRepairService {
             return;
         }
 
-        jdbcTemplate.execute("ALTER TABLE session MODIFY COLUMN status ENUM('ACTIVE','CLOSED','EXPIRED','DELETED') NOT NULL");
+        sessionMapper.supportDeletedStatus();
     }
 }

@@ -3,6 +3,7 @@ package robot.agent.service;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.model.UserRole;
 import robot.agent.repository.UserRoleRepository;
 
@@ -31,7 +32,7 @@ public class AccessControlService {
 
     public void requireAnyRole(String userId, Long workspaceId, Set<String> allowedRoles) {
         String effectiveUserId = userId == null || userId.isBlank() ? "anonymous" : userId;
-        Long effectiveWorkspaceId = workspaceId == null ? 1L : workspaceId;
+        Long effectiveWorkspaceId = workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId;
         Set<String> actualRoles = userRoleRepository.findByIdUserIdAndIdWorkspaceId(effectiveUserId, effectiveWorkspaceId)
                 .stream()
                 .map(UserRole::getRole)
@@ -55,7 +56,7 @@ public class AccessControlService {
             String sessionOwnerId
     ) {
         String effectiveUserId = normalizeUserId(userId);
-        Long effectiveWorkspaceId = workspaceId == null ? 1L : workspaceId;
+        Long effectiveWorkspaceId = workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId;
         Set<String> actualRoles = loadRoles(effectiveUserId, effectiveWorkspaceId);
         Map<String, Object> attributes = resolveUserAttributes(
                 effectiveUserId,
@@ -96,7 +97,7 @@ public class AccessControlService {
 
     public void requireWorkflowAdminAction(String userId, Long workspaceId, String workflowCode, String action) {
         String effectiveUserId = normalizeUserId(userId);
-        Long effectiveWorkspaceId = workspaceId == null ? 1L : workspaceId;
+        Long effectiveWorkspaceId = workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId;
         Set<String> actualRoles = loadRoles(effectiveUserId, effectiveWorkspaceId);
         if (!actualRoles.contains("workflow_admin")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Permission denied for user: " + effectiveUserId);

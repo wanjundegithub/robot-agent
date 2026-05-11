@@ -9,6 +9,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
+import robot.agent.common.ApplicationConstants;
 import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.request.FormSubmitRequest;
 import robot.agent.dto.request.SendMessageRequest;
@@ -239,7 +240,7 @@ public class ExecutionService {
                     "execution",
                     session.getId(),
                     confirmationEvaluation.asAuditPayload(),
-                    200
+                    ApplicationConstants.HTTP_STATUS_OK
             );
             return buildConfirmationCancelledResponse(session, routingDecision, confirmationEvaluation);
         }
@@ -442,7 +443,7 @@ public class ExecutionService {
         });
 
         log.info("execution.started executionId={} sessionId={} workflowCode={} workflowVersion={}", saved.getId(), session.getId(), saved.getWorkflowCode(), saved.getWorkflowVersion());
-        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, 200);
+        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, ApplicationConstants.HTTP_STATUS_OK);
         return buildSendMessageResponse(saved, routingDecision, activeExecution, experimentAssignment);
     }
 
@@ -490,7 +491,7 @@ public class ExecutionService {
                         "session",
                         session.getId(),
                         Map.of("remaining_candidates", queue.size()),
-                        200
+                        ApplicationConstants.HTTP_STATUS_OK
                 );
                 return new CandidateActionResult(null, response);
             }
@@ -597,7 +598,7 @@ public class ExecutionService {
             webSocketPublisher.publishEvent("form.requested", executionId, session.getId(), formEvent);
         }
 
-        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.resume", "execution", executionId, resumePayload, 200);
+        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.resume", "execution", executionId, resumePayload, ApplicationConstants.HTTP_STATUS_OK);
         return response;
     }
 
@@ -844,7 +845,7 @@ public class ExecutionService {
         event.put("target_workflow_version", routingDecision.workflowVersion());
         event.put("reason", routingDecision.reason());
         webSocketPublisher.publishEvent("execution.switch_requested", activeExecution.getId(), session.getId(), event);
-        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.switch", "execution", activeExecution.getId(), snapshot, 200);
+        auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.switch", "execution", activeExecution.getId(), snapshot, ApplicationConstants.HTTP_STATUS_OK);
     }
 
     private void maybeOfferResume(String sessionId, String completedExecutionId) {
