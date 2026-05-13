@@ -10,6 +10,7 @@ spring:
     password: ${ROBOT_DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
+    defer-datasource-initialization: true
     hibernate:
       ddl-auto: update
     show-sql: false
@@ -17,6 +18,10 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
 
 logging:
   file:
