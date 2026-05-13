@@ -9,12 +9,9 @@ import type {
   CapabilityVersionSummary,
   CostAlert,
   ExecutionDetail,
-  FormSubmitResponse,
   Message,
   RagEvaluationResponse,
   ReplayResponse,
-  ResumeExecutionResponse,
-  SendMessageResponse,
   SubflowRecommendationResponse,
   OperationalReadiness,
   ModelRecordConfig,
@@ -53,82 +50,8 @@ async function parseApiError(response: Response): Promise<never> {
   }
 }
 
-export async function sendMessage(
-  sessionId: string,
-  messageId: string,
-  content: string,
-  attachments: string[] = [],
-  options?: {
-    confirmSwitch?: boolean
-    userId?: string
-    requestedToolCode?: string
-    confirmationId?: string
-    cancelConfirmation?: boolean
-    workflowId?: number | null
-    sessionId?: string
-    intentCandidateAction?: 'accept' | 'reject'
-    intentCandidateTargetCode?: string | null
-  }
-): Promise<SendMessageResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message_id: messageId,
-      content,
-      attachments,
-      user_id: options?.userId ?? 'demo-user',
-      confirm_switch: options?.confirmSwitch ?? false,
-      requested_tool_code: options?.requestedToolCode ?? null,
-      confirmation_id: options?.confirmationId ?? null,
-      cancel_confirmation: options?.cancelConfirmation ?? false,
-      session_id: options?.sessionId ?? sessionId,
-      workflow_id: options?.workflowId ?? null,
-      intent_candidate_action: options?.intentCandidateAction ?? null,
-      intent_candidate_target_code: options?.intentCandidateTargetCode ?? null,
-    }),
-  })
-
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-
-  return await response.json()
-}
-
 export async function getSessionMessages(sessionId: string): Promise<Message[]> {
   const response = await loggedFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function submitForm(
-  executionId: string,
-  submitId: string,
-  formData: Record<string, unknown>
-): Promise<FormSubmitResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/executions/${executionId}/form-submit`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      submit_id: submitId,
-      form_data: formData,
-    }),
-  })
-
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-
-  return await response.json()
-}
-
-export async function resumeExecution(executionId: string): Promise<ResumeExecutionResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/executions/${executionId}/resume`, {
-    method: 'POST',
-  })
   if (!response.ok) {
     await parseApiError(response)
   }

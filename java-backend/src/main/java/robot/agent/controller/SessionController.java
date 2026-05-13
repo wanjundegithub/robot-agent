@@ -3,7 +3,9 @@ package robot.agent.controller;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import robot.agent.dto.request.CreateSessionRequest;
+import robot.agent.dto.response.SessionMessageResponse;
 import robot.agent.dto.response.SessionResponse;
+import robot.agent.service.ExecutionService;
 import robot.agent.service.SessionService;
 import java.util.List;
 
@@ -12,9 +14,11 @@ import java.util.List;
 public class SessionController {
 
     private final SessionService sessionService;
+    private final ExecutionService executionService;
 
-    public SessionController(SessionService sessionService) {
+    public SessionController(SessionService sessionService, ExecutionService executionService) {
         this.sessionService = sessionService;
+        this.executionService = executionService;
     }
 
     @PostMapping
@@ -25,6 +29,11 @@ public class SessionController {
     @GetMapping("/{id}")
     public ResponseEntity<SessionResponse> getSession(@PathVariable String id) {
         return ResponseEntity.ok(sessionService.getSession(id));
+    }
+
+    @GetMapping("/{id}/messages")
+    public ResponseEntity<List<SessionMessageResponse>> getMessageHistory(@PathVariable String id) {
+        return ResponseEntity.ok(executionService.getSessionMessageHistory(id));
     }
 
     @GetMapping
