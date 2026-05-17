@@ -16,6 +16,8 @@ from .models import (
     ResumeExecutionResponse,
     SuspendExecutionRequest,
     ThresholdResolveRequest,
+    WelcomeDecisionRequest,
+    WelcomeDecisionResponse,
 )
 from src.core.evaluation import rag_evaluator
 from src.core.events import utc_now_iso
@@ -38,6 +40,7 @@ from src.core.protection import ProtectionError, runtime_protection_manager
 from src.core.registry import ExecutionRegistry
 from src.core.scheduler import WorkflowScheduler
 from src.core.telemetry import metrics_app, workflow_telemetry
+from src.core.welcome_decision import decide_workflow_welcome
 
 
 configure_logging()
@@ -216,6 +219,31 @@ async def classify_intent(request: IntentClassificationRequest):
         provider_configs=provider_configs,
         model_records=model_records,
     )
+
+
+@app.post("/api/phase5/workflow-welcome/decide", response_model=WelcomeDecisionResponse)
+async def decide_workflow_welcome_api(request: WelcomeDecisionRequest):
+    provider_configs = {
+        str(item.get("provider_code")): item
+        for item in request.provider_configs
+        if item.get("provider_code")
+    }
+    model_records = {
+        str(item.get("model_code")): item
+        for item in request.model_records
+        if item.get("model_code")
+    }
+    result = await decide_workflow_welcome(
+        session_id=request.session_id,
+        workflow_code=request.workflow_code,
+        workflow_version=request.workflow_version,
+        workflow_summary=request.workflow_summary,
+        session_context=request.session_context,
+        provider_configs=provider_configs,
+        model_records=model_records,
+        routing_model_code=request.routing_model_code,
+    )
+    return WelcomeDecisionResponse(**result)
 
 
 @app.post("/api/phase4/route-thresholds/resolve")

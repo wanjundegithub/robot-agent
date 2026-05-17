@@ -28,43 +28,85 @@ public class NettyGatewayHub {
     }
 
     public GatewayConnection register(Channel channel, String sessionId, String executionId) {
+        return register(channel, sessionId, executionId, null, null);
+    }
+
+    public GatewayConnection register(
+            Channel channel,
+            String sessionId,
+            String executionId,
+            String workflowCode,
+            String workflowVersion
+    ) {
         String existingId = channel.attr(CONNECTION_ID_ATTR).get();
         if (existingId != null) {
             GatewayConnection existing = connections.get(existingId);
             if (existing != null) {
-                existing.bind(sessionId, executionId);
+                existing.bind(sessionId, executionId, workflowCode, workflowVersion);
                 return existing;
             }
         }
 
         String connectionId = UUID.randomUUID().toString();
-        GatewayConnection connection = new GatewayConnection(connectionId, channel, sessionId, executionId);
+        GatewayConnection connection = new GatewayConnection(connectionId, channel, sessionId, executionId, workflowCode, workflowVersion);
         connections.put(connectionId, connection);
         channel.attr(CONNECTION_ID_ATTR).set(connectionId);
-        log.debug("gateway.hub.register connectionId={} sessionId={} executionId={}", connectionId, sessionId, executionId);
+        log.debug(
+                "gateway.hub.register connectionId={} sessionId={} executionId={} hasWorkflow={}",
+                connectionId,
+                sessionId,
+                executionId,
+                workflowCode != null && workflowVersion != null
+        );
         return connection;
     }
 
     public GatewayConnection register(String sessionId, String executionId) {
+        return register(sessionId, executionId, null, null);
+    }
+
+    public GatewayConnection register(
+            String sessionId,
+            String executionId,
+            String workflowCode,
+            String workflowVersion
+    ) {
         String connectionId = UUID.randomUUID().toString();
-        GatewayConnection connection = new GatewayConnection(connectionId, null, sessionId, executionId);
+        GatewayConnection connection = new GatewayConnection(connectionId, null, sessionId, executionId, workflowCode, workflowVersion);
         connections.put(connectionId, connection);
-        log.debug("gateway.hub.register.compat connectionId={} sessionId={} executionId={}", connectionId, sessionId, executionId);
+        log.debug(
+                "gateway.hub.register.compat connectionId={} sessionId={} executionId={} hasWorkflow={}",
+                connectionId,
+                sessionId,
+                executionId,
+                workflowCode != null && workflowVersion != null
+        );
         return connection;
     }
 
     public void bind(Channel channel, String sessionId, String executionId) {
+        bind(channel, sessionId, executionId, null, null);
+    }
+
+    public void bind(
+            Channel channel,
+            String sessionId,
+            String executionId,
+            String workflowCode,
+            String workflowVersion
+    ) {
         GatewayConnection connection = getByChannel(channel);
         if (connection == null) {
-            register(channel, sessionId, executionId);
+            register(channel, sessionId, executionId, workflowCode, workflowVersion);
             return;
         }
-        connection.bind(sessionId, executionId);
+        connection.bind(sessionId, executionId, workflowCode, workflowVersion);
         log.debug(
-                "gateway.hub.bind connectionId={} sessionId={} executionId={}",
+                "gateway.hub.bind connectionId={} sessionId={} executionId={} hasWorkflow={}",
                 connection.connectionId(),
                 connection.sessionId(),
-                connection.executionId()
+                connection.executionId(),
+                connection.workflowCode() != null && connection.workflowVersion() != null
         );
     }
 
@@ -134,12 +176,23 @@ public class NettyGatewayHub {
         private final Channel channel;
         private volatile String sessionId;
         private volatile String executionId;
+        private volatile String workflowCode;
+        private volatile String workflowVersion;
 
-        private GatewayConnection(String connectionId, Channel channel, String sessionId, String executionId) {
+        private GatewayConnection(
+                String connectionId,
+                Channel channel,
+                String sessionId,
+                String executionId,
+                String workflowCode,
+                String workflowVersion
+        ) {
             this.connectionId = connectionId;
             this.channel = channel;
             this.sessionId = sessionId;
             this.executionId = executionId;
+            this.workflowCode = workflowCode;
+            this.workflowVersion = workflowVersion;
         }
 
         public String connectionId() {
@@ -158,12 +211,26 @@ public class NettyGatewayHub {
             return executionId;
         }
 
-        private void bind(String sessionId, String executionId) {
+        public String workflowCode() {
+            return workflowCode;
+        }
+
+        public String workflowVersion() {
+            return workflowVersion;
+        }
+
+        private void bind(String sessionId, String executionId, String workflowCode, String workflowVersion) {
             if (sessionId != null && !sessionId.isBlank()) {
                 this.sessionId = sessionId;
             }
             if (executionId != null && !executionId.isBlank()) {
                 this.executionId = executionId;
+            }
+            if (workflowCode != null && !workflowCode.isBlank()) {
+                this.workflowCode = workflowCode;
+            }
+            if (workflowVersion != null && !workflowVersion.isBlank()) {
+                this.workflowVersion = workflowVersion;
             }
         }
 

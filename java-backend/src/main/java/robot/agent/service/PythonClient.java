@@ -142,6 +142,30 @@ public class PythonClient {
                 .doOnError(error -> log.error("python.intent.classify.failed message={}", error.getMessage(), error));
     }
 
+    public Mono<Map<String, Object>> decideWorkflowWelcome(Map<String, Object> request) {
+        log.info(
+                "python.workflow_welcome.decide sessionId={} workflowCode={} workflowVersion={} routingModelCode={}",
+                request == null ? null : request.get("session_id"),
+                request == null ? null : request.get("workflow_code"),
+                request == null ? null : request.get("workflow_version"),
+                request == null ? null : request.get("routing_model_code")
+        );
+        return webClient.post()
+                .uri("/api/phase5/workflow-welcome/decide")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(error -> log.error(
+                        "python.workflow_welcome.decide.failed workflowCode={} workflowVersion={} message={}",
+                        request == null ? null : request.get("workflow_code"),
+                        request == null ? null : request.get("workflow_version"),
+                        error.getMessage(),
+                        error
+                ));
+    }
+
     private String preview(String value) {
         if (value == null || value.isBlank()) {
             return "";

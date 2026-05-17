@@ -117,6 +117,15 @@ let createSessionCount = 0
 let sessionList: SessionSummary[] = []
 let messageStore: Record<string, SessionMessage[]> = {}
 let delayedSessionMessageLoads: Record<string, number> = {}
+let publishedWorkflows: Array<{
+  id: number
+  workflowCode: string
+  name: string
+  description?: string
+  status: string
+  currentVersion?: string
+  createdBy?: string
+}> = []
 
 const createSessionList = (): SessionSummary[] => [
   baseSessionDetails['session-current-2'],
@@ -142,6 +151,7 @@ test.beforeEach(async ({ page }) => {
   sessionList = createSessionList()
   messageStore = createMessageStore()
   delayedSessionMessageLoads = {}
+  publishedWorkflows = []
 
   await page.addInitScript(() => {
     class MockWebSocket {
@@ -159,6 +169,8 @@ test.beforeEach(async ({ page }) => {
 
       constructor(url: string) {
         this.url = url
+        ;(window as Window & { __mockWsUrls?: string[] }).__mockWsUrls ??= []
+        ;(window as Window & { __mockWsUrls?: string[] }).__mockWsUrls?.push(url)
         window.setTimeout(() => {
           this.readyState = MockWebSocket.OPEN
           this.onopen?.(new Event('open'))
@@ -175,6 +187,8 @@ test.beforeEach(async ({ page }) => {
             content?: string
           }
         }
+        ;(window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }).__mockWsPayloads ??= []
+        ;(window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }).__mockWsPayloads?.push(payload)
 
         if (payload.action !== 'chat.send' || !payload.session_id || !payload.payload?.content) {
           return
@@ -285,7 +299,7 @@ test.beforeEach(async ({ page }) => {
     const { pathname } = url
 
     if (pathname === '/api/workflows/published') {
-      await route.fulfill({ json: [] })
+      await route.fulfill({ json: publishedWorkflows })
       return
     }
 
@@ -380,6 +394,105 @@ test.beforeEach(async ({ page }) => {
 })
 
 test.describe('session history panel', () => {
+  test('requires choosing a workflow mode before sending', async ({ page }) => {
+    await page.goto('/')
+
+    await expect(page.getByTestId('chat-workflow-select')).toHaveValue('')
+    await expect(page.getByTestId('chat-workflow-target')).toContainText('请选择工作流模式')
+    await expect(page.getByTestId('chat-input')).toBeDisabled()
+    await expect(page.getByTestId('chat-send')).toBeDisabled()
+  })
+
+  test('auto-route mode sends without workflow fields', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
+    await expect(page.getByTestId('chat-workflow-target')).toContainText('无固定工作流 / 由路由自动决定')
+    await expect(page.getByTestId('chat-input')).toBeEnabled()
+
+    await page.getByTestId('chat-input').fill('Auto route message')
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText('Auto route message', { exact: true }).first()).toBeVisible()
+    await page.waitForFunction(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
+      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+    })
+
+    const wsPayloads = await page.evaluate(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>>; __mockWsUrls?: string[] }
+      return {
+        payloads: win.__mockWsPayloads ?? [],
+        urls: win.__mockWsUrls ?? [],
+      }
+    })
+    const chatSend = wsPayloads.payloads.find((payload) => payload.action === 'chat.send') as
+      | Record<string, unknown>
+      | undefined
+
+    expect(chatSend).toBeTruthy()
+    expect(chatSend?.payload && typeof chatSend.payload === 'object' ? chatSend.payload : {}).not.toHaveProperty(
+      'workflow_code'
+    )
+    expect(chatSend?.payload && typeof chatSend.payload === 'object' ? chatSend.payload : {}).not.toHaveProperty(
+      'workflow_version'
+    )
+    expect(wsPayloads.urls.some((url) => url.includes('workflow_code='))).toBeFalsy()
+  })
+
+  test('fixed workflow mode sends workflow fields and rebuilds websocket URL', async ({ page }) => {
+    publishedWorkflows = [
+      {
+        id: 11,
+        workflowCode: 'workflow-hotel',
+        name: '酒店预订',
+        status: 'published',
+        currentVersion: '1.0.0',
+      },
+      {
+        id: 12,
+        workflowCode: 'workflow-travel',
+        name: '旅行助手',
+        status: 'published',
+        currentVersion: '2.0.0',
+      },
+    ]
+
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('workflow-hotel')
+    await expect(page.getByTestId('chat-workflow-target')).toContainText('workflow-hotel / 1.0.0')
+
+    await page.getByTestId('chat-workflow-select').selectOption('workflow-travel')
+    await expect(page.getByTestId('chat-workflow-target')).toContainText('workflow-travel / 2.0.0')
+
+    await page.getByTestId('chat-input').fill('Fixed workflow message')
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText('Fixed workflow message', { exact: true }).first()).toBeVisible()
+    await page.waitForFunction(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
+      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+    })
+
+    const wsPayloads = await page.evaluate(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>>; __mockWsUrls?: string[] }
+      return {
+        payloads: win.__mockWsPayloads ?? [],
+        urls: win.__mockWsUrls ?? [],
+      }
+    })
+    const chatSend = wsPayloads.payloads.find((payload) => payload.action === 'chat.send') as
+      | Record<string, unknown>
+      | undefined
+    const chatSendPayload = (chatSend?.payload as Record<string, unknown>) ?? {}
+
+    expect(chatSendPayload.workflow_code).toBe('workflow-travel')
+    expect(chatSendPayload.workflow_version).toBe('2.0.0')
+    expect(wsPayloads.urls.some((url) => url.includes('workflow_code=workflow-travel'))).toBeTruthy()
+    expect(wsPayloads.urls.some((url) => url.includes('workflow_version=2.0.0'))).toBeTruthy()
+  })
+
   test('does not show a fresh empty current session in the history list', async ({ page }) => {
     await page.goto('/')
 
@@ -396,6 +509,7 @@ test.describe('session history panel', () => {
     await page.goto('/')
 
     const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill(failedSendContent)
     await page.getByTestId('chat-send').click()
 
@@ -414,6 +528,7 @@ test.describe('session history panel', () => {
     await page.goto('/')
 
     const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill('Keep this session in history')
     await page.getByTestId('chat-send').click()
 
@@ -437,6 +552,7 @@ test.describe('session history panel', () => {
     await page.goto('/')
 
     await expect(page.getByTestId('chat-input')).toBeVisible()
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill(content)
     await page.getByTestId('chat-send').click()
 
@@ -448,6 +564,7 @@ test.describe('session history panel', () => {
   test('keeps the user message visible if a reply arrives before the websocket send promise fails', async ({ page }) => {
     await page.goto('/')
 
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill(disconnectAfterReplyContent)
     await page.getByTestId('chat-send').click()
 
@@ -460,6 +577,7 @@ test.describe('session history panel', () => {
     await page.goto('/')
 
     const panel = page.getByTestId('session-replay-panel')
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill(failedSendContent)
     await page.getByTestId('chat-send').click()
     await expect(panel).toContainText('消息发送失败')
@@ -491,6 +609,7 @@ test.describe('session history panel', () => {
 
     const panel = page.getByTestId('session-replay-panel')
     await expect(page.getByTestId('current-session-meta')).toContainText('session-current-2')
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
     await page.getByTestId('chat-input').fill('Current session should be deleted')
     await page.getByTestId('chat-send').click()
 

@@ -78,3 +78,20 @@ class IntentClassificationRequest(BaseModel):
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     routing_model_code: str
+
+
+class WelcomeDecisionRequest(BaseModel):
+    session_id: str = Field(..., description="Session identifier from Java")
+    workflow_code: str = Field(..., description="Workflow code")
+    workflow_version: str = Field(..., description="Workflow version")
+    workflow_summary: Dict[str, Any] = Field(default_factory=dict)
+    session_context: Dict[str, Any] = Field(default_factory=dict)
+    provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
+    model_records: list[Dict[str, Any]] = Field(default_factory=list)
+    routing_model_code: str = Field(..., description="Model code used for welcome decision")
+
+
+class WelcomeDecisionResponse(BaseModel):
+    should_greet: bool
+    message: str = ""
+    reason: str = ""

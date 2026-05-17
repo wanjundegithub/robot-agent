@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ChatInput from './components/ChatInput'
 import CapabilityCenterPanel from './components/CapabilityCenterPanel'
 import ExecutionPanel from './components/ExecutionPanel'
@@ -40,15 +40,11 @@ import type {
 } from './types'
 import type { WorkflowVersionMutation } from './components/Orchestrator'
 
-interface ChatWorkflowBinding {
-  workflowCode: string
-  workflowVersion: string
-}
-
 type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'capability-center'
 type WorkflowPageMode = 'list' | 'editor'
 
 const WORKFLOW_LIST_PAGE_SIZE = 10
+const AUTO_ROUTE_WORKFLOW_MODE = '__AUTO_ROUTE__'
 
 const isDisplayableWorkflow = (workflow: WorkflowSummary) => {
   if (workflow.createdBy === 'system') return false
@@ -137,8 +133,7 @@ const App: React.FC = () => {
     form: FormDefinition
   } | null>(null)
   const [publishedWorkflowOptions, setPublishedWorkflowOptions] = useState<WorkflowSummary[]>([])
-  const [selectedPublishedWorkflowCode, setSelectedPublishedWorkflowCode] = useState('')
-  const [chatWorkflowBinding, setChatWorkflowBinding] = useState<ChatWorkflowBinding | null>(null)
+  const [chatWorkflowMode, setChatWorkflowMode] = useState('')
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
   const [workflowEditorSelection, setWorkflowEditorSelection] = useState<WorkflowEditorSelection | null>(null)
   const [workflowEditorInstance, setWorkflowEditorInstance] = useState(0)
@@ -158,17 +153,51 @@ const App: React.FC = () => {
       const items = await getPublishedWorkflows()
       const filteredItems = items.filter(isDisplayableWorkflow)
       setPublishedWorkflowOptions(filteredItems)
-      setSelectedPublishedWorkflowCode((current) =>
-        filteredItems.some((item) => item.workflowCode === current) ? current : ''
+      setChatWorkflowMode((current) =>
+        current === '' || current === AUTO_ROUTE_WORKFLOW_MODE
+          ? current
+          : filteredItems.some((item) => item.workflowCode === current)
+            ? current
+            : ''
       )
-      setChatWorkflowBinding((current) => {
-        if (!current) return null
-        return filteredItems.some((item) => item.workflowCode === current.workflowCode) ? current : null
-      })
     } catch (error) {
       console.error('Failed to load published workflow options:', error)
     }
   }, [])
+
+  const selectedChatWorkflow = useMemo(() => {
+    if (chatWorkflowMode === '' || chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE) {
+      return null
+    }
+    return publishedWorkflowOptions.find((item) => item.workflowCode === chatWorkflowMode) ?? null
+  }, [chatWorkflowMode, publishedWorkflowOptions])
+
+  const selectedChatWorkflowVersion = selectedChatWorkflow?.currentVersion || ''
+  const chatWorkflowModeLabel =
+    chatWorkflowMode === ''
+      ? '请选择工作流模式'
+      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
+        ? '无固定工作流'
+        : selectedChatWorkflow?.workflowCode || chatWorkflowMode
+  const chatWorkflowModeDetail =
+    chatWorkflowMode === ''
+      ? '先选择后再发送'
+      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
+        ? '由路由自动决定'
+        : selectedChatWorkflowVersion || '未知版本'
+  const chatWorkflowModeFooter =
+    chatWorkflowMode === ''
+      ? '请选择工作流模式'
+      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
+        ? '无固定工作流'
+        : `${selectedChatWorkflow?.workflowCode || chatWorkflowMode}@${selectedChatWorkflowVersion || 'latest'}`
+  const chatWorkflowConnectionKey = useMemo(() => {
+    if (!socketSessionId) return ''
+    if (!selectedChatWorkflow) {
+      return `${socketSessionId}|base`
+    }
+    return `${socketSessionId}|${selectedChatWorkflow.workflowCode}|${selectedChatWorkflowVersion}`
+  }, [selectedChatWorkflow, selectedChatWorkflowVersion, socketSessionId])
 
   const resetSessionView = useCallback(() => {
     setMessages([createWelcomeMessage()])
@@ -280,6 +309,7 @@ const App: React.FC = () => {
     cacheSessionMessages(created.id, [])
     setCurrentSession(created)
     setSessionId(created.id)
+    setSocketSessionId(created.id)
     setSelectedHistorySessionId(created.id)
     return created
   }, [cacheSessionMessages])
@@ -456,7 +486,7 @@ const App: React.FC = () => {
       }
     })()
 
-    const wsUrl = buildWsUrl(socketSessionId)
+    const wsUrl = buildWsUrl(socketSessionId, selectedChatWorkflow)
     let isCancelled = false
 
     const connect = (attempt = 0) => {
@@ -534,15 +564,29 @@ const App: React.FC = () => {
       }
       wsRef.current?.close()
     }
-  }, [activePage, socketSessionId])
+  }, [activePage, chatWorkflowConnectionKey])
 
-  const buildWsUrl = (activeSessionId: string) => {
+  const buildWsUrl = (activeSessionId: string, workflow: WorkflowSummary | null) => {
     const base = import.meta.env.VITE_NETTY_WS_BASE_URL || import.meta.env.VITE_WS_BASE_URL
     const origin =
       base ||
       `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8091`
     const url = new URL(`${origin}/ws/robot`)
     url.searchParams.set('session_id', activeSessionId)
+    if (workflow?.workflowCode && workflow.currentVersion) {
+      url.searchParams.set('workflow_code', workflow.workflowCode)
+      url.searchParams.set('workflow_version', workflow.currentVersion)
+    }
+    gatewayLog('workflow.ws_url_built', {
+      session_id: activeSessionId,
+      workflow_mode:
+        chatWorkflowMode === ''
+          ? 'unselected'
+          : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
+            ? 'auto_route'
+            : 'fixed',
+      has_workflow: Boolean(workflow?.workflowCode && workflow.currentVersion),
+    })
     return url.toString()
   }
 
@@ -859,6 +903,22 @@ const App: React.FC = () => {
     fixedMessageId?: string
   ) => {
     if (!content.trim()) return
+    if (chatWorkflowMode === '') {
+      appendSystemMessage('请先选择工作流模式：无固定工作流，或指定固定工作流。')
+      gatewayLog('workflow.send_blocked', {
+        reason: 'mode_unselected',
+        session_id: sessionId || null,
+      })
+      return
+    }
+    if (chatWorkflowMode !== AUTO_ROUTE_WORKFLOW_MODE && !selectedChatWorkflow) {
+      appendSystemMessage('当前选择的固定工作流不可用，请重新选择工作流模式。')
+      gatewayLog('workflow.send_blocked', {
+        reason: 'fixed_workflow_unavailable',
+        session_id: sessionId || null,
+      })
+      return
+    }
 
     const messageId = fixedMessageId || createId('msg')
     const shouldAppendUserMessage =
@@ -908,18 +968,10 @@ const App: React.FC = () => {
         cacheSessionMessages(activeSessionId, nextHistory)
       }
 
-      const selectedPublishedWorkflow = publishedWorkflowOptions.find(
-        (item) => item.workflowCode === selectedPublishedWorkflowCode
+      const shouldSendFixedWorkflow = Boolean(
+        selectedChatWorkflow?.workflowCode && selectedChatWorkflow.currentVersion
       )
-      const linkedBinding =
-        chatWorkflowBinding && chatWorkflowBinding.workflowCode === selectedPublishedWorkflowCode
-          ? chatWorkflowBinding
-          : null
-      const boundWorkflowId = selectedPublishedWorkflow?.id
-      const boundWorkflowCode = selectedPublishedWorkflow?.workflowCode || linkedBinding?.workflowCode
-      const boundWorkflowVersion = linkedBinding?.workflowVersion || selectedPublishedWorkflow?.currentVersion
-
-      const response = (await sendGatewayAction('chat.send', {
+      const chatSendPayload: Record<string, unknown> = {
         session_id: activeSessionId,
         message_id: messageId,
         content,
@@ -931,10 +983,20 @@ const App: React.FC = () => {
         cancel_confirmation: options?.cancelConfirmation ?? false,
         intent_candidate_action: options?.intentCandidateAction ?? null,
         intent_candidate_target_code: options?.intentCandidateTargetCode ?? null,
-        workflow_id: boundWorkflowId ?? null,
-        workflow_code: boundWorkflowCode,
-        workflow_version: boundWorkflowVersion,
-      }, activeSessionId)) as unknown as SendMessageResponse
+      }
+      if (shouldSendFixedWorkflow) {
+        chatSendPayload.workflow_id = selectedChatWorkflow?.id ?? null
+        chatSendPayload.workflow_code = selectedChatWorkflow?.workflowCode
+        chatSendPayload.workflow_version = selectedChatWorkflow?.currentVersion
+      }
+
+      gatewayLog('workflow.chat_send_payload', {
+        session_id: activeSessionId,
+        workflow_mode:
+          chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE ? 'auto_route' : 'fixed',
+        has_workflow: shouldSendFixedWorkflow,
+      })
+      const response = (await sendGatewayAction('chat.send', chatSendPayload, activeSessionId)) as unknown as SendMessageResponse
       gatewayLog('send_message.response', {
         session_id: activeSessionId,
         execution_id: response.execution_id,
@@ -1146,6 +1208,7 @@ const App: React.FC = () => {
     disconnectSocket()
     setCurrentSession(nextSession)
     setSessionId(nextSessionId)
+    setSocketSessionId(nextSessionId)
     setSelectedHistorySessionId(nextSessionId)
   }, [disconnectSocket, sessions])
 
@@ -1185,20 +1248,23 @@ const App: React.FC = () => {
   }
 
   const handleChatWorkflowSelect = (workflowCode: string) => {
-    setSelectedPublishedWorkflowCode(workflowCode)
-    if (!workflowCode) {
-      setChatWorkflowBinding(null)
-      return
-    }
-    const selected = publishedWorkflowOptions.find((item) => item.workflowCode === workflowCode)
-    if (selected?.currentVersion) {
-      setChatWorkflowBinding({
-        workflowCode: selected.workflowCode,
-        workflowVersion: selected.currentVersion,
-      })
-      return
-    }
-    setChatWorkflowBinding(null)
+    setChatWorkflowMode(workflowCode)
+    console.info('[chat] workflow mode changed', {
+      workflow_mode:
+        workflowCode === ''
+          ? 'unselected'
+          : workflowCode === AUTO_ROUTE_WORKFLOW_MODE
+            ? 'auto_route'
+            : 'fixed',
+    })
+    gatewayLog('workflow.mode_changed', {
+      workflow_mode:
+        workflowCode === ''
+          ? 'unselected'
+          : workflowCode === AUTO_ROUTE_WORKFLOW_MODE
+            ? 'auto_route'
+            : 'fixed',
+    })
   }
 
   const openNewWorkflowEditor = () => {
@@ -1251,8 +1317,7 @@ const App: React.FC = () => {
     try {
       await deleteWorkflow(workflow.workflowCode, currentUserId)
       setPublishedWorkflowOptions((current) => current.filter((item) => item.workflowCode !== workflow.workflowCode))
-      setSelectedPublishedWorkflowCode((current) => (current === workflow.workflowCode ? '' : current))
-      setChatWorkflowBinding((current) => (current?.workflowCode === workflow.workflowCode ? null : current))
+      setChatWorkflowMode((current) => (current === workflow.workflowCode ? '' : current))
       setWorkflowVersionMutation({
         workflowCode: workflow.workflowCode,
         version: workflow.currentVersion || '',
@@ -1630,16 +1695,17 @@ const App: React.FC = () => {
             <div className="mb-4 rounded-2xl border border-sky-100 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))] px-4 py-4">
               <div className="text-sm font-semibold text-slate-800">选择已发布工作流</div>
               <div className="mt-1 text-sm text-slate-600">
-                你可以固定一个已发布工作流进行定向测试，也可以留空并交由路由自动选择。
+                请先选择工作流模式：无固定工作流，或指定固定工作流。
               </div>
               <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
                 <select
-                  value={selectedPublishedWorkflowCode}
+                  value={chatWorkflowMode}
                   onChange={(event) => handleChatWorkflowSelect(event.target.value)}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                   data-testid="chat-workflow-select"
                 >
-                  <option value="">不固定工作流</option>
+                  <option value="">请选择工作流模式</option>
+                  <option value={AUTO_ROUTE_WORKFLOW_MODE}>无固定工作流</option>
                   {publishedWorkflowOptions.map((workflow) => (
                     <option key={workflow.workflowCode} value={workflow.workflowCode}>
                       {workflow.name} ({workflow.workflowCode} / {workflow.currentVersion || '未知版本'})
@@ -1649,30 +1715,18 @@ const App: React.FC = () => {
                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500" data-testid="chat-workflow-target">
                   当前目标：
                   {' '}
-                  {selectedPublishedWorkflowCode
-                    ? `${selectedPublishedWorkflowCode} / ${
-                      (chatWorkflowBinding?.workflowCode === selectedPublishedWorkflowCode
-                        ? chatWorkflowBinding.workflowVersion
-                        : publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion) || '未知版本'
-                    }`
-                    : '由路由自动决定'}
+                  {chatWorkflowModeLabel} / {chatWorkflowModeDetail}
                 </div>
               </div>
             </div>
             <MessageList messages={messages} isLoading={isLoading} />
             <div className="panel-footer">
               <div className="mb-2 text-xs text-slate-400">
-                用户：{displayUserLabel(currentUserId)} / 固定工作流：
-                {selectedPublishedWorkflowCode
-                  ? `${selectedPublishedWorkflowCode}@${
-                    (chatWorkflowBinding?.workflowCode === selectedPublishedWorkflowCode
-                      ? chatWorkflowBinding.workflowVersion
-                      : publishedWorkflowOptions.find((item) => item.workflowCode === selectedPublishedWorkflowCode)?.currentVersion) || 'latest'
-                  }`
-                  : '无'}
-                {' '} / 已启用流式输出
+                用户：{displayUserLabel(currentUserId)} / 当前模式：{chatWorkflowModeFooter} / 已启用流式输出
               </div>
-              <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
+              <fieldset className="min-w-0 border-0 p-0" disabled={isLoading || chatWorkflowMode === ''}>
+                <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
+              </fieldset>
             </div>
           </div>
         </div>
