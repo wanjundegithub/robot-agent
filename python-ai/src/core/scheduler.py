@@ -10,6 +10,7 @@ from .node_readiness import NodeReadinessChecker
 from .path_resolver import PathResolver
 from .planner import Planner
 from .protection import ConfirmationRequiredError
+from .react_decision import ReactDecisionService
 from .replanner import RePlanner
 from .runtime import ExecutionRuntime
 from .security import InvalidOutputError
@@ -39,6 +40,7 @@ class WorkflowScheduler:
         self.planner = Planner()
         self.path_resolver = PathResolver()
         self.node_readiness_checker = NodeReadinessChecker()
+        self.react_decision_service = ReactDecisionService()
         self.replanner = RePlanner()
         self.workflow_journal = WorkflowJournal()
 
@@ -181,16 +183,27 @@ class WorkflowScheduler:
                         "trace_id": context.trace_id,
                     })
 
-                next_node_id = self._next_node(workflow, node_def, result)
-                if node_def["type"] == "condition":
+                next_node_id = await self._next_node(workflow, node_def, result, context)
+                transition_candidates = self._legacy_transition_candidates(
+                    workflow,
+                    node_def["id"],
+                    workflow.get("transitions", {}).get(node_def["id"]),
+                )
+                if node_def["type"] == "condition" or len(transition_candidates) > 1:
+                    decision_payload = self._react_decision_payload(result)
                     runtime.emit("branch.decided", {
                         "execution_id": context.execution_id,
                         "session_id": context.session_id,
                         "node_id": node_def["id"],
                         "node_type": node_def["type"],
+                        "candidates": [candidate["target_node_id"] for candidate in transition_candidates],
                         "branch": result.get("branch"),
                         "condition_met": result.get("condition_met"),
-                        "missing_fields": result.get("missing_fields", []),
+                        "missing_fields": decision_payload.get("missing_fields", result.get("missing_fields", [])),
+                        "action": decision_payload.get("action"),
+                        "reason": decision_payload.get("reason_summary"),
+                        "confidence": decision_payload.get("confidence"),
+                        "targetNodeId": next_node_id,
                         "next_node": next_node_id,
                         "trace_id": context.trace_id,
                     })
@@ -702,8 +715,9 @@ class WorkflowScheduler:
                 current_node_id = subgraph_entry
                 continue
 
-            next_node_id = self._next_node_v2(graph, node_def, result, context)
+            next_node_id = await self._next_node_v2(graph, node_def, result, context)
             if len(targets) > 1 or node_def["type"] in {"coordinator", "sub_agent"}:
+                decision_payload = self._react_decision_payload(result)
                 runtime.emit("branch.decided", {
                     "execution_id": context.execution_id,
                     "session_id": context.session_id,
@@ -711,6 +725,10 @@ class WorkflowScheduler:
                     "node_id": node_def["id"],
                     "node_type": node_def["type"],
                     "candidates": list(targets),
+                    "action": decision_payload.get("action"),
+                    "missing_fields": decision_payload.get("missing_fields", []),
+                    "reason": decision_payload.get("reason_summary"),
+                    "confidence": decision_payload.get("confidence"),
                     "targetNodeId": next_node_id,
                     "trace_id": context.trace_id,
                 })
@@ -759,13 +777,14 @@ class WorkflowScheduler:
                 raise ValueError(f"Parent node not found: {frame.parent_graph_id}.{frame.parent_node_id}")
 
             current_graph_id = frame.parent_graph_id
-            current_node_id = self._next_node_v2(
+            current_node_id = await self._next_node_v2(
                 parent_graph,
                 parent_node,
                 {"output": subflow_output},
                 context,
             )
             parent_targets = self._collect_graph_targets(parent_graph, frame.parent_node_id)
+            decision_payload = self._react_decision_payload({"output": subflow_output})
             runtime.emit("branch.decided", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -773,6 +792,10 @@ class WorkflowScheduler:
                 "node_id": frame.parent_node_id,
                 "node_type": parent_node.get("type"),
                 "candidates": list(parent_targets),
+                "action": decision_payload.get("action"),
+                "missing_fields": decision_payload.get("missing_fields", []),
+                "reason": decision_payload.get("reason_summary"),
+                "confidence": decision_payload.get("confidence"),
                 "targetNodeId": current_node_id,
                 "trace_id": context.trace_id,
             })
@@ -811,7 +834,7 @@ class WorkflowScheduler:
                 targets.append(target)
         return targets
 
-    def _next_node_v2(
+    async def _next_node_v2(
         self,
         graph: Dict[str, Any],
         node_def: Dict[str, Any],
@@ -831,15 +854,15 @@ class WorkflowScheduler:
         if len(targets) == 1:
             return explicit_target or targets[0]
 
-        if node_def["type"] not in {"coordinator", "sub_agent"}:
-            raise ValueError(
-                f"Node {node_def['id']} has multiple outgoing edges; only coordinator/sub_agent can decide targetNodeId"
-            )
-        if not isinstance(explicit_target, str) or not explicit_target:
-            raise ValueError(
-                f"Node {node_def['id']} must explicitly return targetNodeId for multiple outgoing edges"
-            )
-        return explicit_target
+        candidates = self._graph_transition_candidates(graph, node_def["id"], targets)
+        decision = await self.react_decision_service.decide_next_node(
+            current_node=node_def,
+            result=result,
+            candidates=candidates,
+            context=context,
+        )
+        self._attach_react_decision(result, decision)
+        return decision.target_node_id
 
     def _extract_target_node_id(self, result: Dict[str, Any]) -> Optional[str]:
         for key in ("next_node", "targetNodeId"):
@@ -951,7 +974,7 @@ class WorkflowScheduler:
             return SubflowNode(node_def["id"], node_def)
         return ToolNode(node_def["id"], node_def)
 
-    def _next_node(self, workflow: Dict[str, Any], node_def: Dict[str, Any], result: Dict[str, Any]) -> Optional[str]:
+    async def _next_node(self, workflow: Dict[str, Any], node_def: Dict[str, Any], result: Dict[str, Any], context) -> Optional[str]:
         transitions = workflow.get("transitions", {})
         node_id = node_def["id"]
         node_type = node_def["type"]
@@ -964,4 +987,80 @@ class WorkflowScheduler:
             branch = result.get("branch")
             return transitions.get(node_id, {}).get(branch)
 
-        return transitions.get(node_id)
+        transition = transitions.get(node_id)
+        if isinstance(transition, dict):
+            candidates = self._legacy_transition_candidates(workflow, node_id, transition)
+            decision = await self.react_decision_service.decide_next_node(
+                current_node=node_def,
+                result=result,
+                candidates=candidates,
+                context=context,
+            )
+            self._attach_react_decision(result, decision)
+            return decision.target_node_id
+
+        return transition
+
+    def _graph_transition_candidates(
+        self,
+        graph: Dict[str, Any],
+        source_node_id: str,
+        targets: List[str],
+    ) -> List[Dict[str, Any]]:
+        nodes = graph.get("nodes", {})
+        candidates: List[Dict[str, Any]] = []
+        for target in targets:
+            edge = self._find_graph_edge(graph, source_node_id, target)
+            candidates.append({
+                "target_node_id": target,
+                "branch": edge.get("branch") or edge.get("label") or edge.get("condition"),
+                "description": edge.get("description") or edge.get("label") or "",
+                "node": nodes.get(target, {"id": target, "type": "unknown", "config": {}}),
+            })
+        return candidates
+
+    def _legacy_transition_candidates(
+        self,
+        workflow: Dict[str, Any],
+        source_node_id: str,
+        transition: Any,
+    ) -> List[Dict[str, Any]]:
+        nodes = workflow.get("nodes", {})
+        if isinstance(transition, dict):
+            return [
+                {
+                    "target_node_id": target,
+                    "branch": branch,
+                    "description": str(branch),
+                    "node": nodes.get(target, {"id": target, "type": "unknown", "config": {}}),
+                }
+                for branch, target in transition.items()
+                if isinstance(target, str) and target
+            ]
+        if isinstance(transition, str) and transition:
+            return [{
+                "target_node_id": transition,
+                "branch": None,
+                "description": "",
+                "node": nodes.get(transition, {"id": transition, "type": "unknown", "config": {}}),
+            }]
+        return []
+
+    def _find_graph_edge(self, graph: Dict[str, Any], source_node_id: str, target_node_id: str) -> Dict[str, Any]:
+        for edge in graph.get("edges", []):
+            if edge.get("source") == source_node_id and edge.get("target") == target_node_id:
+                return edge
+        return {}
+
+    def _attach_react_decision(self, result: Dict[str, Any], decision) -> None:
+        result["react_decision"] = {
+            "targetNodeId": decision.target_node_id,
+            "action": decision.action,
+            "missing_fields": list(decision.missing_fields),
+            "confidence": decision.confidence,
+            "reason_summary": decision.reason_summary,
+        }
+
+    def _react_decision_payload(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        payload = result.get("react_decision")
+        return payload if isinstance(payload, dict) else {}

@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -348,7 +349,7 @@ async def test_legacy_subflow_keeps_subflow_runtime_semantics():
 
 
 @pytest.mark.asyncio
-async def test_v2_sub_agent_multi_branch_requires_explicit_target_node_id():
+async def test_v2_sub_agent_multi_branch_uses_internal_react_decision_when_target_missing():
     registry = ExecutionRegistry()
     scheduler = WorkflowScheduler()
     workflow = {
@@ -420,11 +421,10 @@ async def test_v2_sub_agent_multi_branch_requires_explicit_target_node_id():
     await scheduler.run(runtime)
     events = await _collect_events(runtime)
 
-    assert runtime.context.status == "failed"
-    assert any(
-        event == "execution.failed" and "must explicitly return targetNodeId" in payload.get("error", "")
-        for event, payload in events
-    )
+    branch_events = [payload for event, payload in events if event == "branch.decided"]
+    assert runtime.context.status == "completed"
+    assert any(payload.get("targetNodeId") == "message_a" for payload in branch_events)
+    assert "message_a" in runtime.context.completed_nodes
 
 
 @pytest.mark.asyncio
@@ -525,6 +525,164 @@ async def test_v2_runtime_emits_cost_chain_and_completion_metrics(monkeypatch):
     assert len(completion_events) == 1
     assert completion_events[0]["metrics"]["total_cost"] > 0
     assert completion_events[0]["metrics"]["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_multibranch_llm_uses_internal_react_decision(monkeypatch):
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "workflow_code": "flight_booking",
+        "workflow_version": "2.0.0",
+        "entry": "start",
+        "nodes": {
+            "start": {"id": "start", "type": "start", "config": {"initial_variables": {}}},
+            "extract_slots": {
+                "id": "extract_slots",
+                "type": "llm",
+                "config": {
+                    "prompt": "slot_extraction",
+                    "structured_output": {"enabled": True, "schema": {"type": "object", "properties": {}}},
+                },
+            },
+            "collect_info": {
+                "id": "collect_info",
+                "type": "form",
+                "config": {
+                    "title": "Complete trip info",
+                    "fields": [
+                        {"name": "departure_city", "type": "text", "required": True},
+                        {"name": "arrival_city", "type": "text", "required": True},
+                        {"name": "departure_date", "type": "date", "required": True},
+                    ],
+                },
+            },
+            "search_flights": {
+                "id": "search_flights",
+                "type": "message",
+                "config": {"message_text": "search ready"},
+            },
+            "end": {"id": "end", "type": "end", "config": {}},
+        },
+        "transitions": {
+            "start": "extract_slots",
+            "extract_slots": {"missing": "collect_info", "complete": "search_flights"},
+            "collect_info": "search_flights",
+            "search_flights": "end",
+            "end": None,
+        },
+    }
+    monkeypatch.setattr(
+        "src.nodes.llm.execute_model_completion",
+        async_result('{"departure_city":"北京"}'),
+    )
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-legacy-react-missing",
+        "session_id": "session-legacy-react-missing",
+        "workflow_code": "flight_booking",
+        "workflow_version": "2.0.0",
+        "workflow_definition": workflow,
+        "workflow_config": {"decision_policy": {"mode": "rules"}, "llm_defaults": {"model_code": "general-chat-v1"}},
+        "provider_configs": [{"provider_code": "test-provider", "provider_type": "openai_compatible", "base_url": "https://llm.example.com/v1"}],
+        "model_records": [{"model_code": "general-chat-v1", "provider_code": "test-provider", "upstream_model_code": "gpt-test"}],
+        "input_variables": {"user_message": "我要订机票"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.last_form_definition:
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({"arrival_city": "上海", "departure_date": "2026-06-01"})
+    await run_task
+    events = await _collect_events(runtime)
+
+    branch_events = [payload for event, payload in events if event == "branch.decided"]
+    assert runtime.context.status == "completed"
+    assert branch_events[0]["targetNodeId"] == "collect_info"
+    assert branch_events[0]["action"] == "ask_user"
+    assert branch_events[0]["missing_fields"] == ["arrival_city", "departure_date"]
+    assert "search_flights" in runtime.context.completed_nodes
+
+
+@pytest.mark.asyncio
+async def test_v2_multibranch_llm_uses_internal_react_decision(monkeypatch):
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start_main",
+                "nodes": {
+                    "start_main": {"id": "start_main", "type": "start", "config": {}},
+                    "extract_slots": {
+                        "id": "extract_slots",
+                        "type": "llm",
+                        "config": {
+                            "prompt": "slot_extraction",
+                            "structured_output": {"enabled": True, "schema": {"type": "object", "properties": {}}},
+                        },
+                    },
+                    "collect_info": {
+                        "id": "collect_info",
+                        "type": "form",
+                        "config": {
+                            "title": "Complete trip info",
+                            "fields": [
+                                {"name": "departure_city", "type": "text", "required": True},
+                                {"name": "arrival_city", "type": "text", "required": True},
+                                {"name": "departure_date", "type": "date", "required": True},
+                            ],
+                        },
+                    },
+                    "search_flights": {"id": "search_flights", "type": "message", "config": {"message_text": "search ready"}},
+                    "end_main": {"id": "end_main", "type": "end", "config": {}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "start_main", "target": "extract_slots"},
+                    {"id": "e2", "source": "extract_slots", "target": "collect_info", "label": "missing"},
+                    {"id": "e3", "source": "extract_slots", "target": "search_flights", "label": "complete"},
+                    {"id": "e4", "source": "collect_info", "target": "search_flights"},
+                    {"id": "e5", "source": "search_flights", "target": "end_main"},
+                ],
+            },
+        },
+    }
+    monkeypatch.setattr(
+        "src.nodes.llm.execute_model_completion",
+        async_result('{"departure_city":"北京"}'),
+    )
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-react-missing",
+        "session_id": "session-v2-react-missing",
+        "workflow_code": "flight_booking",
+        "workflow_version": "2.0.0",
+        "workflow_definition": workflow,
+        "workflow_config": {"decision_policy": {"mode": "rules"}, "llm_defaults": {"model_code": "general-chat-v1"}},
+        "provider_configs": [{"provider_code": "test-provider", "provider_type": "openai_compatible", "base_url": "https://llm.example.com/v1"}],
+        "model_records": [{"model_code": "general-chat-v1", "provider_code": "test-provider", "upstream_model_code": "gpt-test"}],
+        "input_variables": {"user_message": "我要订机票"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.last_form_definition:
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({"arrival_city": "上海", "departure_date": "2026-06-01"})
+    await run_task
+    events = await _collect_events(runtime)
+
+    branch_events = [payload for event, payload in events if event == "branch.decided"]
+    assert runtime.context.status == "completed"
+    assert branch_events[0]["targetNodeId"] == "collect_info"
+    assert branch_events[0]["action"] == "ask_user"
+    assert branch_events[0]["missing_fields"] == ["arrival_city", "departure_date"]
+    assert "search_flights" in runtime.context.completed_nodes
 
 
 @pytest.mark.asyncio

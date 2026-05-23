@@ -93,6 +93,20 @@ async def test_registry_falls_back_to_builtin_workflow_registry():
     assert runtime.workflow["workflow_version"] == "1.0.0"
 
 
+def test_builtin_travel_workflows_do_not_use_condition_nodes():
+    for workflow_code, workflow_version in (
+        ("flight_booking", "1.0.0"),
+        ("flight_booking", "2.0.0"),
+        ("hotel_booking", "1.0.0"),
+    ):
+        workflow = get_workflow(workflow_code, workflow_version)
+        assert workflow is not None
+        assert all(
+            node.get("type") != "condition"
+            for node in workflow.get("nodes", {}).values()
+        )
+
+
 @pytest.mark.asyncio
 async def test_registry_returns_existing_runtime_for_duplicate_execution_id():
     runtime_protection_manager.reset()

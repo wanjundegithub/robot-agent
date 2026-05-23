@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import robot.agent.common.ApplicationConstants;
+import robot.agent.config.ChatFallbackProperties;
 import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.request.FormSubmitRequest;
 import robot.agent.dto.request.SendMessageRequest;
@@ -54,6 +56,40 @@ public class ExecutionService {
     private final EntryProtectionService entryProtectionService;
     private final CapabilityRuntimeResolver capabilityRuntimeResolver;
     private final CapabilityAuditService capabilityAuditService;
+    private final ChatFallbackProperties chatFallbackProperties;
+
+    @Autowired
+    public ExecutionService(
+            SessionService sessionService,
+            WorkflowService workflowService,
+            ExecutionRepository executionRepository,
+            ExecutionNodeLogRepository executionNodeLogRepository,
+            PythonClient pythonClient,
+            WebSocketPublisher webSocketPublisher,
+            AuditService auditService,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            ConfirmationService confirmationService,
+            EntryProtectionService entryProtectionService,
+            CapabilityRuntimeResolver capabilityRuntimeResolver,
+            CapabilityAuditService capabilityAuditService,
+            ChatFallbackProperties chatFallbackProperties
+    ) {
+        this.sessionService = sessionService;
+        this.workflowService = workflowService;
+        this.executionRepository = executionRepository;
+        this.executionNodeLogRepository = executionNodeLogRepository;
+        this.pythonClient = pythonClient;
+        this.webSocketPublisher = webSocketPublisher;
+        this.auditService = auditService;
+        this.objectMapper = objectMapper;
+        this.accessControlService = accessControlService;
+        this.confirmationService = confirmationService;
+        this.entryProtectionService = entryProtectionService;
+        this.capabilityRuntimeResolver = capabilityRuntimeResolver;
+        this.capabilityAuditService = capabilityAuditService;
+        this.chatFallbackProperties = chatFallbackProperties;
+    }
 
     public ExecutionService(
             SessionService sessionService,
@@ -70,19 +106,22 @@ public class ExecutionService {
             CapabilityRuntimeResolver capabilityRuntimeResolver,
             CapabilityAuditService capabilityAuditService
     ) {
-        this.sessionService = sessionService;
-        this.workflowService = workflowService;
-        this.executionRepository = executionRepository;
-        this.executionNodeLogRepository = executionNodeLogRepository;
-        this.pythonClient = pythonClient;
-        this.webSocketPublisher = webSocketPublisher;
-        this.auditService = auditService;
-        this.objectMapper = objectMapper;
-        this.accessControlService = accessControlService;
-        this.confirmationService = confirmationService;
-        this.entryProtectionService = entryProtectionService;
-        this.capabilityRuntimeResolver = capabilityRuntimeResolver;
-        this.capabilityAuditService = capabilityAuditService;
+        this(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService,
+                new ChatFallbackProperties()
+        );
     }
 
     @Transactional
@@ -549,13 +588,13 @@ public class ExecutionService {
                 ));
             }
 
-            String assistantMessage = extractAssistantMessage(execution);
+            AssistantMessage assistantMessage = extractAssistantMessage(execution);
             if (assistantMessage != null && !assistantMessage.isBlank()) {
                 LocalDateTime assistantTime = execution.getCompletedAt() != null ? execution.getCompletedAt() : execution.getCreatedAt();
                 messages.add(buildSessionMessage(
                         execution.getId() + "_ai",
-                        execution.getStatus() == ExecutionStatus.FAILED ? "error" : "ai",
-                        assistantMessage,
+                        assistantMessage.type(),
+                        assistantMessage.content(),
                         assistantTime,
                         execution.getId()
                 ));
@@ -664,8 +703,20 @@ public class ExecutionService {
                 maybeOfferResume(sessionId, executionId);
                 break;
             case "execution.failed":
+                log.warn(
+                        "execution.failed.fallback executionId={} sessionId={} error={}",
+                        executionId,
+                        sessionId,
+                        payload.get("error")
+                );
                 updateExecutionStatus(executionId, ExecutionStatus.FAILED, payload, payload.get("error"));
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                webSocketPublisher.publishMessageDelta(
+                        executionId,
+                        sessionId,
+                        chatFallbackProperties.getModelUnavailableMessage(),
+                        true
+                );
+                webSocketPublisher.publishEvent(eventType, executionId, sessionId, sanitizeFailurePayload(payload));
                 maybeOfferResume(sessionId, executionId);
                 break;
             case "execution.suspended":
@@ -745,6 +796,14 @@ public class ExecutionService {
                 payload.get("metrics") != null,
                 error != null
         );
+    }
+
+    private Map<String, Object> sanitizeFailurePayload(Map<String, Object> payload) {
+        Map<String, Object> sanitized = new LinkedHashMap<>(payload == null ? Map.of() : payload);
+        sanitized.remove("error");
+        sanitized.put("fallback_message", chatFallbackProperties.getModelUnavailableMessage());
+        sanitized.put("error_suppressed", true);
+        return sanitized;
     }
 
     private void updateExecutionNode(String executionId, String eventType, Map<String, Object> payload) {
@@ -1261,30 +1320,43 @@ public class ExecutionService {
         return response;
     }
 
-    private String extractAssistantMessage(Execution execution) {
+    private AssistantMessage extractAssistantMessage(Execution execution) {
         if (execution.getStatus() == ExecutionStatus.FAILED && execution.getError() != null && !execution.getError().isBlank()) {
-            return execution.getError();
+            log.warn(
+                    "execution.history.fallback executionId={} sessionId={} workflowCode={} error={}",
+                    execution.getId(),
+                    execution.getSessionId(),
+                    execution.getWorkflowCode(),
+                    execution.getError()
+            );
+            return new AssistantMessage("ai", chatFallbackProperties.getModelUnavailableMessage());
         }
 
         Map<String, Object> output = parseJson(execution.getOutputVariables());
         String direct = readPreferredText(output, "answer", "text", "message", "content", "result", "reply");
         if (direct != null) {
-            return direct;
+            return new AssistantMessage("ai", direct);
         }
 
         Map<String, Object> variables = parseJson(execution.getVariables());
         String fallback = readPreferredText(variables, "answer", "text", "message", "content", "result", "reply");
         if (fallback != null) {
-            return fallback;
+            return new AssistantMessage("ai", fallback);
         }
 
         if (!output.isEmpty()) {
-            return writeJson(output);
+            return new AssistantMessage("ai", writeJson(output));
         }
         if (!variables.isEmpty()) {
-            return writeJson(variables);
+            return new AssistantMessage("ai", writeJson(variables));
         }
         return null;
+    }
+
+    private record AssistantMessage(String type, String content) {
+        private boolean isBlank() {
+            return content == null || content.isBlank();
+        }
     }
 
     private String readPreferredText(Map<String, Object> source, String... keys) {

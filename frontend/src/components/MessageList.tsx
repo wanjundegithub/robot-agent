@@ -59,7 +59,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
+    <div className="flex-1 overflow-y-auto p-4 bg-slate-50" data-testid="message-list">
       <div className="space-y-4">
         {messages.map(renderMessage)}
         {isLoading && (

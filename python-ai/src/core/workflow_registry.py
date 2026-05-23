@@ -20,11 +20,6 @@ def flight_booking_v1() -> Dict[str, Any]:
         "nodes": {
             "start": {"id": "start", "type": "start", "config": {"initial_variables": {}}},
             "extract_slots": {"id": "extract_slots", "type": "llm", "config": _slot_extraction_config()},
-            "check_slots": {
-                "id": "check_slots",
-                "type": "condition",
-                "config": {"required_fields": ["departure_city", "arrival_city", "departure_date"]},
-            },
             "collect_info": {
                 "id": "collect_info",
                 "type": "form",
@@ -49,8 +44,7 @@ def flight_booking_v1() -> Dict[str, Any]:
         },
         "transitions": {
             "start": "extract_slots",
-            "extract_slots": "check_slots",
-            "check_slots": {"complete": "end", "missing": "collect_info"},
+            "extract_slots": {"missing": "collect_info", "complete": "end"},
             "collect_info": "end",
             "end": None,
         },
@@ -65,11 +59,6 @@ def flight_booking_v2() -> Dict[str, Any]:
         "nodes": {
             "start": {"id": "start", "type": "start", "config": {"initial_variables": {}}},
             "extract_slots": {"id": "extract_slots", "type": "llm", "config": _slot_extraction_config()},
-            "check_slots": {
-                "id": "check_slots",
-                "type": "condition",
-                "config": {"required_fields": ["departure_city", "arrival_city", "departure_date"]},
-            },
             "collect_info": {
                 "id": "collect_info",
                 "type": "form",
@@ -122,8 +111,7 @@ def flight_booking_v2() -> Dict[str, Any]:
         },
         "transitions": {
             "start": "extract_slots",
-            "extract_slots": "check_slots",
-            "check_slots": {"complete": "search_flights", "missing": "collect_info"},
+            "extract_slots": {"missing": "collect_info", "complete": "search_flights"},
             "collect_info": "search_flights",
             "search_flights": "check_seat_availability",
             "check_seat_availability": "end",
@@ -176,7 +164,7 @@ def hotel_booking_v1() -> Dict[str, Any]:
         },
         "transitions": {
             "start": "extract_slots",
-            "extract_slots": "collect_info",
+            "extract_slots": {"missing": "collect_info", "complete": "search_hotels"},
             "collect_info": "search_hotels",
             "search_hotels": "end",
             "end": None,

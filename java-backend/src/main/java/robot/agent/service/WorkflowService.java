@@ -1152,6 +1152,31 @@ public class WorkflowService {
         Collection<Map<String, Object>> workflowDefinitions = List.of(attachWorkflowConfig(normalizedDefinition, normalizedWorkflowConfig));
         String routingModelCode = modelConfigService.resolveRoutingModelCode(workflowDefinitions);
         ModelConfigService.RuntimeModelBundle runtimeBundle = modelConfigService.buildRuntimeBundle(workflowDefinitions, routingModelCode);
+        if (runtimeBundle.providerConfigs().isEmpty() || runtimeBundle.modelRecords().isEmpty()) {
+            ModelConfigService.RuntimeModelBundle defaultRuntimeBundle = modelConfigService.buildDefaultRuntimeBundle();
+            String defaultModelCode = firstRuntimeModelCode(defaultRuntimeBundle.modelRecords());
+            if (defaultModelCode != null) {
+                log.info(
+                        "workflow.runtime.model.fallback workflowCode={} version={} reason=model_binding_unavailable routingModelCode={} defaultModelCode={}",
+                        workflowCode,
+                        version,
+                        routingModelCode,
+                        defaultModelCode
+                );
+                runtimeBundle = defaultRuntimeBundle;
+                routingModelCode = defaultModelCode;
+                normalizedWorkflowConfig = withDefaultModelBinding(normalizedWorkflowConfig, defaultModelCode);
+            } else {
+                log.warn(
+                        "workflow.runtime.model.missing workflowCode={} version={} reason=no_default_model routingModelCode={} providerCount={} modelRecordCount={}",
+                        workflowCode,
+                        version,
+                        routingModelCode,
+                        runtimeBundle.providerConfigs().size(),
+                        runtimeBundle.modelRecords().size()
+                );
+            }
+        }
         return new RuntimeExecutionBundle(
                 normalizedDefinition,
                 entryRule,
@@ -1161,6 +1186,37 @@ public class WorkflowService {
                 runtimeBundle.modelRecords(),
                 routingModelCode
         );
+    }
+
+    private Map<String, Object> withDefaultModelBinding(Map<String, Object> workflowConfig, String modelCode) {
+        Map<String, Object> updated = new LinkedHashMap<>(workflowConfig == null ? Map.of() : workflowConfig);
+        updated.put("routing_model_code", modelCode);
+
+        Map<String, Object> llmDefaults = new LinkedHashMap<>(asMap(updated.get("llm_defaults")));
+        llmDefaults.put("model_code", modelCode);
+        updated.put("llm_defaults", llmDefaults);
+
+        Map<String, Object> modelBindings = new LinkedHashMap<>(asMap(updated.get("model_bindings")));
+        modelBindings.put("routing_model_code", modelCode);
+        Map<String, Object> bindingDefaults = new LinkedHashMap<>(asMap(modelBindings.get("llm_defaults")));
+        bindingDefaults.put("model_code", modelCode);
+        modelBindings.put("llm_defaults", bindingDefaults);
+        updated.put("model_bindings", modelBindings);
+
+        return updated;
+    }
+
+    private String firstRuntimeModelCode(List<Map<String, Object>> modelRecords) {
+        if (modelRecords == null) {
+            return null;
+        }
+        for (Map<String, Object> modelRecord : modelRecords) {
+            String modelCode = firstNonBlank(stringValue(modelRecord.get("model_code")));
+            if (modelCode != null) {
+                return modelCode;
+            }
+        }
+        return null;
     }
 
     private ModelIntent classifyIntent(

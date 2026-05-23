@@ -112,20 +112,67 @@ function Wait-ForPort {
 
 function Get-LogExcerpt {
     param(
-        [string]$Path,
-        [int]$Tail = 20
+        [string[]]$Path,
+        [int]$Tail = 40
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    $excerpts = @()
+    foreach ($logPath in $Path) {
+        if (-not $logPath -or -not (Test-Path -LiteralPath $logPath)) {
+            continue
+        }
+
+        $lines = Get-Content -LiteralPath $logPath -Tail $Tail -ErrorAction SilentlyContinue
+        if (-not $lines) {
+            continue
+        }
+
+        $label = Split-Path -Leaf $logPath
+        $excerpt = (($lines | ForEach-Object { "$_" }) -join [Environment]::NewLine).Trim()
+        if ($excerpt) {
+            $excerpts += "[$label]$([Environment]::NewLine)$excerpt"
+        }
+    }
+
+    if (-not $excerpts) {
         return $null
     }
 
-    $lines = Get-Content -LiteralPath $Path -Tail $Tail -ErrorAction SilentlyContinue
-    if (-not $lines) {
-        return $null
+    return ($excerpts -join ([Environment]::NewLine + [Environment]::NewLine)).Trim()
+}
+
+
+function Get-ProcessExitCodeText {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string[]]$LogPath
+    )
+
+    if ($Process) {
+        try {
+            $Process.Refresh()
+            if ($Process.HasExited -and $null -ne $Process.ExitCode) {
+                return "$($Process.ExitCode)"
+            }
+        } catch {
+            # Fall through to log parsing.
+        }
     }
 
-    return (($lines | ForEach-Object { "$_" }) -join [Environment]::NewLine).Trim()
+    foreach ($logPath in $LogPath) {
+        if (-not $logPath -or -not (Test-Path -LiteralPath $logPath)) {
+            continue
+        }
+
+        $lines = Get-Content -LiteralPath $logPath -Tail 80 -ErrorAction SilentlyContinue
+        foreach ($line in $lines) {
+            if ($line -match 'Process terminated with exit code:\s*(\d+)') {
+                return $matches[1]
+            }
+        }
+    }
+
+    return "unknown"
 }
 
 function Wait-ForServicePort {
@@ -134,7 +181,7 @@ function Wait-ForServicePort {
         [int]$TimeoutSeconds,
         [System.Diagnostics.Process]$Process,
         [string]$ServiceName,
-        [string]$ErrorLogPath
+        [string[]]$ErrorLogPath
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -149,9 +196,9 @@ function Wait-ForServicePort {
             if ($Process.HasExited) {
                 $details = Get-LogExcerpt -Path $ErrorLogPath
                 if ($details) {
-                    throw "$ServiceName exited before opening port $Port (exit code $($Process.ExitCode)). $details"
+                    throw "$ServiceName exited before opening port $Port (exit code $(Get-ProcessExitCodeText -Process $Process -LogPath $ErrorLogPath)). $details"
                 }
-                throw "$ServiceName exited before opening port $Port (exit code $($Process.ExitCode)). See $ErrorLogPath for details."
+                throw "$ServiceName exited before opening port $Port (exit code $(Get-ProcessExitCodeText -Process $Process -LogPath $ErrorLogPath)). See $ErrorLogPath for details."
             }
         }
 
@@ -248,8 +295,8 @@ try {
 
         $javaOut = Join-Path $logDir "java.out.log"
         $javaErr = Join-Path $logDir "java.err.log"
-        $java = Start-Process -FilePath "mvn" `
-            -ArgumentList @("-Dspring-boot.run.profiles=local-e2e", "spring-boot:run") `
+        $java = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList @("/c", "mvn -Dspring-boot.run.profiles=local-e2e spring-boot:run") `
             -WorkingDirectory (Join-Path $root "java-backend") `
             -RedirectStandardOutput $javaOut `
             -RedirectStandardError $javaErr `
@@ -285,16 +332,16 @@ try {
     }
 
     if ($services.python) {
-        Wait-ForServicePort -Port 8000 -TimeoutSeconds 60 -Process $python -ServiceName "python-ai" -ErrorLogPath $pythonErr
+        Wait-ForServicePort -Port 8000 -TimeoutSeconds 60 -Process $python -ServiceName "python-ai" -ErrorLogPath @($pythonErr, $pythonOut)
     }
 
     if ($services.java) {
-        Wait-ForServicePort -Port 8080 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath $javaErr
-        Wait-ForServicePort -Port 8091 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath $javaErr
+        Wait-ForServicePort -Port 8080 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath @($javaOut, $javaErr)
+        Wait-ForServicePort -Port 8091 -TimeoutSeconds 90 -Process $java -ServiceName "java-backend" -ErrorLogPath @($javaOut, $javaErr)
     }
 
     if ($services.frontend) {
-        Wait-ForServicePort -Port 5173 -TimeoutSeconds 60 -Process $frontend -ServiceName "frontend" -ErrorLogPath $frontErr
+        Wait-ForServicePort -Port 5173 -TimeoutSeconds 60 -Process $frontend -ServiceName "frontend" -ErrorLogPath @($frontErr, $frontOut)
     }
 
     $payload = [ordered]@{

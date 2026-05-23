@@ -1089,11 +1089,18 @@ const App: React.FC = () => {
 
       setPendingSwitch(null)
       setPendingConfirmation(null)
-      if (Array.isArray(response.intent_candidate_queue) && response.intent_candidate_queue.length > 0) {
+      const intentCandidateQueue = Array.isArray(response.intent_candidate_queue)
+        ? response.intent_candidate_queue
+        : []
+      const shouldPromptIntentCandidate =
+        !response.execution_id &&
+        normalizeStatus(response.status || '') === 'candidate_confirmation_required' &&
+        intentCandidateQueue.length > 0
+      if (shouldPromptIntentCandidate) {
         setPendingIntentCandidate({
           content,
           messageId,
-          candidate: response.intent_candidate_queue[0],
+          candidate: intentCandidateQueue[0],
         })
       } else {
         setPendingIntentCandidate(null)
@@ -1248,6 +1255,7 @@ const App: React.FC = () => {
   }
 
   const handleChatWorkflowSelect = (workflowCode: string) => {
+    const previousMode = chatWorkflowMode
     setChatWorkflowMode(workflowCode)
     console.info('[chat] workflow mode changed', {
       workflow_mode:
@@ -1265,6 +1273,9 @@ const App: React.FC = () => {
             ? 'auto_route'
             : 'fixed',
     })
+    if (workflowCode === AUTO_ROUTE_WORKFLOW_MODE && previousMode && previousMode !== AUTO_ROUTE_WORKFLOW_MODE) {
+      void handleCreateNewSession()
+    }
   }
 
   const openNewWorkflowEditor = () => {

@@ -255,6 +255,7 @@ test.beforeEach(async ({ page }) => {
           .catch(() => {})
 
         window.setTimeout(() => {
+          const includesCandidateQueue = payload.payload?.content === 'Auto route with recognized intent'
           this.onmessage?.(
             new MessageEvent('message', {
               data: JSON.stringify({
@@ -268,6 +269,20 @@ test.beforeEach(async ({ page }) => {
                   workflow_code: 'test-workflow',
                   workflow_version: 'v1',
                   status: 'completed',
+                  ...(includesCandidateQueue
+                    ? {
+                        intent_candidate_queue: [
+                          {
+                            intent_code: 'flight_booking',
+                            target_type: 'workflow',
+                            target_code: 'workflow-flight',
+                            confidence: 0.82,
+                            source: 'rag',
+                            evidence: '用户提到订机票',
+                          },
+                        ],
+                      }
+                    : {}),
                 },
               }),
             })
@@ -440,6 +455,23 @@ test.describe('session history panel', () => {
     expect(wsPayloads.urls.some((url) => url.includes('workflow_code='))).toBeFalsy()
   })
 
+  test('recognized intent starts workflow without candidate confirmation popup', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
+    await page.getByTestId('chat-input').fill('Auto route with recognized intent')
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByText('Auto route with recognized intent', { exact: true }).first()).toBeVisible()
+    await page.waitForFunction(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
+      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+    })
+
+    await expect(page.getByText('候选意图确认')).toHaveCount(0)
+    await expect(page.getByText('继续办理')).toHaveCount(0)
+  })
+
   test('fixed workflow mode sends workflow fields and rebuilds websocket URL', async ({ page }) => {
     publishedWorkflows = [
       {
@@ -491,6 +523,32 @@ test.describe('session history panel', () => {
     expect(chatSendPayload.workflow_version).toBe('2.0.0')
     expect(wsPayloads.urls.some((url) => url.includes('workflow_code=workflow-travel'))).toBeTruthy()
     expect(wsPayloads.urls.some((url) => url.includes('workflow_version=2.0.0'))).toBeTruthy()
+  })
+
+  test('switching from fixed workflow to auto-route starts a fresh session', async ({ page }) => {
+    publishedWorkflows = [
+      {
+        id: 11,
+        workflowCode: 'workflow-flight',
+        name: '预定机票',
+        status: 'published',
+        currentVersion: '1.0.0',
+      },
+    ]
+
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('workflow-flight')
+    await page.getByTestId('chat-input').fill('Fixed workflow message')
+    await page.getByTestId('chat-send').click()
+    await expect(page.getByText('Fixed workflow message', { exact: true }).first()).toBeVisible()
+    const fixedSessionMeta = await page.getByTestId('current-session-meta').textContent()
+
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
+
+    await expect(page.getByTestId('current-session-meta')).not.toContainText(fixedSessionMeta || '')
+    await expect(page.getByTestId('message-list').getByText('Fixed workflow message', { exact: true })).toHaveCount(0)
+    await expect(page.getByTestId('chat-workflow-target')).toContainText('无固定工作流 / 由路由自动决定')
   })
 
   test('does not show a fresh empty current session in the history list', async ({ page }) => {

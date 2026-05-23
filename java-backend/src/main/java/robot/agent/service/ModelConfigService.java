@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import robot.agent.common.ApplicationConstants;
+import robot.agent.config.DefaultModelProperties;
 import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
@@ -61,6 +62,7 @@ public class ModelConfigService {
     private final AccessControlService accessControlService;
     private final AuditService auditService;
     private final UnifiedModelService unifiedModelService;
+    private final DefaultModelProperties defaultModelProperties;
 
     @Autowired
     public ModelConfigService(
@@ -73,7 +75,8 @@ public class ModelConfigService {
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             AuditService auditService,
-            UnifiedModelService unifiedModelService
+            UnifiedModelService unifiedModelService,
+            DefaultModelProperties defaultModelProperties
     ) {
         this.providerRepository = providerRepository;
         this.modelRecordRepository = modelRecordRepository;
@@ -85,6 +88,7 @@ public class ModelConfigService {
         this.accessControlService = accessControlService;
         this.auditService = auditService;
         this.unifiedModelService = unifiedModelService;
+        this.defaultModelProperties = defaultModelProperties;
     }
 
     public ModelConfigService(
@@ -108,7 +112,8 @@ public class ModelConfigService {
                 objectMapper,
                 accessControlService,
                 auditService,
-                new UnifiedModelService(modelRecordRepository, providerRepository, objectMapper)
+                new UnifiedModelService(modelRecordRepository, providerRepository, objectMapper),
+                new DefaultModelProperties()
         );
     }
 
@@ -151,6 +156,49 @@ public class ModelConfigService {
                 providersByCode.keySet()
         );
         return new RuntimeModelBundle(providerConfigs, modelRecordMaps);
+    }
+
+    public RuntimeModelBundle buildDefaultRuntimeBundle() {
+        String configuredModelCode = defaultModelProperties.resolveModelCode("default");
+        RuntimeModelBundle configuredBundle = runtimeBundleForConfiguredDefaultModel(configuredModelCode);
+        if (!configuredBundle.modelRecords().isEmpty()) {
+            return configuredBundle;
+        }
+
+        List<LlmProviderConfig> enabledProviders = providerRepository.findByEnabledTrueOrderByProviderCodeAsc();
+        for (LlmProviderConfig provider : enabledProviders) {
+            String defaultModelCode = blankToNull(provider.getDefaultModelCode());
+            if (defaultModelCode == null) {
+                continue;
+            }
+            LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(defaultModelCode)
+                    .filter(LlmModelRecord::isEnabled)
+                    .orElse(null);
+            if (modelRecord != null) {
+                return runtimeBundleForDefaultModel(provider, modelRecord);
+            }
+        }
+
+        List<LlmModelRecord> enabledModels = modelRecordRepository.search(null, null, true, PageRequest.of(0, 1)).getContent();
+        if (enabledModels.isEmpty()) {
+            log.info("model.runtime.default.missing reason=no_enabled_models");
+            return new RuntimeModelBundle(List.of(), List.of());
+        }
+        LlmModelRecord modelRecord = enabledModels.get(0);
+        LlmProviderConfig provider = providerRepository.findByProviderCode(modelRecord.getProviderCode()).orElse(null);
+        if (provider == null || !provider.isEnabled()) {
+            log.info(
+                    "model.runtime.default.missing reason=provider_unavailable modelCode={} providerCode={}",
+                    modelRecord.getModelCode(),
+                    modelRecord.getProviderCode()
+            );
+            return new RuntimeModelBundle(List.of(), List.of());
+        }
+        return runtimeBundleForDefaultModel(provider, modelRecord);
+    }
+
+    public String resolveConfiguredPurposeModelCode(String purpose) {
+        return defaultModelProperties.resolveModelCode(purpose);
     }
 
     public String resolveRoutingModelCode(Collection<Map<String, Object>> workflowDefinitions) {
@@ -616,6 +664,43 @@ public class ModelConfigService {
         value.put("created_at", modelRecord.getCreatedAt());
         value.put("updated_at", modelRecord.getUpdatedAt());
         return value;
+    }
+
+    private RuntimeModelBundle runtimeBundleForDefaultModel(LlmProviderConfig provider, LlmModelRecord modelRecord) {
+        log.info(
+                "model.runtime.default.ready providerCode={} modelCode={}",
+                provider.getProviderCode(),
+                modelRecord.getModelCode()
+        );
+        return new RuntimeModelBundle(
+                List.of(providerToRuntimeMap(provider)),
+                List.of(modelRecordToRuntimeMap(modelRecord, provider))
+        );
+    }
+
+    private RuntimeModelBundle runtimeBundleForConfiguredDefaultModel(String modelCode) {
+        String normalizedModelCode = blankToNull(modelCode);
+        if (normalizedModelCode == null) {
+            return new RuntimeModelBundle(List.of(), List.of());
+        }
+        LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(normalizedModelCode)
+                .filter(LlmModelRecord::isEnabled)
+                .orElse(null);
+        if (modelRecord == null) {
+            log.warn("model.runtime.default.configured_missing modelCode={}", normalizedModelCode);
+            return new RuntimeModelBundle(List.of(), List.of());
+        }
+        LlmProviderConfig provider = providerRepository.findByProviderCode(modelRecord.getProviderCode()).orElse(null);
+        if (provider == null || !provider.isEnabled()) {
+            log.warn(
+                    "model.runtime.default.configured_provider_unavailable modelCode={} providerCode={}",
+                    normalizedModelCode,
+                    modelRecord.getProviderCode()
+            );
+            return new RuntimeModelBundle(List.of(), List.of());
+        }
+        log.info("model.runtime.default.configured_ready providerCode={} modelCode={}", provider.getProviderCode(), normalizedModelCode);
+        return runtimeBundleForDefaultModel(provider, modelRecord);
     }
 
     private Map<String, Object> validationResponse(boolean valid, String providerCode, String modelCode, int statusCode) {

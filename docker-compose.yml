@@ -28,6 +28,18 @@ services:
     volumes:
       - redis-data:/data
 
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: robot-agent-nacos
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    volumes:
+      - nacos-data:/home/nacos/data
+
   pgvector:
     image: pgvector/pgvector:pg16
     container_name: robot-agent-pgvector
@@ -43,4 +55,5 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  nacos-data:
   pgvector-data:
