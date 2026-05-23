@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 from .context import ExecutionContext
 from .protection import runtime_protection_manager
 from .runtime import ExecutionRuntime
-from .workflow_registry import get_workflow
 
 
 logger = logging.getLogger(__name__)
@@ -88,10 +87,6 @@ class ExecutionRegistry:
                 workflow = catalog.get(f"{workflow_code}@{workflow_version}") or {}
                 if workflow:
                     logger.info("registry.create.workflow_from_catalog executionId=%s workflowCode=%s workflowVersion=%s", execution_id, workflow_code, workflow_version)
-            if not workflow:
-                workflow = get_workflow(workflow_code, workflow_version) or {}
-                if workflow:
-                    logger.info("registry.create.workflow_from_builtin executionId=%s workflowCode=%s workflowVersion=%s", execution_id, workflow_code, workflow_version)
             if not workflow:
                 logger.warning("registry.create.workflow_missing executionId=%s workflowCode=%s workflowVersion=%s", execution_id, workflow_code, workflow_version)
                 raise ValueError(f"Workflow definition missing: {workflow_code}@{workflow_version}")

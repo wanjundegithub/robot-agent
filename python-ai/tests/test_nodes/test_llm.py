@@ -60,6 +60,7 @@ async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
     assert result["output"]["arrival_city"] == "上海"
     assert result["output"]["departure_date"] == "2026-04-12"
     assert result["output"]["passengers"] == 2
+    assert "message_deltas" not in result
 
 
 @pytest.mark.asyncio

@@ -201,6 +201,13 @@ public class ExecutionService {
 
         if ("clarification_required".equalsIgnoreCase(routingDecision.decision())) {
             storeIntentCandidateQueue(session, routingDecision.intentCandidateQueue());
+            log.info(
+                    "execution.routing.clarification sessionId={} reason={} candidateWorkflows={} clarificationQuestion={}",
+                    session.getId(),
+                    routingDecision.reason(),
+                    routingDecision.candidateWorkflows(),
+                    routingDecision.clarificationQuestion()
+            );
             return buildClarificationRequiredResponse(session, activeExecution, routingDecision);
         }
 
@@ -704,9 +711,13 @@ public class ExecutionService {
                 break;
             case "execution.failed":
                 log.warn(
-                        "execution.failed.fallback executionId={} sessionId={} error={}",
+                        "execution.failed.fallback executionId={} sessionId={} workflowCode={} workflowVersion={} nodeId={} traceId={} error={}",
                         executionId,
                         sessionId,
+                        execution == null ? null : execution.getWorkflowCode(),
+                        execution == null ? null : execution.getWorkflowVersion(),
+                        payload.get("node_id"),
+                        payload.get("trace_id"),
                         payload.get("error")
                 );
                 updateExecutionStatus(executionId, ExecutionStatus.FAILED, payload, payload.get("error"));

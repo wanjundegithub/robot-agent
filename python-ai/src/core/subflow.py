@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 from src.core.context import ExecutionContext
+
+
+logger = logging.getLogger(__name__)
 
 
 def _build_node(node_def: Dict[str, Any]):
@@ -36,6 +40,13 @@ async def run_subflow(
 ) -> Dict[str, Any]:
     workflow = parent_context.workflow_catalog.get(f"{subflow_code}@{subflow_version}")
     if workflow is None:
+        logger.warning(
+            "subflow.workflow_missing parentExecutionId=%s subflowCode=%s subflowVersion=%s catalogSize=%s",
+            parent_context.execution_id,
+            subflow_code,
+            subflow_version,
+            len(parent_context.workflow_catalog),
+        )
         raise ValueError(f"Subflow not found: {subflow_code}@{subflow_version}")
 
     context = ExecutionContext(

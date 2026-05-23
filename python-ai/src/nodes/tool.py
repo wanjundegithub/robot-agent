@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import logging
+import time
 import httpx
 from src.core.protection import runtime_protection_manager, tool_confirmation_gate
 from src.core.tool_registry import tool_registry
@@ -28,6 +29,7 @@ class ToolNode(BaseNode):
         self.body = self.tool_config.get("body", {})
 
     async def execute(self, context) -> Dict[str, Any]:
+        started_at = time.perf_counter()
         if self.invoke_type == "capability":
             raise RuntimeError("capability invoke_type must be resolved by Java before execution")
 
@@ -35,6 +37,17 @@ class ToolNode(BaseNode):
             params = self._build_tool_params(context)
             resolved_tool_code = self.tool_code or self._derive_tool_code()
             capability_metadata = self._build_capability_metadata()
+            logger.info(
+                "tool.node.start sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s toolCode=%s invokeType=%s paramKeys=%s",
+                context.session_id,
+                context.execution_id,
+                context.workflow_code,
+                context.workflow_version,
+                self.node_id,
+                resolved_tool_code,
+                self.invoke_type or "registry",
+                sorted(params.keys()) if isinstance(params, dict) else [],
+            )
             tool_confirmation_gate.ensure_confirmed(context, resolved_tool_code, params)
             dependency_key = f"tool:{resolved_tool_code}"
             try:
@@ -43,6 +56,18 @@ class ToolNode(BaseNode):
                 runtime_protection_manager.record_dependency_success(dependency_key)
                 output = self._build_tool_output(result)
                 context.add_execution_variables(output)
+                logger.info(
+                    "tool.node.completed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s toolCode=%s outputKeys=%s cached=%s durationMs=%.2f",
+                    context.session_id,
+                    context.execution_id,
+                    context.workflow_code,
+                    context.workflow_version,
+                    self.node_id,
+                    resolved_tool_code,
+                    sorted(output.keys()) if isinstance(output, dict) else [],
+                    bool(result.get("cached", False)),
+                    duration_ms(started_at),
+                )
                 return self.prepare_output({
                     "status": "completed",
                     "output": output,
@@ -59,10 +84,20 @@ class ToolNode(BaseNode):
                     "fallback_message": "工具暂时不可用，已返回降级结果。",
                 }
                 context.add_execution_variables(degraded_output)
+                logger.warning(
+                    "tool.node.degraded sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s toolCode=%s reason=%s durationMs=%.2f",
+                    context.session_id,
+                    context.execution_id,
+                    context.workflow_code,
+                    context.workflow_version,
+                    self.node_id,
+                    resolved_tool_code,
+                    str(exc),
+                    duration_ms(started_at),
+                )
                 return self.prepare_output({
                     "status": "completed",
                     "output": degraded_output,
-                    "message_deltas": [degraded_output["fallback_message"]],
                     "tool_called": {"tool_code": resolved_tool_code, "params": params, **capability_metadata},
                     "tool_returned": {"tool_code": resolved_tool_code, "params": params, "output": degraded_output, "error": str(exc), **capability_metadata},
                     "metrics": {

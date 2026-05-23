@@ -1116,8 +1116,14 @@ class WorkflowScheduler:
 
         if not targets:
             return None
+        if explicit_target:
+            return explicit_target
         if len(targets) == 1:
-            return explicit_target or targets[0]
+            return targets[0]
+
+        branch_target = self._resolve_graph_branch_target(graph, node_def["id"], result)
+        if branch_target:
+            return branch_target
 
         candidates = self._graph_transition_candidates(graph, node_def["id"], targets)
         decision = await self.react_decision_service.decide_next_node(
@@ -1128,6 +1134,25 @@ class WorkflowScheduler:
         )
         self._attach_react_decision(result, decision)
         return decision.target_node_id
+
+    def _resolve_graph_branch_target(
+            self,
+            graph: Dict[str, Any],
+            source_node_id: str,
+            result: Dict[str, Any]
+    ) -> Optional[str]:
+        branch = result.get("branch")
+        if not isinstance(branch, str) or not branch:
+            return None
+        for edge in graph.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            if edge.get("source") != source_node_id:
+                continue
+            edge_branch = edge.get("branch") or edge.get("label") or edge.get("condition")
+            if edge_branch == branch and isinstance(edge.get("target"), str) and edge.get("target"):
+                return str(edge["target"])
+        return None
 
     def _extract_target_node_id(self, result: Dict[str, Any]) -> Optional[str]:
         for key in ("next_node", "targetNodeId"):

@@ -434,6 +434,7 @@ async def test_classify_intent_with_model_code_sends_prompt_contract():
     kwargs = mocked_completion.await_args.kwargs
     assert "choose workflow_code only from provided candidate_workflows" in kwargs["system_prompt"].lower()
     assert "matched=false" in kwargs["system_prompt"].lower()
+    assert "generate clarification_question" in kwargs["system_prompt"].lower()
     prompt_payload = json.loads(kwargs["user_prompt"])
     assert prompt_payload["candidate_workflows"] == candidates
     assert prompt_payload["required_fields"] == [
@@ -447,3 +448,5 @@ async def test_classify_intent_with_model_code_sends_prompt_contract():
         "need_clarification",
         "clarification_question",
     ]
+    assert prompt_payload["fallback_message_requirements"]["field"] == "clarification_question"
+    assert "matched=false" in prompt_payload["fallback_message_requirements"]["when"]

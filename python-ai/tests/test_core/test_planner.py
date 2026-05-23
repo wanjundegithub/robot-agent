@@ -3,11 +3,11 @@ from src.core.context_assembler import ContextAssembler
 from src.core.node_readiness import NodeReadinessChecker
 from src.core.path_resolver import PathResolver
 from src.core.planner import Planner
-from src.core.workflow_registry import get_workflow
+from tests.fixtures.workflows import planner_workflow
 
 
 def test_planner_selects_current_node_with_reasoning():
-    workflow = get_workflow("flight_booking", "1.0.0")
+    workflow = planner_workflow()
     context = ExecutionContext(
         execution_id="exec_plan",
         session_id="sess_plan",
@@ -25,7 +25,7 @@ def test_planner_selects_current_node_with_reasoning():
 
 
 def test_node_readiness_skips_form_when_required_fields_present():
-    workflow = get_workflow("flight_booking", "1.0.0")
+    workflow = planner_workflow()
     context = ExecutionContext(
         execution_id="exec_ready",
         session_id="sess_ready",

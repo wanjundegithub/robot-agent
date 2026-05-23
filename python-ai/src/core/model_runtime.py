@@ -119,6 +119,12 @@ async def classify_intent_with_model_code(
             "need_clarification",
             "clarification_question",
         ],
+        "fallback_message_requirements": {
+            "when": "matched=false or the requested service is not available in candidate_workflows",
+            "field": "clarification_question",
+            "style": "brief, polite Chinese customer-service fallback; mention the user's requested service when it can be inferred; ask if another available service is needed",
+            "example": "抱歉，当前无法为您提供该服务，您还需要其他服务吗？",
+        },
     }
     content = await execute_model_completion(
         model_code=routing_model_code,
@@ -127,7 +133,8 @@ async def classify_intent_with_model_code(
         system_prompt=(
             "You are an intent router. Return JSON only. "
             "You must choose workflow_code only from provided candidate_workflows. "
-            "If no candidate is reliable, return matched=false."
+            "If no candidate is reliable or the requested service is not available, return matched=false. "
+            "When matched=false, generate clarification_question as the user-facing fallback message in Chinese; do not leave it empty."
         ),
         user_prompt=json.dumps(prompt, ensure_ascii=False),
         response_format={"type": "json_object"},

@@ -72,15 +72,11 @@ const gatewayLog = (event: string, details?: Record<string, unknown>) => {
   logGatewayEvent(`gateway.${event}`, 'event')
 }
 
-const createWelcomeMessage = (): Message => ({
-  id: 'welcome',
-  type: 'system',
-  content: '欢迎使用。你可以直接开始对话，或选择已发布工作流进行定向测试。',
-  timestamp: new Date().toISOString(),
-})
+const isVisibleConversationMessage = (message: Message): boolean =>
+  message.type !== 'system' && message.id !== 'welcome'
 
 const normalizeSessionMessages = (items: Message[]): Message[] =>
-  items.filter((message) => message.id !== 'welcome')
+  items.filter(isVisibleConversationMessage)
 
 const hasUserMessage = (items: Message[]): boolean =>
   items.some((message) => message.type === 'user' && message.content.trim().length > 0)
@@ -96,7 +92,7 @@ const dedupeSessions = (items: SessionSummary[]): SessionSummary[] =>
   )
 
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([createWelcomeMessage()])
+  const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
   const [sessions, setSessions] = useState<SessionSummary[]>([])
@@ -205,7 +201,7 @@ const App: React.FC = () => {
   }, [selectedChatWorkflow, selectedChatWorkflowVersion, socketSessionId])
 
   const resetSessionView = useCallback(() => {
-    setMessages([createWelcomeMessage()])
+    setMessages([])
     setEvents([])
     setExecutions([])
     setExecutionId(null)
@@ -222,7 +218,7 @@ const App: React.FC = () => {
     if (!targetSessionId) return
     setSessionMessagesById((prev) => ({
       ...prev,
-      [targetSessionId]: nextMessages,
+      [targetSessionId]: normalizeSessionMessages(nextMessages),
     }))
   }, [])
 
@@ -300,12 +296,12 @@ const App: React.FC = () => {
       } else {
         removePersistedSession(activeSessionId)
       }
-      setMessages(normalizedHistory.length > 0 ? history : [createWelcomeMessage()])
+      setMessages(normalizedHistory)
     } catch (error) {
       console.error('Failed to load session messages:', error)
       cacheSessionMessages(activeSessionId, [])
       removePersistedSession(activeSessionId)
-      setMessages([createWelcomeMessage()])
+      setMessages([])
     }
   }, [cacheSessionMessages, markSessionPersisted, removePersistedSession])
 
@@ -707,16 +703,7 @@ const App: React.FC = () => {
     }
   }
 
-  const appendSystemMessage = (content: string) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: createId('sys'),
-        type: 'system',
-        content,
-        timestamp: new Date().toISOString(),
-      },
-    ])
+  const appendSystemMessage = (_content: string) => {
   }
 
   const pushGovernanceNotice = (title: string, detail: string) => {

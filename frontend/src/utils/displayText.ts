@@ -33,6 +33,8 @@ export function displayExecutionStatus(value?: string | null): string {
       return '需要切换'
     case 'confirmation_required':
       return '需要确认'
+    case 'clarification_required':
+      return '未匹配服务'
     case 'confirmation_cancelled':
       return '已取消确认'
     case 'permission_denied':

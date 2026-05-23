@@ -134,6 +134,7 @@ async def test_tool_node_degrades_when_registry_execute_fails():
 
     assert result["output"]["tool_status"] == "degraded"
     assert result["metrics"]["degraded"] is True
+    assert "message_deltas" not in result
 
 
 @pytest.mark.asyncio

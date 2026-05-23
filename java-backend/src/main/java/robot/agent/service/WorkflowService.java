@@ -566,8 +566,9 @@ public class WorkflowService {
 
     public RoutingDecision routeMessage(String content, Execution activeExecution) {
         log.info(
-                "workflow.route.start contentLength={} activeExecutionId={} activeWorkflowCode={}",
+                "workflow.route.start contentLength={} contentPreview={} activeExecutionId={} activeWorkflowCode={}",
                 content == null ? 0 : content.length(),
+                preview(content),
                 activeExecution == null ? null : activeExecution.getId(),
                 activeExecution == null ? null : activeExecution.getWorkflowCode()
         );
@@ -604,11 +605,24 @@ public class WorkflowService {
             return buildAcceptedRoutingDecision(regexCandidates, versions, activeExecution, "regex_match", 1.0d, "regex");
         }
 
+        List<RoutingDecision.IntentCandidate> phraseCandidates = collectPhraseCandidates(versions, normalizedContent);
+        log.info(
+                "workflow.route.phrase candidates={} topWorkflowCode={} topEvidence={}",
+                phraseCandidates.size(),
+                phraseCandidates.isEmpty() ? null : phraseCandidates.get(0).targetCode(),
+                phraseCandidates.isEmpty() ? null : phraseCandidates.get(0).evidence()
+        );
+        if (!phraseCandidates.isEmpty()) {
+            return buildAcceptedRoutingDecision(phraseCandidates, versions, activeExecution, "phrase_match", 1.0d, "phrase");
+        }
+
         List<RoutingDecision.IntentCandidate> ragCandidates = collectRagCandidates(versions, normalizedContent);
         log.info(
-                "workflow.route.rag candidates={} topConfidence={} threshold={}",
+                "workflow.route.rag candidates={} topWorkflowCode={} topConfidence={} topEvidence={} threshold={}",
                 ragCandidates.size(),
+                ragCandidates.isEmpty() ? null : ragCandidates.get(0).targetCode(),
                 ragCandidates.isEmpty() ? null : ragCandidates.get(0).confidence(),
+                ragCandidates.isEmpty() ? null : ragCandidates.get(0).evidence(),
                 ragAcceptThreshold()
         );
         if (!ragCandidates.isEmpty() && ragCandidates.get(0).confidence() >= ragAcceptThreshold()) {
@@ -631,7 +645,7 @@ public class WorkflowService {
                 modelIntent.confidence(),
                 modelIntent.reason()
         );
-        return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution);
+        return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
     }
 
     private RoutingDecision buildAcceptedRoutingDecision(
@@ -654,6 +668,17 @@ public class WorkflowService {
             decision = "switch_required";
             finalReason = "active_execution_conflict";
         }
+        log.info(
+                "workflow.route.accept decision={} workflowCode={} workflowVersion={} source={} confidence={} threshold={} evidence={} candidateCount={}",
+                decision,
+                selected == null ? primary.targetCode() : selected.getWorkflowCode(),
+                selected == null ? null : selected.getVersion(),
+                reason,
+                primary.confidence(),
+                threshold,
+                primary.evidence(),
+                candidates.size()
+        );
         return new RoutingDecision(
                 decision,
                 selected == null ? primary.targetCode() : selected.getWorkflowCode(),
@@ -676,7 +701,8 @@ public class WorkflowService {
             ModelIntent modelIntent,
             List<RoutingDecision.IntentCandidate> ragCandidates,
             List<WorkflowVersion> versions,
-            Execution activeExecution
+            Execution activeExecution,
+            String normalizedContent
     ) {
         if (!modelIntent.matched()) {
             return new RoutingDecision(
@@ -692,7 +718,33 @@ public class WorkflowService {
                     null,
                     modelIntent.targetType(),
                     null,
-                    defaultClarificationQuestion(modelIntent.clarificationQuestion()),
+                    modelFallbackQuestion(modelIntent.clarificationQuestion()),
+                    ragCandidates
+            );
+        }
+
+        WorkflowVersion matchedVersion = selectWorkflowVersion(versions, modelIntent.workflowCode());
+        if (matchedVersion == null) {
+            log.info(
+                    "workflow.route.llm_target_missing workflowCode={} intentCode={} contentLength={}",
+                    modelIntent.workflowCode(),
+                    modelIntent.intentCode(),
+                    normalizedContent == null ? 0 : normalizedContent.length()
+            );
+            return new RoutingDecision(
+                    "clarification_required",
+                    null,
+                    null,
+                    modelIntent.confidence(),
+                    llmAcceptThreshold(),
+                    "llm_accept_threshold",
+                    "llm_target_workflow_missing",
+                    topCandidateWorkflowCodes(ragCandidates, 3),
+                    0,
+                    modelIntent.intentCode(),
+                    modelIntent.targetType(),
+                    modelIntent.workflowCode(),
+                    modelFallbackQuestion(modelIntent.clarificationQuestion()),
                     ragCandidates
             );
         }
@@ -790,6 +842,131 @@ public class WorkflowService {
                 .values()
                 .stream()
                 .toList();
+    }
+
+    private List<RoutingDecision.IntentCandidate> collectPhraseCandidates(
+            List<WorkflowVersion> versions,
+            String normalizedContent
+    ) {
+        if (normalizedContent.isBlank()) {
+            return List.of();
+        }
+        String comparableContent = normalizeRoutePhrase(normalizedContent);
+        Map<String, Workflow> workflowsByCode = new HashMap<>();
+        for (WorkflowVersion version : versions) {
+            String workflowCode = version.getWorkflowCode();
+            if (workflowCode == null || workflowsByCode.containsKey(workflowCode)) {
+                continue;
+            }
+            workflowsByCode.put(workflowCode, workflowRepository.findByWorkflowCode(workflowCode).orElse(null));
+        }
+
+        List<RegexCandidate> phraseCandidates = new ArrayList<>();
+        for (WorkflowVersion version : versions) {
+            Workflow workflow = workflowsByCode.get(version.getWorkflowCode());
+            List<String> phrases = collectDeterministicPhrases(version, workflow);
+            List<String> evidence = new ArrayList<>();
+            for (String phrase : phrases) {
+                String comparablePhrase = normalizeRoutePhrase(phrase);
+                if (isStrongRoutePhrase(comparablePhrase) && routePhraseMatches(comparableContent, comparablePhrase)) {
+                    evidence.add("phrase:" + phrase);
+                }
+            }
+            if (!evidence.isEmpty()) {
+                JsonNode entryRule = parseEntryRuleJson(version.getEntryRule());
+                List<String> intentCodes = readStringArray(entryRule.path("intent_codes"));
+                RoutingDecision.IntentCandidate candidate = new RoutingDecision.IntentCandidate(
+                        intentCodes.isEmpty() ? version.getWorkflowCode() : intentCodes.get(0),
+                        "workflow",
+                        version.getWorkflowCode(),
+                        1.0d,
+                        "phrase",
+                        String.join("; ", evidence)
+                );
+                phraseCandidates.add(new RegexCandidate(candidate, evidence.size(), extractPriority(version.getEntryRule())));
+            }
+        }
+        return phraseCandidates.stream()
+                .sorted(Comparator.comparingInt(RegexCandidate::evidenceCount).reversed()
+                        .thenComparing(Comparator.comparingInt(RegexCandidate::priority).reversed())
+                        .thenComparing(item -> item.candidate().targetCode()))
+                .map(RegexCandidate::candidate)
+                .collect(Collectors.toMap(
+                        RoutingDecision.IntentCandidate::targetCode,
+                        candidate -> candidate,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ))
+                .values()
+                .stream()
+                .toList();
+    }
+
+    private List<String> collectDeterministicPhrases(WorkflowVersion version, Workflow workflow) {
+        List<String> phrases = new ArrayList<>();
+        if (workflow != null) {
+            if (workflow.getName() != null) {
+                phrases.add(workflow.getName());
+            }
+            if (workflow.getDescription() != null) {
+                phrases.add(workflow.getDescription());
+            }
+        }
+        JsonNode entryRule = parseEntryRuleJson(version.getEntryRule());
+        phrases.addAll(readStringArray(entryRule.path("keywords")));
+        phrases.addAll(readStringArray(entryRule.path("examples")));
+        return phrases.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private boolean isStrongRoutePhrase(String phrase) {
+        return phrase != null && phrase.length() >= 4;
+    }
+
+    private boolean routePhraseMatches(String comparableContent, String comparablePhrase) {
+        if (comparableContent.contains(comparablePhrase)) {
+            return true;
+        }
+        List<String> phraseChunks = cjkPhraseChunks(comparablePhrase);
+        if (phraseChunks.size() < 2) {
+            return false;
+        }
+        return phraseChunks.stream().allMatch(comparableContent::contains);
+    }
+
+    private List<String> cjkPhraseChunks(String phrase) {
+        if (phrase == null || phrase.isBlank()) {
+            return List.of();
+        }
+        StringBuilder cjkOnly = new StringBuilder();
+        for (int index = 0; index < phrase.length(); index++) {
+            char ch = phrase.charAt(index);
+            if (isCjk(ch)) {
+                cjkOnly.append(ch);
+            }
+        }
+        if (cjkOnly.length() < 4 || cjkOnly.length() % 2 != 0) {
+            return List.of();
+        }
+        List<String> chunks = new ArrayList<>();
+        for (int index = 0; index < cjkOnly.length(); index += 2) {
+            chunks.add(cjkOnly.substring(index, index + 2));
+        }
+        return chunks;
+    }
+
+    private String normalizeRoutePhrase(String value) {
+        if (value == null) {
+            return "";
+        }
+        return normalizeText(value)
+                .replace("预订", "预定")
+                .replace("預訂", "预定")
+                .replace("預定", "预定");
     }
 
     private List<RoutingDecision.IntentCandidate> collectRagCandidates(
@@ -982,6 +1159,14 @@ public class WorkflowService {
         return value.toLowerCase(Locale.ROOT).trim();
     }
 
+    private String preview(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 80 ? normalized : normalized.substring(0, 80) + "...";
+    }
+
     private int ragTopK() {
         return 5;
     }
@@ -996,6 +1181,10 @@ public class WorkflowService {
 
     private String defaultClarificationQuestion(String question) {
         return firstNonBlank(question, "我还不确定你想办理什么业务，可以再具体说明一下吗？");
+    }
+
+    private String modelFallbackQuestion(String modelQuestion) {
+        return firstNonBlank(modelQuestion, "抱歉，当前没有匹配的可用服务，您还需要其他服务吗？");
     }
 
     private List<String> topCandidateWorkflowCodes(List<RoutingDecision.IntentCandidate> candidates, int limit) {
@@ -1311,7 +1500,7 @@ public class WorkflowService {
                 confidence,
                 reason,
                 false,
-                null
+                clarificationQuestion
         );
     }
 

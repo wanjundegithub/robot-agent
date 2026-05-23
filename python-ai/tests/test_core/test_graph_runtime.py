@@ -686,6 +686,70 @@ async def test_v2_multibranch_llm_uses_internal_react_decision(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v2_condition_branch_uses_workflow_next_without_react_or_tool(monkeypatch):
+    async def fail_react(*_args, **_kwargs):
+        raise AssertionError("ReAct should not run when condition node already selected next_node")
+
+    monkeypatch.setattr("src.core.scheduler.ReactDecisionService.decide_next_node", fail_react)
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {"id": "start", "type": "start", "config": {}},
+                    "check_slots": {
+                        "id": "check_slots",
+                        "type": "condition",
+                        "config": {
+                            "required_fields": ["departure_city", "arrival_city"],
+                        },
+                    },
+                    "collect_info": {
+                        "id": "collect_info",
+                        "type": "message",
+                        "config": {"message_text": "请补充到达城市。"},
+                    },
+                    "search_flights": {
+                        "id": "search_flights",
+                        "type": "tool",
+                        "config": {"tool_code": "flight_search_api"},
+                    },
+                    "done": {"id": "done", "type": "end", "config": {}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "check_slots"},
+                    {"id": "e2", "source": "check_slots", "target": "collect_info", "branch": "missing"},
+                    {"id": "e3", "source": "check_slots", "target": "done", "branch": "complete"},
+                    {"id": "e4", "source": "check_slots", "target": "search_flights", "branch": "react_only"},
+                    {"id": "e5", "source": "collect_info", "target": "done"},
+                    {"id": "e6", "source": "search_flights", "target": "done"},
+                ],
+            }
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-condition-deterministic",
+        "session_id": "session-v2-condition-deterministic",
+        "workflow_code": "flight_booking",
+        "workflow_version": "custom",
+        "workflow_definition": workflow,
+        "input_variables": {"departure_city": "北京"},
+    })
+    await scheduler.run(runtime)
+
+    assert runtime.context.status == "completed"
+    assert "collect_info" in runtime.context.completed_nodes
+    assert "search_flights" not in runtime.context.completed_nodes
+
+
+@pytest.mark.asyncio
 async def test_v2_second_multibranch_node_does_not_reuse_previous_target_node_id():
     registry = ExecutionRegistry()
     scheduler = WorkflowScheduler()

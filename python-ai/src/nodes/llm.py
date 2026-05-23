@@ -1,10 +1,16 @@
 import json
+import logging
+import time
 from typing import Any, Dict, List
 
 from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
+from src.core.logging_utils import duration_ms
 from src.core.model_runtime import execute_model_completion
 from src.core.security import PromptSanitizer, StructuredOutputValidator
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMNode(BaseNode):
@@ -20,6 +26,7 @@ class LLMNode(BaseNode):
         self.model_code = config.get("model_code")
 
     async def execute(self, context) -> Dict[str, Any]:
+        started_at = time.perf_counter()
         original_message = context.get_variable("user_message", "")
         message = PromptSanitizer.sanitize(original_message)
         security_events: List[Dict[str, Any]] = []
@@ -34,6 +41,18 @@ class LLMNode(BaseNode):
             })
 
         model_code = self._resolve_model_code(context)
+        logger.info(
+            "llm.node.start sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s prompt=%s modelCode=%s structured=%s messageLength=%s",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            self.node_id,
+            self.prompt,
+            model_code,
+            bool(self.structured_output.get("enabled")),
+            len(message or ""),
+        )
         if self.prompt == "knowledge_answer":
             answer = context.get_variable("knowledge_answer")
             if not answer:
@@ -57,6 +76,17 @@ class LLMNode(BaseNode):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
             )
+            logger.info(
+                "llm.node.completed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s prompt=%s outputKeys=%s durationMs=%.2f",
+                context.session_id,
+                context.execution_id,
+                context.workflow_code,
+                context.workflow_version,
+                self.node_id,
+                self.prompt,
+                ["answer"],
+                duration_ms(started_at),
+            )
             return self.prepare_output({
                 "status": "completed",
                 "output": {"answer": answer},
@@ -77,8 +107,18 @@ class LLMNode(BaseNode):
         self._validate_output(extracted)
         if extracted:
             context.add_execution_variables(extracted)
+        logger.info(
+            "llm.node.completed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s prompt=%s outputKeys=%s durationMs=%.2f",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            self.node_id,
+            self.prompt,
+            sorted(extracted.keys()),
+            duration_ms(started_at),
+        )
 
-        deltas = ["Slots extracted." if extracted else "No slots extracted, need more info."]
         output_tokens = estimate_tokens(json.dumps(extracted, ensure_ascii=False))
         input_tokens = estimate_tokens(message)
         cost_metrics = cost_tracker.build_cost_payload(
@@ -95,7 +135,6 @@ class LLMNode(BaseNode):
         return self.prepare_output({
             "status": "completed",
             "output": extracted,
-            "message_deltas": deltas,
             "security_events": security_events,
             "metrics": cost_metrics,
         })

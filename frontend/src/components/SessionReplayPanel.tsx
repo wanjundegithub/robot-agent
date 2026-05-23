@@ -93,6 +93,10 @@ const SessionReplayPanel: React.FC<SessionReplayPanelProps> = ({
     }
     return historyItems.find((item) => item.session.id === selectedSessionId) ?? null
   }, [currentItem, historyItems, selectedSessionId])
+  const visibleSelectedMessages = useMemo(
+    () => selectedMessages.filter((message) => message.type !== 'system'),
+    [selectedMessages]
+  )
 
   const renderSessionCard = (item: SessionListItem, testId?: string) => {
     const { session } = item
@@ -182,11 +186,11 @@ const SessionReplayPanel: React.FC<SessionReplayPanelProps> = ({
             {selectedItem && <div className="text-xs text-slate-400">{selectedItem.title}</div>}
           </div>
           {isLoadingMessages && <div className="text-sm text-slate-500">加载消息中...</div>}
-          {!isLoadingMessages && selectedMessages.length === 0 && (
+          {!isLoadingMessages && visibleSelectedMessages.length === 0 && (
             <div className="text-sm text-slate-500">该会话暂无消息。</div>
           )}
           <div className="space-y-2">
-            {selectedMessages.map((message) => (
+            {visibleSelectedMessages.map((message) => (
               <div key={message.id} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3">
                 <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
                   <span>{displayMessageType(message.type)}</span>
