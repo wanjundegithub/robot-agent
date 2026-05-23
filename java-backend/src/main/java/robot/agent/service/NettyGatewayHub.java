@@ -51,7 +51,7 @@ public class NettyGatewayHub {
         GatewayConnection connection = new GatewayConnection(connectionId, channel, sessionId, executionId, workflowCode, workflowVersion);
         connections.put(connectionId, connection);
         channel.attr(CONNECTION_ID_ATTR).set(connectionId);
-        log.debug(
+        log.info(
                 "gateway.hub.register connectionId={} sessionId={} executionId={} hasWorkflow={}",
                 connectionId,
                 sessionId,
@@ -74,7 +74,7 @@ public class NettyGatewayHub {
         String connectionId = UUID.randomUUID().toString();
         GatewayConnection connection = new GatewayConnection(connectionId, null, sessionId, executionId, workflowCode, workflowVersion);
         connections.put(connectionId, connection);
-        log.debug(
+        log.info(
                 "gateway.hub.register.compat connectionId={} sessionId={} executionId={} hasWorkflow={}",
                 connectionId,
                 sessionId,
@@ -101,7 +101,7 @@ public class NettyGatewayHub {
             return;
         }
         connection.bind(sessionId, executionId, workflowCode, workflowVersion);
-        log.debug(
+        log.info(
                 "gateway.hub.bind connectionId={} sessionId={} executionId={} hasWorkflow={}",
                 connection.connectionId(),
                 connection.sessionId(),
@@ -128,7 +128,7 @@ public class NettyGatewayHub {
     public void unregister(String connectionId) {
         GatewayConnection connection = connections.remove(connectionId);
         if (connection != null) {
-            log.debug(
+            log.info(
                     "gateway.hub.unregister connectionId={} sessionId={} executionId={}",
                     connection.connectionId(),
                     connection.sessionId(),
@@ -140,7 +140,7 @@ public class NettyGatewayHub {
     public void send(String connectionId, Map<String, Object> payload) {
         GatewayConnection connection = connections.get(connectionId);
         if (connection == null || connection.channel() == null) {
-            log.debug("gateway.hub.send.skipped connectionId={} reason=not_found", connectionId);
+            log.info("gateway.hub.send.skipped connectionId={} reason=not_found", connectionId);
             return;
         }
         try {
@@ -154,7 +154,7 @@ public class NettyGatewayHub {
     public void publish(Map<String, Object> payload) {
         String payloadExecutionId = stringValue(payload.get("execution_id"));
         String payloadSessionId = stringValue(payload.get("session_id"));
-        log.debug("gateway.hub.publish type={} sessionId={} executionId={}", payload.get("type"), payloadSessionId, payloadExecutionId);
+        log.info("gateway.hub.publish type={} sessionId={} executionId={} connectionCount={}", payload.get("type"), payloadSessionId, payloadExecutionId, connections.size());
         for (GatewayConnection connection : connections.values()) {
             if (connection.executionId() != null && payloadExecutionId != null && !payloadExecutionId.equals(connection.executionId())) {
                 continue;

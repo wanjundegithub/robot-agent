@@ -2,6 +2,8 @@ package robot.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.common.ApplicationConstants;
@@ -27,6 +29,8 @@ import java.util.stream.Collectors;
 @Transactional
 public class SessionService {
 
+    private static final Logger log = LoggerFactory.getLogger(SessionService.class);
+
     private final SessionRepository sessionRepository;
     private final ExecutionRepository executionRepository;
     private final ObjectMapper objectMapper;
@@ -45,6 +49,12 @@ public class SessionService {
     }
 
     public SessionResponse createSession(CreateSessionRequest request) {
+        log.info(
+                "session.create.request userId={} workspaceId={} hasVariables={}",
+                request.getUserId(),
+                request.getWorkspaceId(),
+                request.getVariables() != null && !request.getVariables().isBlank()
+        );
         Session session = new Session(
             UUID.randomUUID().toString(),
             request.getWorkspaceId() != null ? request.getWorkspaceId() : ApplicationConstants.DEFAULT_WORKSPACE_ID,
@@ -54,6 +64,13 @@ public class SessionService {
             session.setVariables(request.getVariables());
         }
         Session saved = sessionRepository.save(session);
+        log.info(
+                "session.create.saved sessionId={} userId={} workspaceId={} status={}",
+                saved.getId(),
+                saved.getUserId(),
+                saved.getWorkspaceId(),
+                saved.getStatus()
+        );
         return SessionResponse.fromEntity(saved);
     }
 
@@ -63,19 +80,44 @@ public class SessionService {
     }
 
     public Session getSessionEntity(String sessionId) {
+        log.info("session.lookup sessionId={}", sessionId);
         return sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
+                .map(session -> {
+                    log.info(
+                            "session.lookup.hit sessionId={} userId={} workspaceId={} status={} currentExecutionId={}",
+                            session.getId(),
+                            session.getUserId(),
+                            session.getWorkspaceId(),
+                            session.getStatus(),
+                            session.getCurrentExecutionId()
+                    );
+                    return session;
+                })
+                .orElseThrow(() -> {
+                    log.warn("session.lookup.miss sessionId={}", sessionId);
+                    return new RuntimeException("Session not found: " + sessionId);
+                });
     }
 
     public Session getOrCreateSession(String sessionId, String userId) {
+        log.info("session.get_or_create.request sessionId={} userId={}", sessionId, userId);
         return sessionRepository.findById(sessionId)
                 .map(session -> {
+                    log.info(
+                            "session.get_or_create.hit sessionId={} storedUserId={} currentExecutionId={} status={}",
+                            session.getId(),
+                            session.getUserId(),
+                            session.getCurrentExecutionId(),
+                            session.getStatus()
+                    );
                     if ((session.getUserId() == null || session.getUserId().isBlank() || "anonymous".equalsIgnoreCase(session.getUserId()))
                             && userId != null
                             && !userId.isBlank()) {
                         session.setUserId(userId);
                         session.setLastActivityAt(LocalDateTime.now());
-                        return sessionRepository.save(session);
+                        Session saved = sessionRepository.save(session);
+                        log.info("session.get_or_create.user_updated sessionId={} userId={}", saved.getId(), saved.getUserId());
+                        return saved;
                     }
                     return session;
                 })
@@ -85,20 +127,28 @@ public class SessionService {
                             ApplicationConstants.DEFAULT_WORKSPACE_ID,
                             userId == null ? "anonymous" : userId
                     );
-                    return sessionRepository.save(session);
+                    Session saved = sessionRepository.save(session);
+                    log.info("session.get_or_create.created sessionId={} userId={} workspaceId={}", saved.getId(), saved.getUserId(), saved.getWorkspaceId());
+                    return saved;
                 });
     }
 
     public Session updateCurrentExecutionId(Session session, String executionId) {
+        String previousExecutionId = session.getCurrentExecutionId();
         session.setCurrentExecutionId(executionId);
         session.setLastActivityAt(LocalDateTime.now());
-        return sessionRepository.save(session);
+        Session saved = sessionRepository.save(session);
+        log.info("session.current_execution.updated sessionId={} fromExecutionId={} toExecutionId={}", saved.getId(), previousExecutionId, executionId);
+        return saved;
     }
 
     public Session clearCurrentExecutionId(Session session) {
+        String previousExecutionId = session.getCurrentExecutionId();
         session.setCurrentExecutionId(null);
         session.setLastActivityAt(LocalDateTime.now());
-        return sessionRepository.save(session);
+        Session saved = sessionRepository.save(session);
+        log.info("session.current_execution.cleared sessionId={} previousExecutionId={}", saved.getId(), previousExecutionId);
+        return saved;
     }
 
     public Session pushSuspendedExecution(Session session, Map<String, Object> snapshot) {
@@ -106,15 +156,25 @@ public class SessionService {
         stack.add(snapshot);
         session.setSuspendedStack(writeJson(stack));
         session.setLastActivityAt(LocalDateTime.now());
-        return sessionRepository.save(session);
+        Session saved = sessionRepository.save(session);
+        log.info(
+                "session.suspended_stack.pushed sessionId={} executionId={} stackSize={}",
+                saved.getId(),
+                snapshot == null ? null : snapshot.get("execution_id"),
+                stack.size()
+        );
+        return saved;
     }
 
     public Optional<Map<String, Object>> peekSuspendedExecution(Session session) {
         List<Map<String, Object>> stack = getSuspendedExecutions(session);
         if (stack.isEmpty()) {
+            log.info("session.suspended_stack.peek_empty sessionId={}", session.getId());
             return Optional.empty();
         }
-        return Optional.of(new LinkedHashMap<>(stack.get(stack.size() - 1)));
+        Map<String, Object> snapshot = new LinkedHashMap<>(stack.get(stack.size() - 1));
+        log.info("session.suspended_stack.peek sessionId={} executionId={} stackSize={}", session.getId(), snapshot.get("execution_id"), stack.size());
+        return Optional.of(snapshot);
     }
 
     public Optional<Map<String, Object>> popSuspendedExecution(Session session, String executionId) {
@@ -127,9 +187,11 @@ public class SessionService {
                 session.setSuspendedStack(writeJson(stack));
                 session.setLastActivityAt(LocalDateTime.now());
                 sessionRepository.save(session);
+                log.info("session.suspended_stack.popped sessionId={} executionId={} remainingStackSize={}", session.getId(), executionId, stack.size());
                 return Optional.of(removed);
             }
         }
+        log.info("session.suspended_stack.pop_miss sessionId={} executionId={} stackSize={}", session.getId(), executionId, stack.size());
         return Optional.empty();
     }
 

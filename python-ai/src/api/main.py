@@ -103,23 +103,81 @@ async def startup() -> None:
 
 @app.post("/api/execute")
 async def execute(request: ExecuteRequest):
+    logger.info(
+        "execute.request sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s messageId=%s routeDecision=%s providerCount=%s modelRecordCount=%s hasWorkflowDefinition=%s",
+        request.session_id,
+        request.execution_id,
+        request.workflow_code,
+        request.workflow_version,
+        request.message_id,
+        request.route_decision,
+        len(request.provider_configs),
+        len(request.model_records),
+        bool(request.workflow_definition),
+    )
     try:
         runtime = await registry.create_execution(request.model_dump())
     except ProtectionError as exc:
+        logger.warning(
+            "execute.protection_rejected sessionId=%s executionId=%s payloadKeys=%s",
+            request.session_id,
+            request.execution_id,
+            list(exc.payload.keys()) if exc.payload else [],
+        )
         status_code = 429 if exc.payload.get("scope") else 503
         raise HTTPException(status_code=status_code, detail=exc.payload or str(exc))
     except Exception as exc:
+        logger.exception(
+            "execute.create_failed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s",
+            request.session_id,
+            request.execution_id,
+            request.workflow_code,
+            request.workflow_version,
+        )
         raise HTTPException(status_code=400, detail=str(exc))
 
-    asyncio.create_task(scheduler.run(runtime))
+    task = asyncio.create_task(scheduler.run(runtime))
+
+    def _log_scheduler_done(done_task: asyncio.Task) -> None:
+        if done_task.cancelled():
+            logger.warning(
+                "execute.scheduler_task.cancelled sessionId=%s executionId=%s",
+                request.session_id,
+                request.execution_id,
+            )
+            return
+        error = done_task.exception()
+        if error:
+            logger.error(
+                "execute.scheduler_task.failed sessionId=%s executionId=%s",
+                request.session_id,
+                request.execution_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            return
+        logger.info(
+            "execute.scheduler_task.completed sessionId=%s executionId=%s",
+            request.session_id,
+            request.execution_id,
+        )
+
+    task.add_done_callback(_log_scheduler_done)
+    logger.info("execute.stream.open sessionId=%s executionId=%s", request.session_id, request.execution_id)
     return StreamingResponse(runtime.stream(), media_type="text/event-stream")
 
 
 @app.post("/api/executions/{execution_id}/form-submit")
 async def submit_form(execution_id: str, request: FormSubmitRequest):
     submit_key = f"form_submit:{execution_id}:{request.submit_id}"
+    logger.info(
+        "form_submit.request executionId=%s submitId=%s fieldCount=%s",
+        execution_id,
+        request.submit_id,
+        len(request.form_data),
+    )
     cached = get_idempotency_store().get_json(submit_key)
     if cached is not None:
+        logger.info("form_submit.idempotency_hit executionId=%s submitId=%s", execution_id, request.submit_id)
         return cached
 
     try:
@@ -127,18 +185,23 @@ async def submit_form(execution_id: str, request: FormSubmitRequest):
         response = {"execution_id": execution_id, "status": "running"}
         get_idempotency_store().set_json(submit_key, response, 86400)
         runtime.last_form_response = response
+        logger.info("form_submit.resumed executionId=%s submitId=%s status=%s", execution_id, request.submit_id, response["status"])
         return response
     except Exception as exc:
+        logger.exception("form_submit.failed executionId=%s submitId=%s", execution_id, request.submit_id)
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/executions/{execution_id}/suspend")
 async def suspend_execution(execution_id: str, request: SuspendExecutionRequest):
+    logger.info("execution.suspend.request executionId=%s reason=%s", execution_id, request.reason)
     runtime = await registry.get_execution(execution_id)
     if not runtime:
+        logger.warning("execution.suspend.not_found executionId=%s", execution_id)
         raise HTTPException(status_code=404, detail="Execution not found")
 
     runtime.request_suspend(request.reason)
+    logger.info("execution.suspend.accepted executionId=%s reason=%s", execution_id, request.reason)
     return {
         "execution_id": execution_id,
         "status": "suspend_requested",
@@ -149,11 +212,14 @@ async def suspend_execution(execution_id: str, request: SuspendExecutionRequest)
 
 @app.post("/api/executions/{execution_id}/resume")
 async def resume_execution(execution_id: str):
+    logger.info("execution.resume.request executionId=%s", execution_id)
     runtime = await registry.get_execution(execution_id)
     if not runtime:
+        logger.warning("execution.resume.not_found executionId=%s", execution_id)
         raise HTTPException(status_code=404, detail="Execution not found")
 
     if runtime.context.status == "waiting_user":
+        logger.info("execution.resume.waiting_user executionId=%s hasFormDefinition=%s", execution_id, bool(runtime.last_form_definition))
         response = ResumeExecutionResponse(
             execution_id=execution_id,
             status="waiting_user",
@@ -163,13 +229,16 @@ async def resume_execution(execution_id: str):
 
     runtime.resume({})
     response = ResumeExecutionResponse(execution_id=execution_id, status="running")
+    logger.info("execution.resume.resumed executionId=%s status=%s", execution_id, response.status)
     return response.model_dump()
 
 
 @app.get("/api/executions/{execution_id}/status")
 async def get_execution_status(execution_id: str):
+    logger.info("execution.status.request executionId=%s", execution_id)
     runtime = await registry.get_execution(execution_id)
     if not runtime:
+        logger.warning("execution.status.not_found executionId=%s", execution_id)
         raise HTTPException(status_code=404, detail="Execution not found")
     context = runtime.context
     response = ExecuteStatusResponse(
@@ -177,6 +246,14 @@ async def get_execution_status(execution_id: str):
         status=context.status,
         current_node_id=context.current_node_id,
         form_definition=runtime.last_form_definition,
+    )
+    logger.info(
+        "execution.status.response executionId=%s sessionId=%s status=%s currentNodeId=%s hasFormDefinition=%s",
+        context.execution_id,
+        context.session_id,
+        context.status,
+        context.current_node_id,
+        bool(runtime.last_form_definition),
     )
     return response.model_dump()
 

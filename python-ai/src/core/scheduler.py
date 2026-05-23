@@ -49,8 +49,24 @@ class WorkflowScheduler:
         workflow = runtime.workflow
         state_machine = ExecutionStateMachine()
         state_machine.set_context(context)
+        self.logger.info(
+            "scheduler.run.start sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s routeDecision=%s graphV2=%s",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            context.route_decision,
+            self._is_graph_definition_v2(workflow),
+        )
 
         state_machine.transition(TransitionEvent.START)
+        self.logger.info(
+            "scheduler.state.transition sessionId=%s executionId=%s event=%s status=%s",
+            context.session_id,
+            context.execution_id,
+            TransitionEvent.START.value,
+            context.status,
+        )
         runtime.emit("routing.decided", {
             "execution_id": context.execution_id,
             "session_id": context.session_id,
@@ -63,6 +79,13 @@ class WorkflowScheduler:
             "trace_id": context.trace_id,
         })
         state_machine.transition(TransitionEvent.ROUTE)
+        self.logger.info(
+            "scheduler.state.transition sessionId=%s executionId=%s event=%s status=%s",
+            context.session_id,
+            context.execution_id,
+            TransitionEvent.ROUTE.value,
+            context.status,
+        )
         total_cost = 0.0
         total_input_tokens = 0
         total_output_tokens = 0
@@ -96,14 +119,44 @@ class WorkflowScheduler:
             while current_node_id:
                 suspend_reason = runtime.consume_suspend_request()
                 if suspend_reason:
+                    self.logger.info(
+                        "scheduler.suspend.detected sessionId=%s executionId=%s nodeId=%s reason=%s",
+                        context.session_id,
+                        context.execution_id,
+                        current_node_id,
+                        suspend_reason,
+                    )
                     await self._suspend_execution(runtime, state_machine, suspend_reason)
 
+                self.logger.info(
+                    "scheduler.plan.prepare sessionId=%s executionId=%s nodeId=%s nextPlanRound=%s",
+                    context.session_id,
+                    context.execution_id,
+                    current_node_id,
+                    context.plan_round + 1,
+                )
                 planning_context = self.context_assembler.build(context, workflow, current_node_id)
                 plan = self.planner.plan(planning_context)
                 path_decision = self.path_resolver.resolve(plan, workflow, context)
                 if not path_decision.selected_node:
+                    self.logger.warning(
+                        "scheduler.plan.no_selected_node sessionId=%s executionId=%s currentNodeId=%s candidateNodes=%s",
+                        context.session_id,
+                        context.execution_id,
+                        current_node_id,
+                        plan.candidate_nodes,
+                    )
                     raise ValueError(f"No resolvable node for workflow {context.workflow_code}")
 
+                self.logger.info(
+                    "scheduler.plan.resolved sessionId=%s executionId=%s selectedNode=%s candidateNodes=%s reason=%s confidence=%s",
+                    context.session_id,
+                    context.execution_id,
+                    path_decision.selected_node,
+                    plan.candidate_nodes,
+                    path_decision.reason,
+                    plan.confidence,
+                )
                 context.record_plan(plan.to_dict())
                 self.workflow_journal.record_plan({
                     **plan.to_dict(),
@@ -128,10 +181,25 @@ class WorkflowScheduler:
                 context.update_node_position(current_node_id)
                 node_def = workflow["nodes"].get(current_node_id)
                 if not node_def:
+                    self.logger.warning(
+                        "scheduler.node.missing sessionId=%s executionId=%s nodeId=%s",
+                        context.session_id,
+                        context.execution_id,
+                        current_node_id,
+                    )
                     raise ValueError(f"Node not found: {current_node_id}")
 
                 readiness = self.node_readiness_checker.check(node_def, context, workflow)
                 if readiness.should_skip:
+                    self.logger.info(
+                        "scheduler.node.skipped sessionId=%s executionId=%s nodeId=%s nodeType=%s reason=%s nextNode=%s",
+                        context.session_id,
+                        context.execution_id,
+                        node_def["id"],
+                        node_def["type"],
+                        readiness.reason,
+                        readiness.next_node,
+                    )
                     context.record_skipped_node(node_def["id"], readiness.reason)
                     self.workflow_journal.record_skip(node_def["id"], readiness.reason)
                     runtime.emit("node.skipped", {
@@ -147,6 +215,13 @@ class WorkflowScheduler:
                     continue
 
                 node = self._build_node(node_def)
+                self.logger.info(
+                    "scheduler.node.start sessionId=%s executionId=%s nodeId=%s nodeType=%s",
+                    context.session_id,
+                    context.execution_id,
+                    node_def["id"],
+                    node_def["type"],
+                )
                 runtime.emit("node.started", {
                     "execution_id": context.execution_id,
                     "session_id": context.session_id,
@@ -165,6 +240,16 @@ class WorkflowScheduler:
                 }):
                     result = await node.execute(context)
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
+                self.logger.info(
+                    "scheduler.node.result sessionId=%s executionId=%s nodeId=%s nodeType=%s durationMs=%s resultKeys=%s outputKeys=%s",
+                    context.session_id,
+                    context.execution_id,
+                    node_def["id"],
+                    node_def["type"],
+                    duration_ms,
+                    sorted(result.keys()) if isinstance(result, dict) else [],
+                    sorted(result.get("output", {}).keys()) if isinstance(result.get("output"), dict) else [],
+                )
 
                 for security_event in result.get("security_events", []):
                     runtime.emit(security_event["event_type"], {
@@ -184,6 +269,13 @@ class WorkflowScheduler:
                     })
 
                 next_node_id = await self._next_node(workflow, node_def, result, context)
+                self.logger.info(
+                    "scheduler.branch.resolved sessionId=%s executionId=%s nodeId=%s nextNode=%s",
+                    context.session_id,
+                    context.execution_id,
+                    node_def["id"],
+                    next_node_id,
+                )
                 transition_candidates = self._legacy_transition_candidates(
                     workflow,
                     node_def["id"],
@@ -211,6 +303,14 @@ class WorkflowScheduler:
                 if node_def["type"] == "form":
                     runtime.last_form_definition = result.get("form_definition", {})
                     state_machine.transition(TransitionEvent.WAIT_USER)
+                    self.logger.info(
+                        "scheduler.form.waiting sessionId=%s executionId=%s nodeId=%s formKeys=%s status=%s",
+                        context.session_id,
+                        context.execution_id,
+                        node_def["id"],
+                        sorted(runtime.last_form_definition.keys()) if isinstance(runtime.last_form_definition, dict) else [],
+                        context.status,
+                    )
                     runtime.emit("form.requested", {
                         "execution_id": context.execution_id,
                         "session_id": context.session_id,
@@ -229,6 +329,14 @@ class WorkflowScheduler:
                     form_data = await runtime.wait_for_resume()
                     context.add_execution_variables(form_data)
                     state_machine.transition(TransitionEvent.RESUME)
+                    self.logger.info(
+                        "scheduler.form.resumed sessionId=%s executionId=%s nodeId=%s formKeys=%s status=%s",
+                        context.session_id,
+                        context.execution_id,
+                        node_def["id"],
+                        sorted((form_data or {}).keys()),
+                        context.status,
+                    )
                     runtime.emit("execution.resumed", {
                         "execution_id": context.execution_id,
                         "session_id": context.session_id,
@@ -334,17 +442,51 @@ class WorkflowScheduler:
                     "trace_id": context.trace_id,
                 })
                 workflow_telemetry.record_node(context.workflow_code, node_def["type"], "completed", duration_ms)
+                self.logger.info(
+                    "scheduler.node.completed sessionId=%s executionId=%s nodeId=%s nodeType=%s nextNode=%s durationMs=%s totalCost=%.6f",
+                    context.session_id,
+                    context.execution_id,
+                    node_def["id"],
+                    node_def["type"],
+                    next_node_id,
+                    duration_ms,
+                    total_cost,
+                )
 
                 suspend_reason = runtime.consume_suspend_request()
                 if suspend_reason:
+                    self.logger.info(
+                        "scheduler.suspend.detected_after_node sessionId=%s executionId=%s nodeId=%s reason=%s",
+                        context.session_id,
+                        context.execution_id,
+                        node_def["id"],
+                        suspend_reason,
+                    )
                     await self._suspend_execution(runtime, state_machine, suspend_reason)
 
                 if self.replanner.should_replan(result, node_def):
+                    self.logger.info(
+                        "scheduler.replan.requested sessionId=%s executionId=%s nodeId=%s nextNode=%s",
+                        context.session_id,
+                        context.execution_id,
+                        node_def["id"],
+                        next_node_id,
+                    )
                     current_node_id = next_node_id
                     continue
                 current_node_id = next_node_id
 
             state_machine.transition(TransitionEvent.COMPLETE)
+            self.logger.info(
+                "scheduler.run.completed sessionId=%s executionId=%s totalCost=%.6f inputTokens=%s outputTokens=%s modelsUsed=%s planRound=%s",
+                context.session_id,
+                context.execution_id,
+                total_cost,
+                total_input_tokens,
+                total_output_tokens,
+                sorted(models_used),
+                context.plan_round,
+            )
             runtime.emit("execution.completed", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -377,7 +519,13 @@ class WorkflowScheduler:
                 "trace_id": context.trace_id,
             })
         except InvalidOutputError as exc:
-            self.logger.exception("Structured output validation failed")
+            self.logger.exception(
+                "scheduler.run.output_rejected sessionId=%s executionId=%s nodeId=%s message=%s",
+                context.session_id,
+                context.execution_id,
+                context.current_node_id,
+                exc,
+            )
             if context.current_node_id:
                 context.record_failed_node(context.current_node_id, str(exc))
             runtime.emit("security.output_rejected", {
@@ -396,7 +544,13 @@ class WorkflowScheduler:
                 "trace_id": context.trace_id,
             })
         except ConfirmationRequiredError as exc:
-            self.logger.exception("High-risk tool confirmation required")
+            self.logger.exception(
+                "scheduler.run.confirmation_required sessionId=%s executionId=%s nodeId=%s toolCode=%s",
+                context.session_id,
+                context.execution_id,
+                context.current_node_id,
+                exc.tool_code,
+            )
             if context.current_node_id:
                 context.record_failed_node(context.current_node_id, str(exc))
             runtime.emit("confirmation.required", {
@@ -414,7 +568,14 @@ class WorkflowScheduler:
                 "trace_id": context.trace_id,
             })
         except Exception as exc:
-            self.logger.exception("Execution failed")
+            self.logger.exception(
+                "scheduler.run.failed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s",
+                context.session_id,
+                context.execution_id,
+                context.workflow_code,
+                context.workflow_version,
+                context.current_node_id,
+            )
             if context.current_node_id:
                 context.record_failed_node(context.current_node_id, str(exc))
             state_machine.transition(TransitionEvent.FAIL)
@@ -484,6 +645,13 @@ class WorkflowScheduler:
         if not main_graph:
             raise ValueError(f"Main graph not found: {main_graph_id}")
 
+        self.logger.info(
+            "scheduler.graph_v2.start sessionId=%s executionId=%s mainGraphId=%s graphCount=%s",
+            context.session_id,
+            context.execution_id,
+            main_graph_id,
+            len(workflow.get("graphs", {}) or {}),
+        )
         context.enter_graph(main_graph_id)
         runtime.emit("graph.entered", {
             "execution_id": context.execution_id,
@@ -502,18 +670,37 @@ class WorkflowScheduler:
         while True:
             suspend_reason = runtime.consume_suspend_request()
             if suspend_reason:
+                self.logger.warning(
+                    "scheduler.graph_v2.suspend_unsupported sessionId=%s executionId=%s graphId=%s nodeId=%s reason=%s",
+                    context.session_id,
+                    context.execution_id,
+                    current_graph_id,
+                    current_node_id,
+                    suspend_reason,
+                )
                 raise ValueError("Suspension is not supported for workflow_definition v2 baseline")
 
             graph = self._get_graph(workflow, current_graph_id)
             if not graph:
+                self.logger.warning("scheduler.graph_v2.graph_missing sessionId=%s executionId=%s graphId=%s", context.session_id, context.execution_id, current_graph_id)
                 raise ValueError(f"Graph not found: {current_graph_id}")
             node_def = graph.get("nodes", {}).get(current_node_id)
             if not node_def:
+                self.logger.warning("scheduler.graph_v2.node_missing sessionId=%s executionId=%s graphId=%s nodeId=%s", context.session_id, context.execution_id, current_graph_id, current_node_id)
                 raise ValueError(f"Node not found: {current_graph_id}.{current_node_id}")
 
             context.update_node_position(current_node_id)
             targets = self._collect_graph_targets(graph, current_node_id)
             context.set_available_targets(targets)
+            self.logger.info(
+                "scheduler.graph_v2.node.prepare sessionId=%s executionId=%s graphId=%s nodeId=%s nodeType=%s targets=%s",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                current_node_id,
+                node_def["type"],
+                targets,
+            )
             runtime.emit("branch.candidates_prepared", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -525,6 +712,14 @@ class WorkflowScheduler:
             })
 
             node = self._build_node(node_def)
+            self.logger.info(
+                "scheduler.graph_v2.node.start sessionId=%s executionId=%s graphId=%s nodeId=%s nodeType=%s",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                node_def["id"],
+                node_def["type"],
+            )
             runtime.emit("node.started", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
@@ -546,6 +741,17 @@ class WorkflowScheduler:
             }):
                 result = await node.execute(context)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
+            self.logger.info(
+                "scheduler.graph_v2.node.result sessionId=%s executionId=%s graphId=%s nodeId=%s nodeType=%s durationMs=%s resultKeys=%s outputKeys=%s",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                node_def["id"],
+                node_def["type"],
+                duration_ms,
+                sorted(result.keys()) if isinstance(result, dict) else [],
+                sorted(result.get("output", {}).keys()) if isinstance(result.get("output"), dict) else [],
+            )
 
             for security_event in result.get("security_events", []):
                 runtime.emit(security_event["event_type"], {
@@ -669,6 +875,16 @@ class WorkflowScheduler:
                 "trace_id": context.trace_id,
             })
             workflow_telemetry.record_node(context.workflow_code, node_def["type"], "completed", duration_ms)
+            self.logger.info(
+                "scheduler.graph_v2.node.completed sessionId=%s executionId=%s graphId=%s nodeId=%s nodeType=%s durationMs=%s totalCost=%.6f",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                node_def["id"],
+                node_def["type"],
+                duration_ms,
+                total_cost,
+            )
 
             if node_def["type"] == "function":
                 runtime.emit("function.executed", {
@@ -684,6 +900,14 @@ class WorkflowScheduler:
             enter_subgraph = result.get("enter_subgraph")
             if enter_subgraph:
                 subgraph_id = str(enter_subgraph.get("graph_id", "")).strip()
+                self.logger.info(
+                    "scheduler.graph_v2.subgraph.enter_prepare sessionId=%s executionId=%s fromGraphId=%s fromNodeId=%s targetGraphId=%s",
+                    context.session_id,
+                    context.execution_id,
+                    current_graph_id,
+                    node_def["id"],
+                    subgraph_id,
+                )
                 if not subgraph_id:
                     raise ValueError(f"sub_agent node {node_def['id']} missing subgraph_id")
                 subgraph = self._get_graph(workflow, subgraph_id)
@@ -716,6 +940,15 @@ class WorkflowScheduler:
                 continue
 
             next_node_id = await self._next_node_v2(graph, node_def, result, context)
+            self.logger.info(
+                "scheduler.graph_v2.branch.resolved sessionId=%s executionId=%s graphId=%s nodeId=%s nextNode=%s targetCount=%s",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                node_def["id"],
+                next_node_id,
+                len(targets),
+            )
             if len(targets) > 1 or node_def["type"] in {"coordinator", "sub_agent"}:
                 decision_payload = self._react_decision_payload(result)
                 runtime.emit("branch.decided", {
@@ -735,6 +968,13 @@ class WorkflowScheduler:
 
             if node_def["type"] != "end":
                 if next_node_id is None:
+                    self.logger.warning(
+                        "scheduler.graph_v2.next_missing sessionId=%s executionId=%s graphId=%s nodeId=%s",
+                        context.session_id,
+                        context.execution_id,
+                        current_graph_id,
+                        node_def["id"],
+                    )
                     raise ValueError(f"Node {current_graph_id}.{node_def['id']} has no next node")
                 current_node_id = next_node_id
                 continue
@@ -751,8 +991,25 @@ class WorkflowScheduler:
                 "parent_node_id": frame.parent_node_id,
                 "trace_id": context.trace_id,
             })
+            self.logger.info(
+                "scheduler.graph_v2.graph.exited sessionId=%s executionId=%s graphId=%s parentGraphId=%s parentNodeId=%s",
+                context.session_id,
+                context.execution_id,
+                exited_graph_id,
+                frame.parent_graph_id,
+                frame.parent_node_id,
+            )
 
             if not frame.parent_graph_id:
+                self.logger.info(
+                    "scheduler.graph_v2.completed sessionId=%s executionId=%s totalCost=%.6f inputTokens=%s outputTokens=%s modelsUsed=%s",
+                    context.session_id,
+                    context.execution_id,
+                    total_cost,
+                    total_input_tokens,
+                    total_output_tokens,
+                    sorted(models_used),
+                )
                 return {
                     "total_cost": round(total_cost, 6),
                     "input_tokens": total_input_tokens,
@@ -782,6 +1039,14 @@ class WorkflowScheduler:
                 parent_node,
                 {"output": subflow_output},
                 context,
+            )
+            self.logger.info(
+                "scheduler.graph_v2.parent.branch_resolved sessionId=%s executionId=%s graphId=%s parentNodeId=%s nextNode=%s",
+                context.session_id,
+                context.execution_id,
+                current_graph_id,
+                frame.parent_node_id,
+                current_node_id,
             )
             parent_targets = self._collect_graph_targets(parent_graph, frame.parent_node_id)
             decision_payload = self._react_decision_payload({"output": subflow_output})

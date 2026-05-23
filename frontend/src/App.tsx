@@ -46,6 +46,14 @@ type WorkflowPageMode = 'list' | 'editor'
 const WORKFLOW_LIST_PAGE_SIZE = 10
 const AUTO_ROUTE_WORKFLOW_MODE = '__AUTO_ROUTE__'
 
+const buildSocketBindingKey = (activeSessionId: string, workflow: WorkflowSummary | null) => {
+  if (!activeSessionId) return ''
+  if (!workflow?.workflowCode || !workflow.currentVersion) {
+    return `${activeSessionId}|base`
+  }
+  return `${activeSessionId}|${workflow.workflowCode}|${workflow.currentVersion}`
+}
+
 const isDisplayableWorkflow = (workflow: WorkflowSummary) => {
   if (workflow.createdBy === 'system') return false
   const workflowCode = workflow.workflowCode || ''
@@ -142,10 +150,11 @@ const App: React.FC = () => {
   const [workflowListStatus, setWorkflowListStatus] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
   const activeSocketSessionIdRef = useRef<string | null>(null)
+  const activeSocketBindingKeyRef = useRef<string | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
   const reconnectAttemptsRef = useRef(0)
   const pendingRequestsRef = useRef(
-    new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+    new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeoutId: number }>()
   )
 
   const loadPublishedWorkflowOptions = useCallback(async () => {
@@ -192,11 +201,7 @@ const App: React.FC = () => {
         ? '无固定工作流'
         : `${selectedChatWorkflow?.workflowCode || chatWorkflowMode}@${selectedChatWorkflowVersion || 'latest'}`
   const chatWorkflowConnectionKey = useMemo(() => {
-    if (!socketSessionId) return ''
-    if (!selectedChatWorkflow) {
-      return `${socketSessionId}|base`
-    }
-    return `${socketSessionId}|${selectedChatWorkflow.workflowCode}|${selectedChatWorkflowVersion}`
+    return buildSocketBindingKey(socketSessionId, selectedChatWorkflow)
   }, [selectedChatWorkflow, selectedChatWorkflowVersion, socketSessionId])
 
   const resetSessionView = useCallback(() => {
@@ -327,6 +332,7 @@ const App: React.FC = () => {
         reconnectTimerRef.current = null
       }
       activeSocketSessionIdRef.current = null
+      activeSocketBindingKeyRef.current = null
       wsRef.current?.close()
       wsRef.current = null
       setSocketSessionId('')
@@ -459,15 +465,16 @@ const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (activePage !== 'chat' || !socketSessionId) {
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current)
-        reconnectTimerRef.current = null
-      }
-      activeSocketSessionIdRef.current = null
-      wsRef.current?.close()
-      wsRef.current = null
-      setSocketState('idle')
+      if (activePage !== 'chat' || !socketSessionId) {
+        if (reconnectTimerRef.current !== null) {
+          window.clearTimeout(reconnectTimerRef.current)
+          reconnectTimerRef.current = null
+        }
+        activeSocketSessionIdRef.current = null
+        activeSocketBindingKeyRef.current = null
+        wsRef.current?.close()
+        wsRef.current = null
+        setSocketState('idle')
       return
     }
     void (async () => {
@@ -494,16 +501,25 @@ const App: React.FC = () => {
       setSocketState(attempt === 0 ? 'connecting' : 'reconnecting')
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
-      gatewayLog('ws.connecting', { attempt, wsUrl, sessionId: socketSessionId })
+      gatewayLog('ws.connecting', { attempt, wsUrl, sessionId: socketSessionId, binding_key: chatWorkflowConnectionKey })
 
       socket.onopen = () => {
+        if (wsRef.current !== socket) {
+          gatewayLog('ws.stale_open_ignored', { sessionId: socketSessionId, wsUrl })
+          return
+        }
         reconnectAttemptsRef.current = 0
         activeSocketSessionIdRef.current = socketSessionId
+        activeSocketBindingKeyRef.current = chatWorkflowConnectionKey
         setSocketState('connected')
-        gatewayLog('ws.open', { sessionId: socketSessionId, wsUrl })
+        gatewayLog('ws.open', { sessionId: socketSessionId, wsUrl, binding_key: chatWorkflowConnectionKey })
       }
 
       socket.onmessage = (event) => {
+        if (wsRef.current !== socket) {
+          gatewayLog('ws.stale_message_ignored', { sessionId: socketSessionId, wsUrl })
+          return
+        }
         try {
           const payload = JSON.parse(event.data) as WebSocketEnvelope
           gatewayLog('ws.message', {
@@ -528,16 +544,29 @@ const App: React.FC = () => {
       }
 
       socket.onerror = () => {
+        if (wsRef.current !== socket) {
+          gatewayLog('ws.stale_error_ignored', { sessionId: socketSessionId, wsUrl })
+          return
+        }
         activeSocketSessionIdRef.current = null
+        activeSocketBindingKeyRef.current = null
         setSocketState('reconnecting')
         gatewayLog('ws.error', { sessionId: socketSessionId, wsUrl })
       }
 
       socket.onclose = () => {
+        if (wsRef.current !== socket) {
+          gatewayLog('ws.stale_close_ignored', { sessionId: socketSessionId, wsUrl })
+          return
+        }
         wsRef.current = null
         activeSocketSessionIdRef.current = null
+        activeSocketBindingKeyRef.current = null
         gatewayLog('ws.close', { sessionId: socketSessionId, wsUrl, attempts: reconnectAttemptsRef.current })
-        pendingRequestsRef.current.forEach(({ reject }) => reject(new Error('WebSocket disconnected')))
+        pendingRequestsRef.current.forEach(({ reject, timeoutId }) => {
+          window.clearTimeout(timeoutId)
+          reject(new Error('WebSocket disconnected'))
+        })
         pendingRequestsRef.current.clear()
         if (isCancelled) {
           setSocketState('idle')
@@ -562,6 +591,8 @@ const App: React.FC = () => {
         window.clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
       }
+      activeSocketSessionIdRef.current = null
+      activeSocketBindingKeyRef.current = null
       wsRef.current?.close()
     }
   }, [activePage, chatWorkflowConnectionKey])
@@ -600,7 +631,7 @@ const App: React.FC = () => {
   const normalizeStatus = (value: string) => value.toLowerCase()
 
   const waitForSocketReady = useCallback(
-    (targetSessionId: string, timeoutMs = 8000) =>
+    (targetSessionId: string, targetBindingKey: string, timeoutMs = 8000) =>
       new Promise<void>((resolve, reject) => {
         const start = Date.now()
 
@@ -608,14 +639,27 @@ const App: React.FC = () => {
           const socket = wsRef.current
           const isReady =
             socket?.readyState === WebSocket.OPEN &&
-            activeSocketSessionIdRef.current === targetSessionId
+            activeSocketSessionIdRef.current === targetSessionId &&
+            activeSocketBindingKeyRef.current === targetBindingKey
 
           if (isReady) {
+            gatewayLog('ws.ready', {
+              session_id: targetSessionId,
+              binding_key: targetBindingKey,
+              waited_ms: Date.now() - start,
+            })
             resolve()
             return
           }
 
           if (Date.now() - start >= timeoutMs) {
+            gatewayLog('ws.ready_timeout', {
+              session_id: targetSessionId,
+              binding_key: targetBindingKey,
+              socket_ready_state: socket?.readyState ?? null,
+              active_session_id: activeSocketSessionIdRef.current,
+              active_binding_key: activeSocketBindingKeyRef.current,
+            })
             reject(new Error('WebSocket connection timeout'))
             return
           }
@@ -635,7 +679,11 @@ const App: React.FC = () => {
     }
     reconnectAttemptsRef.current = 0
     activeSocketSessionIdRef.current = null
-    pendingRequestsRef.current.forEach(({ reject }) => reject(new Error('WebSocket disconnected')))
+    activeSocketBindingKeyRef.current = null
+    pendingRequestsRef.current.forEach(({ reject, timeoutId }) => {
+      window.clearTimeout(timeoutId)
+      reject(new Error('WebSocket disconnected'))
+    })
     pendingRequestsRef.current.clear()
     wsRef.current?.close()
     wsRef.current = null
@@ -728,6 +776,7 @@ const App: React.FC = () => {
     })
     const pending = pendingRequestsRef.current.get(payload.request_id)
     if (!pending) return
+    window.clearTimeout(pending.timeoutId)
     pendingRequestsRef.current.delete(payload.request_id)
     pending.resolve((payload.data as Record<string, unknown> | undefined) ?? undefined)
   }
@@ -741,6 +790,7 @@ const App: React.FC = () => {
     if (payload.request_id) {
       const pending = pendingRequestsRef.current.get(payload.request_id)
       if (pending) {
+        window.clearTimeout(pending.timeoutId)
         pendingRequestsRef.current.delete(payload.request_id)
         pending.reject(new Error(payload.message))
         return
@@ -850,27 +900,63 @@ const App: React.FC = () => {
   const sendGatewayAction = (
     action: string,
     payload: Record<string, unknown>,
-    targetSessionId = sessionId
+    targetSessionId = sessionId,
+    targetWorkflow = selectedChatWorkflow
   ): Promise<unknown> => {
     const requestId = createId('req')
+    const targetBindingKey = buildSocketBindingKey(targetSessionId, targetWorkflow)
 
     return new Promise((resolve, reject) => {
-      pendingRequestsRef.current.set(requestId, { resolve, reject })
-      if (targetSessionId && targetSessionId !== socketSessionId) {
+      let timeoutId: number | null = null
+      gatewayLog('send.queued', {
+        request_id: requestId,
+        action,
+        session_id: targetSessionId,
+        socket_session_id: socketSessionId,
+        target_binding_key: targetBindingKey,
+        active_binding_key: activeSocketBindingKeyRef.current,
+      })
+      if (targetSessionId && targetBindingKey !== chatWorkflowConnectionKey) {
+        gatewayLog('send.socket_binding_switch', {
+          request_id: requestId,
+          from_session_id: socketSessionId,
+          to_session_id: targetSessionId,
+          from_binding_key: chatWorkflowConnectionKey,
+          to_binding_key: targetBindingKey,
+        })
         setSocketSessionId(targetSessionId)
       }
 
-      void waitForSocketReady(targetSessionId)
+      void waitForSocketReady(targetSessionId, targetBindingKey)
         .then(() => {
           const socket = wsRef.current
-          if (!socket || socket.readyState !== WebSocket.OPEN) {
+          if (
+            !socket ||
+            socket.readyState !== WebSocket.OPEN ||
+            activeSocketSessionIdRef.current !== targetSessionId ||
+            activeSocketBindingKeyRef.current !== targetBindingKey
+          ) {
             throw new Error('WebSocket not connected')
           }
+
+          timeoutId = window.setTimeout(() => {
+            if (!pendingRequestsRef.current.has(requestId)) return
+            pendingRequestsRef.current.delete(requestId)
+            gatewayLog('send.timeout', {
+              request_id: requestId,
+              action,
+              session_id: targetSessionId,
+              binding_key: targetBindingKey,
+            })
+            reject(new Error(`Gateway ack timeout for ${action}`))
+          }, 15000)
+          pendingRequestsRef.current.set(requestId, { resolve, reject, timeoutId })
 
           gatewayLog('send', {
             request_id: requestId,
             action,
             session_id: targetSessionId,
+            binding_key: targetBindingKey,
             payload,
           })
           socket.send(
@@ -884,7 +970,19 @@ const App: React.FC = () => {
           )
         })
         .catch((error) => {
+          if (timeoutId !== null) {
+            window.clearTimeout(timeoutId)
+          }
           pendingRequestsRef.current.delete(requestId)
+          gatewayLog('send.not_ready', {
+            request_id: requestId,
+            action,
+            session_id: targetSessionId,
+            binding_key: targetBindingKey,
+            active_session_id: activeSocketSessionIdRef.current,
+            active_binding_key: activeSocketBindingKeyRef.current,
+            error: error instanceof Error ? error.message : String(error),
+          })
           reject(error instanceof Error ? error : new Error('WebSocket not connected'))
         })
     })
@@ -1123,6 +1221,14 @@ const App: React.FC = () => {
       await refreshSessionDetail(activeSessionId)
     } catch (error) {
       console.error('Failed to send message:', error)
+      gatewayLog('send_message.failed', {
+        session_id: activeSessionId || null,
+        message_id: messageId,
+        error: error instanceof Error ? error.message : String(error),
+        socket_session_id: socketSessionId,
+        active_socket_session_id: activeSocketSessionIdRef.current,
+        active_binding_key: activeSocketBindingKeyRef.current,
+      })
       setMessages((prev) =>
         prev.filter((message) => message.id !== pendingMessageId)
       )

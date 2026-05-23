@@ -194,6 +194,29 @@ test.beforeEach(async ({ page }) => {
           return
         }
 
+        if (payload.payload.content === 'Send while replacing socket should still reach gateway') {
+          window.setTimeout(() => {
+            this.onmessage?.(
+              new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'ack',
+                  request_id: payload.request_id,
+                  action: 'chat.send',
+                  status: 'ok',
+                  data: {
+                    session_id: payload.session_id,
+                    execution_id: `exec-${payload.session_id}`,
+                    workflow_code: 'test-workflow',
+                    workflow_version: 'v1',
+                    status: 'completed',
+                  },
+                }),
+              })
+            )
+          }, 0)
+          return
+        }
+
         if (payload.payload.content === 'This message should fail to send') {
           window.setTimeout(() => {
             this.onmessage?.(
@@ -523,6 +546,60 @@ test.describe('session history panel', () => {
     expect(chatSendPayload.workflow_version).toBe('2.0.0')
     expect(wsPayloads.urls.some((url) => url.includes('workflow_code=workflow-travel'))).toBeTruthy()
     expect(wsPayloads.urls.some((url) => url.includes('workflow_version=2.0.0'))).toBeTruthy()
+  })
+
+  test('ignores stale socket close while a replacement socket is connecting before send', async ({ page }) => {
+    publishedWorkflows = [
+      {
+        id: 11,
+        workflowCode: 'workflow-hotel',
+        name: '酒店预订',
+        status: 'published',
+        currentVersion: '1.0.0',
+      },
+    ]
+
+    await page.addInitScript(() => {
+      const sockets: Array<{ onclose: ((event: CloseEvent) => void) | null; readyState: number }> = []
+      const OriginalWebSocket = window.WebSocket
+      class TrackingWebSocket extends OriginalWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols as string | string[] | undefined)
+          sockets.push(this as unknown as { onclose: ((event: CloseEvent) => void) | null; readyState: number })
+          const value = String(url)
+          const forceStaleClose = () => {
+            const stale = sockets[0]
+            if (!stale) return
+            stale.readyState = 3
+            stale.onclose?.(new CloseEvent('close'))
+          }
+          ;(window as Window & { __forceStaleClose?: () => void }).__forceStaleClose = forceStaleClose
+        }
+      }
+      Object.defineProperty(window, 'WebSocket', {
+        writable: true,
+        value: TrackingWebSocket,
+      })
+    })
+
+    await page.goto('/')
+    await page.getByTestId('chat-workflow-select').selectOption('workflow-hotel')
+    await page.waitForFunction(() => {
+      const win = window as Window & { __mockWsUrls?: string[] }
+      return (win.__mockWsUrls ?? []).length >= 2
+    })
+    await page.evaluate(() => {
+      const win = window as Window & { __forceStaleClose?: () => void }
+      win.__forceStaleClose?.()
+    })
+    await page.getByTestId('chat-input').fill('Send while replacing socket should still reach gateway')
+    await page.getByTestId('chat-send').click()
+
+    await page.waitForFunction(() => {
+      const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
+      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+    }, undefined, { timeout: 10_000 })
+    await expect(page.getByText('消息发送失败，请稍后再试。')).toHaveCount(0)
   })
 
   test('switching from fixed workflow to auto-route starts a fresh session', async ({ page }) => {

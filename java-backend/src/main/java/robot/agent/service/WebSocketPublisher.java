@@ -27,7 +27,7 @@ public class WebSocketPublisher {
         payload.put("session_id", sessionId);
         payload.put("data", data == null ? Map.of() : data);
         payload.put("timestamp", java.time.OffsetDateTime.now().toString());
-        log.debug("websocket.publish.event eventType={} executionId={} sessionId={} dataKeys={}", eventType, executionId, sessionId, data == null ? java.util.Set.of() : data.keySet());
+        log.info("websocket.publish.event eventType={} executionId={} sessionId={} dataKeys={}", eventType, executionId, sessionId, data == null ? java.util.Set.of() : data.keySet());
         gatewayHub.publish(payload);
     }
 
@@ -43,7 +43,7 @@ public class WebSocketPublisher {
         payload.put("content", content);
         payload.put("is_complete", isComplete != null && isComplete);
         payload.put("timestamp", java.time.OffsetDateTime.now().toString());
-        log.debug("websocket.publish.delta executionId={} sessionId={} contentLength={} isComplete={}", executionId, sessionId, content == null ? 0 : content.length(), isComplete);
+        log.info("websocket.publish.delta executionId={} sessionId={} contentLength={} isComplete={}", executionId, sessionId, content == null ? 0 : content.length(), isComplete);
         gatewayHub.publish(payload);
     }
 

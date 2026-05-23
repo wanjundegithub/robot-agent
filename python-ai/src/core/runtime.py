@@ -1,10 +1,14 @@
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, AsyncIterator
 
 from .context import ExecutionContext
 from .events import sse_format
 from .security import mask_sensitive_fields
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,34 +32,96 @@ class ExecutionRuntime:
     def emit(self, event_type: str, data: Dict[str, Any]) -> None:
         event_id = self.next_event_id()
         safe_data = mask_sensitive_fields(data)
+        logger.info(
+            "runtime.emit queued sessionId=%s executionId=%s eventId=%s eventType=%s dataKeys=%s queueSize=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            event_id,
+            event_type,
+            sorted(safe_data.keys()),
+            self.queue.qsize(),
+        )
         self.queue.put_nowait(sse_format(event_id, event_type, safe_data))
 
     async def stream(self) -> AsyncIterator[str]:
+        logger.info(
+            "runtime.stream.start sessionId=%s executionId=%s",
+            self.context.session_id,
+            self.context.execution_id,
+        )
         while True:
             if self.done and self.queue.empty():
+                logger.info(
+                    "runtime.stream.done sessionId=%s executionId=%s eventCount=%s",
+                    self.context.session_id,
+                    self.context.execution_id,
+                    self.event_id,
+                )
                 break
             item = await self.queue.get()
+            logger.info(
+                "runtime.stream.yield sessionId=%s executionId=%s remainingQueueSize=%s",
+                self.context.session_id,
+                self.context.execution_id,
+                self.queue.qsize(),
+            )
             yield item
 
     def mark_done(self) -> None:
         self.done = True
+        logger.info(
+            "runtime.mark_done sessionId=%s executionId=%s status=%s eventCount=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            self.context.status,
+            self.event_id,
+        )
 
     def prepare_wait(self) -> None:
+        logger.info(
+            "runtime.wait.prepare sessionId=%s executionId=%s status=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            self.context.status,
+        )
         self.resume_event.clear()
         self.resume_data = None
 
     async def wait_for_resume(self) -> Dict[str, Any]:
+        logger.info(
+            "runtime.wait.resume_start sessionId=%s executionId=%s",
+            self.context.session_id,
+            self.context.execution_id,
+        )
         await self.resume_event.wait()
         data = self.resume_data or {}
         self.resume_event.clear()
         self.resume_data = None
+        logger.info(
+            "runtime.wait.resume_received sessionId=%s executionId=%s dataKeys=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            sorted(data.keys()),
+        )
         return data
 
     def resume(self, form_data: Dict[str, Any]) -> None:
+        logger.info(
+            "runtime.resume.signal sessionId=%s executionId=%s dataKeys=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            sorted((form_data or {}).keys()),
+        )
         self.resume_data = form_data
         self.resume_event.set()
 
     def request_suspend(self, reason: str) -> None:
+        logger.info(
+            "runtime.suspend.requested sessionId=%s executionId=%s reason=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            reason,
+        )
         self.suspend_requested = True
         self.suspend_reason = reason
 
@@ -65,6 +131,12 @@ class ExecutionRuntime:
         reason = self.suspend_reason or "manual_suspend"
         self.suspend_requested = False
         self.suspend_reason = None
+        logger.info(
+            "runtime.suspend.consumed sessionId=%s executionId=%s reason=%s",
+            self.context.session_id,
+            self.context.execution_id,
+            reason,
+        )
         return reason
 
     def snapshot(self) -> Dict[str, Any]:
