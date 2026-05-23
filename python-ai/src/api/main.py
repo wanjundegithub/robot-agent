@@ -295,6 +295,7 @@ async def classify_intent(request: IntentClassificationRequest):
         routing_model_code=request.routing_model_code,
         provider_configs=provider_configs,
         model_records=model_records,
+        system_prompts=request.system_prompts,
     )
 
 
@@ -317,9 +318,10 @@ async def decide_workflow_welcome_api(request: WelcomeDecisionRequest):
         workflow_summary=request.workflow_summary,
         session_context=request.session_context,
         provider_configs=provider_configs,
-        model_records=model_records,
-        routing_model_code=request.routing_model_code,
-    )
+            model_records=model_records,
+            routing_model_code=request.routing_model_code,
+            system_prompts=request.system_prompts,
+        )
     return WelcomeDecisionResponse(**result)
 
 

@@ -5,6 +5,11 @@ from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
 from src.core.model_runtime import execute_model_completion
 from src.core.security import PromptSanitizer
+from src.core.system_prompts import (
+    DEFAULT_WORKFLOW_CONTROL_SYSTEM_PROMPT,
+    resolve_system_prompt,
+    system_prompts_from_workflow_config,
+)
 
 
 class CoordinatorNode(BaseNode):
@@ -98,7 +103,7 @@ class CoordinatorNode(BaseNode):
             })
 
         model_code = self._resolve_model_code(context)
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt_for_context(context)
         user_prompt = self._build_user_prompt(message, context, candidates)
         completion = await execute_model_completion(
             model_code=model_code,
@@ -137,7 +142,16 @@ class CoordinatorNode(BaseNode):
     def _build_system_prompt(self) -> str:
         if self.system_prompt:
             return self.system_prompt
-        return "你是工作流协调节点。请根据用户输入和候选节点选择下一跳，只返回 JSON。"
+        return DEFAULT_WORKFLOW_CONTROL_SYSTEM_PROMPT
+
+    def _build_system_prompt_for_context(self, context) -> str:
+        if self.system_prompt:
+            return self.system_prompt
+        return resolve_system_prompt(
+            system_prompts_from_workflow_config(context.workflow_config),
+            "workflow_control",
+            DEFAULT_WORKFLOW_CONTROL_SYSTEM_PROMPT,
+        )
 
     def _build_user_prompt(self, message: str, context, candidates: List[str]) -> str:
         instruction = self._render_instruction(message, context)

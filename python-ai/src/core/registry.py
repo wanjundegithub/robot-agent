@@ -111,6 +111,13 @@ class ExecutionRegistry:
                 if item.get("model_code")
             }
 
+            workflow_config = dict(payload.get("workflow_config", {}) or {})
+            system_prompts = dict(payload.get("system_prompts", {}) or {})
+            if system_prompts:
+                merged_system_prompts = dict(workflow_config.get("system_prompts", {}) or {})
+                merged_system_prompts.update(system_prompts)
+                workflow_config["system_prompts"] = merged_system_prompts
+
             context = ExecutionContext(
                 execution_id=payload["execution_id"],
                 session_id=payload["session_id"],
@@ -128,7 +135,7 @@ class ExecutionRegistry:
                 threshold_source=payload.get("threshold_source"),
                 requested_tool_code=payload.get("requested_tool_code"),
                 confirmed_tool_codes=list(payload.get("confirmed_tool_codes", []) or []),
-                workflow_config=dict(payload.get("workflow_config", {}) or {}),
+                workflow_config=workflow_config,
                 workflow_catalog=dict(payload.get("workflow_catalog", {}) or {}),
                 provider_configs=provider_configs,
                 model_records=model_records,

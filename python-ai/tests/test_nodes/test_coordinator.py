@@ -161,3 +161,37 @@ async def test_coordinator_uses_llm_prompt_to_emit_welcome_message_for_single_ca
     assert result["message_deltas"] == ["您好，我是根据协调节点提示词生成的欢迎语。"]
     assert result["output"]["reason"] == "先欢迎用户"
     assert "对话开始时" in calls[0]["user_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_uses_workflow_configured_control_system_prompt(monkeypatch):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return '{"targetNodeId":"flight_agent","reason":"用户想订机票"}'
+
+    monkeypatch.setattr("src.nodes.coordinator.execute_model_completion", fake_completion, raising=False)
+    context = ExecutionContext(
+        execution_id="exec_coordinator_config_prompt",
+        session_id="sess_coordinator_config_prompt",
+        workflow_code="travel_assistant",
+        workflow_version="v2",
+        workflow_config={
+            "llm_defaults": {"model_code": "general-chat-v1"},
+            "system_prompts": {
+                "workflow_control": "配置中心系统提示词：禁止构造流程外槽位。",
+            },
+        },
+    )
+    context.available_targets = ["flight_agent"]
+    context.add_execution_variable("user_message", "我要预定机票")
+
+    node = CoordinatorNode("coordinator_1", {
+        "type": "coordinator",
+        "config": {"prompt": "根据用户输入选择子代理。"},
+    })
+    result = await node.execute(context)
+
+    assert result["next_node"] == "flight_agent"
+    assert calls[0]["system_prompt"] == "配置中心系统提示词：禁止构造流程外槽位。"

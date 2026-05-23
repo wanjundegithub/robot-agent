@@ -843,6 +843,27 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     }))
   }
 
+  const updateSelectedSubAgentFlowName = (name: string) => {
+    if (!selectedNodeId || selectedNodeData?.nodeType !== 'sub_agent') return
+    const linkedSubgraphId = String(selectedNodeData.config.subgraph_id || '').trim()
+    setGraphs((prev) => {
+      const current = prev[currentGraphId] ?? createInitialGraph(currentGraphId)
+      const nextGraphs = {
+        ...prev,
+        [currentGraphId]: {
+          ...current,
+          nodes: current.nodes.map((node) =>
+            node.id === selectedNodeId ? { ...node, data: { ...(node.data as CanvasNodeData), label: name } } : node
+          ),
+        },
+      }
+      if (linkedSubgraphId && nextGraphs[linkedSubgraphId]) {
+        nextGraphs[linkedSubgraphId] = { ...nextGraphs[linkedSubgraphId], name }
+      }
+      return nextGraphs
+    })
+  }
+
   const replaceSelectedConfig = (nextConfig: Record<string, unknown>) => {
     if (!selectedNodeId) return
     updateCurrentGraph((graph) => ({
@@ -1000,10 +1021,19 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     if (currentGraphId === MAIN_GRAPH_ID) {
       setWorkflowName(name)
     }
-    updateCurrentGraph((graph) => ({
-      ...graph,
-      name,
-    }))
+    setGraphs((prev) =>
+      syncLinkedSubAgentMetadata(
+        {
+          ...prev,
+          [currentGraphId]: {
+            ...(prev[currentGraphId] ?? createInitialGraph(currentGraphId)),
+            name,
+          },
+        },
+        currentGraphId,
+        { name }
+      )
+    )
   }
 
   const updateSelectedNodeDescription = (description: string) => {
@@ -1027,28 +1057,79 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     }))
   }
 
+  const updateSelectedSubAgentFlowDescription = (description: string) => {
+    if (!selectedNodeId || selectedNodeData?.nodeType !== 'sub_agent') return
+    const linkedSubgraphId = String(selectedNodeData.config.subgraph_id || '').trim()
+    setGraphs((prev) => {
+      const current = prev[currentGraphId] ?? createInitialGraph(currentGraphId)
+      const nextGraphs = {
+        ...prev,
+        [currentGraphId]: {
+          ...current,
+          nodes: current.nodes.map((node) => {
+            if (node.id !== selectedNodeId) return node
+            const data = node.data as CanvasNodeData
+            return {
+              ...node,
+              data: {
+                ...data,
+                config: {
+                  ...data.config,
+                  description,
+                },
+              },
+            }
+          }),
+        },
+      }
+      if (linkedSubgraphId && nextGraphs[linkedSubgraphId]) {
+        nextGraphs[linkedSubgraphId] = { ...nextGraphs[linkedSubgraphId], description }
+      }
+      return nextGraphs
+    })
+  }
+
   const updateCurrentGraphDescription = (description: string) => {
     if (currentGraphId === MAIN_GRAPH_ID) {
       setWorkflowDescription(description)
     }
-    updateCurrentGraph((graph) => ({
-      ...graph,
-      description,
-    }))
+    setGraphs((prev) =>
+      syncLinkedSubAgentMetadata(
+        {
+          ...prev,
+          [currentGraphId]: {
+            ...(prev[currentGraphId] ?? createInitialGraph(currentGraphId)),
+            description,
+          },
+        },
+        currentGraphId,
+        { description }
+      )
+    )
   }
 
   const bindAndOpenSubgraph = () => {
     if (!selectedNodeId || !selectedNodeData || selectedNodeData.nodeType !== 'sub_agent') return
     const configured = String(selectedNodeData.config.subgraph_id || '').trim()
     const subgraphId = configured || `subgraph_${selectedNodeId}`
+    const subgraphDescription = String(selectedNodeData.config.description || '').trim()
     const nextConfig = structuredClone(selectedNodeData.config || {})
     nextConfig.subgraph_id = subgraphId
     replaceSelectedConfig(nextConfig)
     setGraphs((prev) => {
-      if (prev[subgraphId]) return prev
+      if (prev[subgraphId]) {
+        return {
+          ...prev,
+          [subgraphId]: {
+            ...prev[subgraphId],
+            name: selectedNodeData.label,
+            description: subgraphDescription,
+          },
+        }
+      }
       return {
         ...prev,
-        [subgraphId]: createInitialGraph(subgraphId, selectedNodeData.label),
+        [subgraphId]: createInitialGraph(subgraphId, selectedNodeData.label, subgraphDescription),
       }
     })
     setGraphOrder((prev) => (prev.includes(subgraphId) ? prev : [...prev, subgraphId]))
@@ -1132,22 +1213,42 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
     return (
       <div className="space-y-3">
-        <input
-          value={selectedNodeData.label}
-          onChange={(event) => updateSelectedNodeLabel(event.target.value)}
-          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-          placeholder="节点名称"
-        />
-        <div className="text-xs text-slate-400">节点类型：{displayNodeType(nodeType)}</div>
+        <label className="block space-y-2">
+          <span className="text-xs font-medium text-slate-500">
+            {nodeType === 'sub_agent' ? '流程名称' : '节点名称'}
+          </span>
+          <input
+            value={selectedNodeData.label}
+            onChange={(event) =>
+              nodeType === 'sub_agent'
+                ? updateSelectedSubAgentFlowName(event.target.value)
+                : updateSelectedNodeLabel(event.target.value)
+            }
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            placeholder={nodeType === 'sub_agent' ? '流程名称' : '节点名称'}
+          />
+        </label>
+        {nodeType !== 'sub_agent' && (
+          <div className="text-xs text-slate-400">节点类型：{displayNodeType(nodeType)}</div>
+        )}
 
         {(nodeType === 'coordinator' || nodeType === 'sub_agent') && (
-          <textarea
-            value={String(config.description || '')}
-            onChange={(event) => updateSelectedNodeDescription(event.target.value)}
-            className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            data-testid="workflow-node-description-input"
-            placeholder="节点描述"
-          />
+          <label className="block space-y-2">
+            <span className="text-xs font-medium text-slate-500">
+              {nodeType === 'sub_agent' ? '流程描述' : '节点描述'}
+            </span>
+            <textarea
+              value={String(config.description || '')}
+              onChange={(event) =>
+                nodeType === 'sub_agent'
+                  ? updateSelectedSubAgentFlowDescription(event.target.value)
+                  : updateSelectedNodeDescription(event.target.value)
+              }
+              className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              data-testid="workflow-node-description-input"
+              placeholder={nodeType === 'sub_agent' ? '流程描述' : '节点描述'}
+            />
+          </label>
         )}
 
         {(nodeType === 'start' || nodeType === 'end') && (
@@ -1625,7 +1726,11 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               <div className="mb-3">
                 <div className="panel-title">流程属性</div>
                 <div className="mt-2 text-sm text-slate-500">
-                  {selectedNodeData ? '正在编辑节点属性。' : '当前显示流程级属性，可直接调整当前画布名称。'}
+                  {selectedNodeData?.nodeType === 'sub_agent'
+                    ? '正在编辑该子流程的名称和描述。'
+                    : selectedNodeData
+                    ? '正在编辑节点属性。'
+                    : '当前显示流程级属性，可直接调整当前画布名称。'}
                 </div>
               </div>
               <div className="max-h-full overflow-auto pr-1">{renderNodeEditor()}</div>
@@ -1644,12 +1749,12 @@ function toFlowType(nodeType: DesignerNodeType): 'input' | 'default' | 'output' 
   return 'default'
 }
 
-function createInitialGraph(graphId: string, name?: string): WorkflowGraphState {
+function createInitialGraph(graphId: string, name?: string, description?: string): WorkflowGraphState {
   const isMainGraph = graphId === MAIN_GRAPH_ID
   return {
     id: graphId,
     name: name || '',
-    description: '',
+    description: description || '',
     nodes: structuredClone(isMainGraph ? mainInitialNodes : subflowInitialNodes),
     edges: structuredClone(isMainGraph ? mainInitialEdges : subflowInitialEdges),
   }
@@ -1929,6 +2034,7 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
     [...globalVariables, ...tempVariables].map((variable) => [variable.name, variable.id])
   )
   const hydratedGraphs = hydrateGraphs(definition, editorMeta, variableNameToId)
+  const synchronizedGraphs = syncAllLinkedSubAgentMetadata(hydratedGraphs.graphs)
 
   return {
     workflowId: selection.version.workflowId ?? null,
@@ -1950,7 +2056,7 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
     globalVariables,
     tempVariables,
     modelBindings: resolveModelBindings(definition, effectiveConfig),
-    graphs: hydratedGraphs.graphs,
+    graphs: synchronizedGraphs,
     graphOrder: hydratedGraphs.graphOrder,
     currentGraphId: hydratedGraphs.currentGraphId,
   }
@@ -2351,6 +2457,57 @@ function collectRemovableGraphIds(startGraphId: string, graphs: Record<string, W
 
   visit(startGraphId)
   return Array.from(removable)
+}
+
+function syncLinkedSubAgentMetadata(
+  graphs: Record<string, WorkflowGraphState>,
+  graphId: string,
+  metadata: { name?: string; description?: string }
+) {
+  if (graphId === MAIN_GRAPH_ID) return graphs
+  for (const [parentGraphId, graph] of Object.entries(graphs)) {
+    const nextNodes = graph.nodes.map((node) => {
+      const data = node.data as CanvasNodeData
+      if (data.nodeType !== 'sub_agent') return node
+      const linkedSubgraphId = String(data.config.subgraph_id || '').trim()
+      if (linkedSubgraphId !== graphId) return node
+      const nextConfig =
+        metadata.description === undefined
+          ? data.config
+          : {
+              ...data.config,
+              description: metadata.description,
+            }
+      return {
+        ...node,
+        data: {
+          ...data,
+          label: metadata.name === undefined ? data.label : metadata.name,
+          config: nextConfig,
+        },
+      }
+    })
+    if (nextNodes.some((node, index) => node !== graph.nodes[index])) {
+      return {
+        ...graphs,
+        [parentGraphId]: {
+          ...graph,
+          nodes: nextNodes,
+        },
+      }
+    }
+  }
+  return graphs
+}
+
+function syncAllLinkedSubAgentMetadata(graphs: Record<string, WorkflowGraphState>) {
+  return Object.entries(graphs).reduce((nextGraphs, [graphId, graph]) => {
+    if (graphId === MAIN_GRAPH_ID) return nextGraphs
+    return syncLinkedSubAgentMetadata(nextGraphs, graphId, {
+      name: graph.name,
+      description: graph.description,
+    })
+  }, graphs)
 }
 
 function buildGraphParentMap(graphs: Record<string, WorkflowGraphState>) {

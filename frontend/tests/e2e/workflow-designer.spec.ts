@@ -336,8 +336,8 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-current-graph-name-input')).toHaveValue('主流程')
     await expect(page.getByTestId('workflow-current-graph-description-input')).toHaveValue('主流程描述')
     await page.locator('.react-flow__node').filter({ hasText: '子流程名称' }).click()
-    await expect(page.getByPlaceholder('节点名称')).toHaveValue('子流程名称')
-    await expect(page.getByTestId('workflow-node-description-input')).toHaveValue('子代理节点描述')
+    await expect(page.getByPlaceholder('流程名称')).toHaveValue('子流程名称')
+    await expect(page.getByTestId('workflow-node-description-input')).toHaveValue('子流程描述')
     await page.getByTestId('workflow-graph-nav-subgraph_saved').click()
     await expect(page.locator('.react-flow__node')).toHaveCount(2)
     await expect(page.locator('.react-flow__edge')).toHaveCount(1)
@@ -619,7 +619,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-add-node-end')).toHaveCount(0)
 
     await page.getByTestId('workflow-add-node-sub_agent').click()
-    await page.getByPlaceholder('节点名称').fill('子流程 A')
+    await page.getByPlaceholder('流程名称').fill('子流程 A')
     await page.getByTestId('workflow-open-subgraph').click()
 
     await expect(page.locator('[data-testid^="workflow-breadcrumb-subgraph_sub_agent_"]')).toBeVisible()
@@ -733,7 +733,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(1)
 
     await page.getByTestId('workflow-add-node-sub_agent').click()
-    await page.getByPlaceholder('节点名称').fill('能力子流程')
+    await page.getByPlaceholder('流程名称').fill('能力子流程')
     await page.getByTestId('workflow-open-subgraph').click()
     await page.getByTestId('workflow-add-node-tool').click()
 
@@ -858,7 +858,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-description-input')).toHaveValue('工作流描述')
     await page.getByTestId('workflow-add-node-sub_agent').click()
     await expect(page.getByTestId('workflow-subgraph-id-input')).toHaveCount(0)
-    await page.getByPlaceholder('节点名称').fill('子流程复核')
+    await page.getByPlaceholder('流程名称').fill('子流程复核')
     await page.getByTestId('workflow-node-description-input').fill('子代理节点描述')
     await page.getByTestId('workflow-open-subgraph').click()
     await expect(page.getByTestId('workflow-breadcrumb-main')).toBeVisible()
@@ -872,8 +872,11 @@ test.describe('workflow designer v2 contract', () => {
     await graphNameInput.fill('子流程复核')
     await expect(graphNameInput).toHaveValue('子流程复核')
     await graphDescriptionInput.fill('子流程复核描述')
-
     await page.getByTestId('workflow-breadcrumb-main').click()
+    await page.locator('.react-flow__node').filter({ hasText: '子流程复核' }).click()
+    await expect(page.getByPlaceholder('流程名称')).toHaveValue('子流程复核')
+    await expect(page.getByTestId('workflow-node-description-input')).toHaveValue('子流程复核描述')
+
     await page.getByTestId('workflow-publish').click()
 
     await expect.poll(() => draftPayload).not.toBeNull()
@@ -904,8 +907,8 @@ test.describe('workflow designer v2 contract', () => {
     const mainNodes = mainGraph.nodes as Record<string, Record<string, unknown>>
     const savedSubAgent = Object.values(mainNodes).find((node) => node.type === 'sub_agent')
     expect(savedSubAgent?.name).toBe('子流程复核')
-    expect(savedSubAgent?.description).toBe('子代理节点描述')
-    expect((savedSubAgent?.config as Record<string, unknown>).description).toBe('子代理节点描述')
+    expect(savedSubAgent?.description).toBe('子流程复核描述')
+    expect((savedSubAgent?.config as Record<string, unknown>).description).toBe('子流程复核描述')
     expect(subGraph.graph_id).toBe(subgraphId)
     expect(subGraph.graph_type).toBe('SUBGRAPH')
     expect(subGraph.graph_name).toBe('子流程复核')

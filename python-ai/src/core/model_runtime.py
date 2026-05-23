@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import httpx
 from src.core.logging_utils import duration_ms, safe_url, sanitize_dict, summarize_payload
+from src.core.system_prompts import DEFAULT_INTENT_ROUTING_SYSTEM_PROMPT, resolve_system_prompt
 
 
 class ModelConfigError(Exception):
@@ -103,6 +104,7 @@ async def classify_intent_with_model_code(
     routing_model_code: str,
     provider_configs: Dict[str, Dict[str, Any]],
     model_records: Dict[str, Dict[str, Any]],
+    system_prompts: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     prompt = {
         "task": "intent_routing",
@@ -130,11 +132,10 @@ async def classify_intent_with_model_code(
         model_code=routing_model_code,
         provider_configs=provider_configs,
         model_records=model_records,
-        system_prompt=(
-            "You are an intent router. Return JSON only. "
-            "You must choose workflow_code only from provided candidate_workflows. "
-            "If no candidate is reliable or the requested service is not available, return matched=false. "
-            "When matched=false, generate clarification_question as the user-facing fallback message in Chinese; do not leave it empty."
+        system_prompt=resolve_system_prompt(
+            system_prompts,
+            "intent_routing",
+            DEFAULT_INTENT_ROUTING_SYSTEM_PROMPT,
         ),
         user_prompt=json.dumps(prompt, ensure_ascii=False),
         response_format={"type": "json_object"},

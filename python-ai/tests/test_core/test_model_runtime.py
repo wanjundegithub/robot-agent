@@ -450,3 +450,38 @@ async def test_classify_intent_with_model_code_sends_prompt_contract():
     ]
     assert prompt_payload["fallback_message_requirements"]["field"] == "clarification_question"
     assert "matched=false" in prompt_payload["fallback_message_requirements"]["when"]
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_with_model_code_uses_configured_system_prompt():
+    mocked_completion = AsyncMock(
+        return_value=json.dumps(
+            {
+                "matched": False,
+                "confidence": 0.0,
+                "reason": "unclear",
+                "need_clarification": True,
+                "clarification_question": "请问您想办理哪类业务？",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    with patch("src.core.model_runtime.execute_model_completion", new=mocked_completion):
+        await classify_intent_with_model_code(
+            message="我要预定机票",
+            candidate_workflows=[],
+            routing_model_code="intent-router-v1",
+            provider_configs={
+                "demo": {
+                    "provider_code": "demo",
+                    "provider_type": "custom",
+                    "api_key": "test",
+                    "base_url": "https://example.com",
+                }
+            },
+            model_records={"intent-router-v1": {"model_code": "intent-router-v1", "provider_code": "demo"}},
+            system_prompts={"intent_routing": "配置中心意图路由提示词"},
+        )
+
+    assert mocked_completion.await_args.kwargs["system_prompt"] == "配置中心意图路由提示词"

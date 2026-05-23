@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.common.ApplicationConstants;
+import robot.agent.config.WorkflowPromptProperties;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
 import robot.agent.dto.response.WorkflowResponse;
 import robot.agent.dto.response.WorkflowVersionResponse;
@@ -44,6 +45,7 @@ public class WorkflowService {
     private final AuditService auditService;
     private final PythonClient pythonClient;
     private final ModelConfigService modelConfigService;
+    private final WorkflowPromptProperties workflowPromptProperties;
 
     @Autowired
     public WorkflowService(
@@ -53,7 +55,8 @@ public class WorkflowService {
             AccessControlService accessControlService,
             AuditService auditService,
             PythonClient pythonClient,
-            ModelConfigService modelConfigService
+            ModelConfigService modelConfigService,
+            WorkflowPromptProperties workflowPromptProperties
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowVersionRepository = workflowVersionRepository;
@@ -62,6 +65,28 @@ public class WorkflowService {
         this.auditService = auditService;
         this.pythonClient = pythonClient;
         this.modelConfigService = modelConfigService;
+        this.workflowPromptProperties = workflowPromptProperties;
+    }
+
+    public WorkflowService(
+            WorkflowRepository workflowRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            AuditService auditService,
+            PythonClient pythonClient,
+            ModelConfigService modelConfigService
+    ) {
+        this(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService,
+                new WorkflowPromptProperties()
+        );
     }
 
 
@@ -135,6 +160,21 @@ public class WorkflowService {
         accessControlService.requireWorkflowAdminAction(userId, workflow.getWorkspaceId(), workflowCode, "workflow.publish");
         WorkflowVersion workflowVersion = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, version)
                 .orElseThrow(() -> new RuntimeException("Workflow version not found: " + workflowCode + "@" + version));
+        List<Map<String, Object>> validationIssues = validateWorkflowDefinition(
+                workflowVersion.getDefinition(),
+                workflowVersion.getConfig()
+        );
+        if (!validationIssues.isEmpty()) {
+            String issueSummary = summarizeValidationIssues(validationIssues);
+            log.warn(
+                    "workflow.publish.validation_failed workflowCode={} version={} issueCount={} issues={}",
+                    workflowCode,
+                    version,
+                    validationIssues.size(),
+                    issueSummary
+            );
+            throw new IllegalArgumentException("工作流发布校验失败：" + issueSummary);
+        }
         if (workflowVersion.getWorkflowSnapshot() == null || workflowVersion.getWorkflowSnapshot().isBlank()) {
             log.info("workflow.publish.snapshot.rebuild workflowCode={} version={} reason=missing_snapshot", workflowCode, version);
             workflowVersion.setWorkflowSnapshot(buildCompatibilityWorkflowSnapshot(
@@ -1446,13 +1486,16 @@ public class WorkflowService {
                     runtimeBundle.providerConfigs().size(),
                     runtimeBundle.modelRecords().size()
             );
-            response = pythonClient.classifyIntent(Map.of(
-                    "message", normalizedContent,
-                    "routing_model_code", routingModelCode,
-                    "candidate_workflows", candidates,
-                    "provider_configs", runtimeBundle.providerConfigs(),
-                    "model_records", runtimeBundle.modelRecords()
-            )).blockOptional().orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
+            Map<String, Object> classifyRequest = new LinkedHashMap<>();
+            classifyRequest.put("message", normalizedContent);
+            classifyRequest.put("routing_model_code", routingModelCode);
+            classifyRequest.put("candidate_workflows", candidates);
+            classifyRequest.put("provider_configs", runtimeBundle.providerConfigs());
+            classifyRequest.put("model_records", runtimeBundle.modelRecords());
+            classifyRequest.put("system_prompts", workflowPromptProperties.asWorkflowConfigSystemPrompts());
+            response = pythonClient.classifyIntent(classifyRequest)
+                    .blockOptional()
+                    .orElseThrow(() -> new RuntimeException("Intent classification unavailable"));
         } catch (RuntimeException exception) {
             log.warn("workflow.intent.classify.failed routingModelCode={} message={}", routingModelCode, exception.getMessage());
             return fallbackModelIntent("intent_classification_fallback");
@@ -2286,6 +2329,23 @@ public class WorkflowService {
         issue.put("field", field);
         issue.put("message", message);
         return issue;
+    }
+
+    private String summarizeValidationIssues(List<Map<String, Object>> issues) {
+        return issues.stream()
+                .limit(3)
+                .map(issue -> {
+                    String field = stringValue(issue.get("field"));
+                    String message = stringValue(issue.get("message"));
+                    if (field == null) {
+                        return message == null ? "未知校验问题" : message;
+                    }
+                    if (message == null) {
+                        return field;
+                    }
+                    return field + " - " + message;
+                })
+                .collect(Collectors.joining("；"));
     }
 
     private void validateToolNode(String nodeId, Map<String, Object> nodeConfig, List<Map<String, Object>> issues) {

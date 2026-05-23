@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import robot.agent.common.ApplicationConstants;
 import robot.agent.config.ChatFallbackProperties;
+import robot.agent.config.WorkflowPromptProperties;
 import robot.agent.dto.request.ExecuteRequest;
 import robot.agent.dto.request.FormSubmitRequest;
 import robot.agent.dto.request.SendMessageRequest;
@@ -57,6 +58,7 @@ public class ExecutionService {
     private final CapabilityRuntimeResolver capabilityRuntimeResolver;
     private final CapabilityAuditService capabilityAuditService;
     private final ChatFallbackProperties chatFallbackProperties;
+    private final WorkflowPromptProperties workflowPromptProperties;
 
     @Autowired
     public ExecutionService(
@@ -73,7 +75,8 @@ public class ExecutionService {
             EntryProtectionService entryProtectionService,
             CapabilityRuntimeResolver capabilityRuntimeResolver,
             CapabilityAuditService capabilityAuditService,
-            ChatFallbackProperties chatFallbackProperties
+            ChatFallbackProperties chatFallbackProperties,
+            WorkflowPromptProperties workflowPromptProperties
     ) {
         this.sessionService = sessionService;
         this.workflowService = workflowService;
@@ -89,6 +92,42 @@ public class ExecutionService {
         this.capabilityRuntimeResolver = capabilityRuntimeResolver;
         this.capabilityAuditService = capabilityAuditService;
         this.chatFallbackProperties = chatFallbackProperties;
+        this.workflowPromptProperties = workflowPromptProperties;
+    }
+
+    public ExecutionService(
+            SessionService sessionService,
+            WorkflowService workflowService,
+            ExecutionRepository executionRepository,
+            ExecutionNodeLogRepository executionNodeLogRepository,
+            PythonClient pythonClient,
+            WebSocketPublisher webSocketPublisher,
+            AuditService auditService,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            ConfirmationService confirmationService,
+            EntryProtectionService entryProtectionService,
+            CapabilityRuntimeResolver capabilityRuntimeResolver,
+            CapabilityAuditService capabilityAuditService,
+            ChatFallbackProperties chatFallbackProperties
+    ) {
+        this(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                webSocketPublisher,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                capabilityRuntimeResolver,
+                capabilityAuditService,
+                chatFallbackProperties,
+                new WorkflowPromptProperties()
+        );
     }
 
     public ExecutionService(
@@ -120,7 +159,8 @@ public class ExecutionService {
                 entryProtectionService,
                 capabilityRuntimeResolver,
                 capabilityAuditService,
-                new ChatFallbackProperties()
+                new ChatFallbackProperties(),
+                new WorkflowPromptProperties()
         );
     }
 
@@ -450,11 +490,12 @@ public class ExecutionService {
                 capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition())
         );
         executeRequest.setEntryRule(runtimeBundle.entryRule());
-        executeRequest.setWorkflowConfig(runtimeBundle.workflowConfig());
+        executeRequest.setWorkflowConfig(withConfiguredSystemPrompts(runtimeBundle.workflowConfig()));
         executeRequest.setWorkflowCatalog(runtimeBundle.workflowCatalog());
         executeRequest.setProviderConfigs(runtimeBundle.providerConfigs());
         executeRequest.setModelRecords(runtimeBundle.modelRecords());
         executeRequest.setRoutingModelCode(runtimeBundle.routingModelCode());
+        executeRequest.setSystemPrompts(workflowPromptProperties.asWorkflowConfigSystemPrompts());
         Map<String, Object> executeInput = new LinkedHashMap<>();
         executeInput.put("user_message", request.getContent());
         executeInput.put("session_id", session.getId());
@@ -815,6 +856,27 @@ public class ExecutionService {
         sanitized.put("fallback_message", chatFallbackProperties.getModelUnavailableMessage());
         sanitized.put("error_suppressed", true);
         return sanitized;
+    }
+
+    private Map<String, Object> withConfiguredSystemPrompts(Map<String, Object> workflowConfig) {
+        Map<String, Object> merged = new LinkedHashMap<>(workflowConfig == null ? Map.of() : workflowConfig);
+        Map<String, Object> configuredPrompts = workflowPromptProperties.asWorkflowConfigSystemPrompts();
+        if (configuredPrompts.isEmpty()) {
+            return merged;
+        }
+
+        Map<String, Object> systemPrompts = new LinkedHashMap<>();
+        Object existingPrompts = merged.get("system_prompts");
+        if (existingPrompts instanceof Map<?, ?> existingMap) {
+            for (Map.Entry<?, ?> entry : existingMap.entrySet()) {
+                if (entry.getKey() != null) {
+                    systemPrompts.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+        }
+        systemPrompts.putAll(configuredPrompts);
+        merged.put("system_prompts", systemPrompts);
+        return merged;
     }
 
     private void updateExecutionNode(String executionId, String eventType, Map<String, Object> payload) {

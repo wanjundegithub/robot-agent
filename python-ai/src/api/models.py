@@ -28,6 +28,7 @@ class ExecuteRequest(BaseModel):
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     routing_model_code: Optional[str] = Field(default=None)
+    system_prompts: Dict[str, Any] = Field(default_factory=dict)
     input_variables: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -78,6 +79,7 @@ class IntentClassificationRequest(BaseModel):
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     routing_model_code: str
+    system_prompts: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WelcomeDecisionRequest(BaseModel):
@@ -89,6 +91,7 @@ class WelcomeDecisionRequest(BaseModel):
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     routing_model_code: str = Field(..., description="Model code used for welcome decision")
+    system_prompts: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WelcomeDecisionResponse(BaseModel):

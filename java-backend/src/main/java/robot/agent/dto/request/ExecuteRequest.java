@@ -52,6 +52,8 @@ public class ExecuteRequest {
     private List<Map<String, Object>> modelRecords;
     @JsonProperty("routing_model_code")
     private String routingModelCode;
+    @JsonProperty("system_prompts")
+    private Map<String, Object> systemPrompts;
     @JsonProperty("input_variables")
     private Map<String, Object> inputVariables;
 
@@ -126,6 +128,9 @@ public class ExecuteRequest {
 
     public String getRoutingModelCode() { return routingModelCode; }
     public void setRoutingModelCode(String routingModelCode) { this.routingModelCode = routingModelCode; }
+
+    public Map<String, Object> getSystemPrompts() { return systemPrompts; }
+    public void setSystemPrompts(Map<String, Object> systemPrompts) { this.systemPrompts = systemPrompts; }
 
     public Map<String, Object> getInputVariables() { return inputVariables; }
     public void setInputVariables(Map<String, Object> inputVariables) { this.inputVariables = inputVariables; }
