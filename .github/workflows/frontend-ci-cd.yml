@@ -72,13 +72,13 @@ jobs:
       CENTOS_HOST: ${{ vars.CENTOS_HOST }}
       CENTOS_USER: ${{ vars.CENTOS_USER }}
       CENTOS_SSH_KEY: ${{ secrets.CENTOS_SSH_KEY }}
-      CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT || '22' }}
-      CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR || '/opt/robot-agent' }}
-      GHCR_USERNAME: ${{ vars.GHCR_USERNAME || github.repository_owner }}
-      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+      CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT }}
+      CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR }}
+      GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ github.token }}
     steps:
       - name: Deploy frontend on CentOS
-        if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
+        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}

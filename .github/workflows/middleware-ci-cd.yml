@@ -36,14 +36,14 @@ jobs:
       CENTOS_HOST: ${{ vars.CENTOS_HOST }}
       CENTOS_USER: ${{ vars.CENTOS_USER }}
       CENTOS_SSH_KEY: ${{ secrets.CENTOS_SSH_KEY }}
-      CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT || '22' }}
-      CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR || '/opt/robot-agent' }}
+      CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT }}
+      CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Ensure app directory exists
-        if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
+        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}
@@ -54,7 +54,7 @@ jobs:
           script: mkdir -p "$CENTOS_APP_DIR"
 
       - name: Copy compose and deploy files
-        if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
+        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ env.CENTOS_HOST }}
@@ -66,7 +66,7 @@ jobs:
           overwrite: true
 
       - name: Deploy middleware on CentOS
-        if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
+        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}
