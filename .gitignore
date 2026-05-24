@@ -44,6 +44,7 @@ frontend/dist/
 
 ### Runtime Output ###
 .env
+.deploy-secrets/
 output/
 .playwright-cli/
 *.log

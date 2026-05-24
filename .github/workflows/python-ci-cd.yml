@@ -70,7 +70,7 @@ jobs:
       CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT || '22' }}
       CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR || '/opt/robot-agent' }}
       GHCR_USERNAME: ${{ vars.GHCR_USERNAME || github.repository_owner }}
-      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
     steps:
       - name: Deploy Python AI on CentOS
         if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
