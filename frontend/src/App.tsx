@@ -597,7 +597,7 @@ const App: React.FC = () => {
     const base = import.meta.env.VITE_NETTY_WS_BASE_URL || import.meta.env.VITE_WS_BASE_URL
     const origin =
       base ||
-      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8091`
+      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
     const url = new URL(`${origin}/ws/robot`)
     url.searchParams.set('session_id', activeSessionId)
     if (workflow?.workflowCode && workflow.currentVersion) {

@@ -43,10 +43,12 @@ frontend/node_modules/
 frontend/dist/
 
 ### Runtime Output ###
+.env
 output/
 .playwright-cli/
 *.log
 2026-04-07-220038-local-command-caveatcaveat-the-messages-below-w.txt
+deploy/.env
 
 ### Python ###
 __pycache__/

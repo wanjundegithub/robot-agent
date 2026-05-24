@@ -1,0 +1,95 @@
+name: Java Backend CI/CD
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - pom.xml
+      - java-backend/**
+      - .github/workflows/java-ci-cd.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/java-backend
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Test and package
+        run: mvn -pl java-backend -am clean verify -B
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: java-backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Export image
+        id: image
+        run: echo "image=${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    env:
+      CENTOS_HOST: ${{ vars.CENTOS_HOST }}
+      CENTOS_USER: ${{ vars.CENTOS_USER }}
+      CENTOS_SSH_KEY: ${{ secrets.CENTOS_SSH_KEY }}
+      CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT || '22' }}
+      CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR || '/opt/robot-agent' }}
+      GHCR_USERNAME: ${{ vars.GHCR_USERNAME || github.repository_owner }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+    steps:
+      - name: Deploy Java backend on CentOS
+        if: ${{ github.event_name == 'push' && vars.CENTOS_HOST != '' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.CENTOS_HOST }}
+          username: ${{ env.CENTOS_USER }}
+          key: ${{ env.CENTOS_SSH_KEY }}
+          port: ${{ env.CENTOS_SSH_PORT }}
+          envs: CENTOS_APP_DIR,JAVA_BACKEND_IMAGE,GHCR_USERNAME,GHCR_TOKEN
+          script: |
+            set -eu
+            cd "$CENTOS_APP_DIR"
+            if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
+              printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
+            fi
+            if grep -q '^JAVA_BACKEND_IMAGE=' .env; then
+              sed -i "s|^JAVA_BACKEND_IMAGE=.*|JAVA_BACKEND_IMAGE=${JAVA_BACKEND_IMAGE}|" .env
+            else
+              printf '\nJAVA_BACKEND_IMAGE=%s\n' "$JAVA_BACKEND_IMAGE" >> .env
+            fi
+            docker compose --env-file .env -f docker-compose.prod.yml pull java-backend
+            docker compose --env-file .env -f docker-compose.prod.yml up -d --no-deps --no-build java-backend
+            docker compose --env-file .env -f docker-compose.prod.yml ps java-backend
+        env:
+          JAVA_BACKEND_IMAGE: ${{ needs.build-and-push.outputs.image }}
