@@ -1,14 +1,12 @@
 package robot.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Component
-@RefreshScope
 @ConfigurationProperties(prefix = "robot.workflow.prompts")
 public class WorkflowPromptProperties {
 

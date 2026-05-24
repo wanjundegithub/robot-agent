@@ -77,16 +77,16 @@ class ModelConfigServiceTest {
 
     @Test
     void buildDefaultRuntimeBundle_prefersConfiguredDefaultModelCode() {
-        defaultModelProperties.setModelCode("nacos-default-chat");
-        LlmModelRecord modelRecord = modelRecord("nacos-default-chat", "doubao-provider");
+        defaultModelProperties.setModelCode("local-default-chat");
+        LlmModelRecord modelRecord = modelRecord("local-default-chat", "doubao-provider");
         LlmProviderConfig provider = provider("doubao-provider");
 
-        when(modelRecordRepository.findByModelCode("nacos-default-chat")).thenReturn(Optional.of(modelRecord));
+        when(modelRecordRepository.findByModelCode("local-default-chat")).thenReturn(Optional.of(modelRecord));
         when(providerRepository.findByProviderCode("doubao-provider")).thenReturn(Optional.of(provider));
 
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildDefaultRuntimeBundle();
 
-        assertThat(bundle.modelRecords()).extracting(item -> item.get("model_code")).containsExactly("nacos-default-chat");
+        assertThat(bundle.modelRecords()).extracting(item -> item.get("model_code")).containsExactly("local-default-chat");
         assertThat(bundle.providerConfigs()).extracting(item -> item.get("provider_code")).containsExactly("doubao-provider");
         verify(providerRepository, never()).findByEnabledTrueOrderByProviderCodeAsc();
     }
