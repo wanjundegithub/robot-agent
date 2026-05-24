@@ -77,7 +77,6 @@ jobs:
       GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
     steps:
       - name: Deploy frontend on CentOS
-        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}

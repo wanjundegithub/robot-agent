@@ -43,7 +43,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Ensure app directory exists
-        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}
@@ -54,7 +53,6 @@ jobs:
           script: mkdir -p "$CENTOS_APP_DIR"
 
       - name: Copy compose and deploy files
-        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ env.CENTOS_HOST }}
@@ -66,7 +64,6 @@ jobs:
           overwrite: true
 
       - name: Deploy middleware on CentOS
-        if: ${{ vars.CENTOS_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ env.CENTOS_HOST }}
