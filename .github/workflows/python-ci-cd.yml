@@ -70,7 +70,6 @@ jobs:
       CENTOS_SSH_PORT: ${{ vars.CENTOS_SSH_PORT }}
       CENTOS_APP_DIR: ${{ vars.CENTOS_APP_DIR }}
       GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
-      GHCR_TOKEN: ${{ github.token }}
     steps:
       - name: Deploy Python AI on CentOS
         if: ${{ vars.CENTOS_HOST != '' }}
@@ -80,13 +79,10 @@ jobs:
           username: ${{ env.CENTOS_USER }}
           key: ${{ env.CENTOS_SSH_KEY }}
           port: ${{ env.CENTOS_SSH_PORT }}
-          envs: CENTOS_APP_DIR,PYTHON_AI_IMAGE,GHCR_USERNAME,GHCR_TOKEN
+          envs: CENTOS_APP_DIR,PYTHON_AI_IMAGE,GHCR_USERNAME
           script: |
             set -eu
             cd "$CENTOS_APP_DIR"
-            if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
-              printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
-            fi
             if grep -q '^PYTHON_AI_IMAGE=' .env; then
               sed -i "s|^PYTHON_AI_IMAGE=.*|PYTHON_AI_IMAGE=${PYTHON_AI_IMAGE}|" .env
             else
