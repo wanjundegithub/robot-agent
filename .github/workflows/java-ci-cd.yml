@@ -2,11 +2,11 @@ name: Java Backend CI/CD
 
 on:
   push:
-    branches: [main, master]
+    branches: ['main', 'master']
     paths:
-      - pom.xml
-      - java-backend/**
-      - .github/workflows/java-ci-cd.yml
+      - 'pom.xml'
+      - 'java-backend/**'
+      - '.github/workflows/java-ci-cd.yml'
   workflow_dispatch:
 
 permissions:

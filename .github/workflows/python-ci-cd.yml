@@ -2,10 +2,10 @@ name: Python AI CI/CD
 
 on:
   push:
-    branches: [main, master]
+    branches: ['main', 'master']
     paths:
-      - python-ai/**
-      - .github/workflows/python-ci-cd.yml
+      - 'python-ai/**'
+      - '.github/workflows/python-ci-cd.yml'
   workflow_dispatch:
 
 permissions:

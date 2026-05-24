@@ -2,12 +2,12 @@ name: Middleware Deploy
 
 on:
   push:
-    branches: [main, master]
+    branches: ['main', 'master']
     paths:
-      - docker-compose.yml
-      - docker-compose.prod.yml
-      - deploy/**
-      - .github/workflows/middleware-ci-cd.yml
+      - 'docker-compose.yml'
+      - 'docker-compose.prod.yml'
+      - 'deploy/**'
+      - '.github/workflows/middleware-ci-cd.yml'
   workflow_dispatch:
 
 permissions:
