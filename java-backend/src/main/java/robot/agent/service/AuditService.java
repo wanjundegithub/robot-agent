@@ -9,7 +9,6 @@ import robot.agent.repository.AuditLogRepository;
 @Service
 public class AuditService {
 
-
     private final AuditLogRepository auditLogRepository;
     private final ObjectMapper objectMapper;
 
