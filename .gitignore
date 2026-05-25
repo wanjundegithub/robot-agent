@@ -50,6 +50,7 @@ output/
 *.log
 2026-04-07-220038-local-command-caveatcaveat-the-messages-below-w.txt
 deploy/.env
+deploy/webhook/.env
 
 ### Python ###
 __pycache__/

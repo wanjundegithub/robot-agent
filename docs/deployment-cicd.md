@@ -33,6 +33,23 @@ For a fresh all-in-one bring-up, use:
 sh deploy/scripts/deploy-stack.sh
 ```
 
+## Frontend Nginx configuration
+
+The frontend image already runs Nginx, so no separate Nginx container is needed. Production mounts this host file into the frontend container:
+
+```text
+/data/docker-data/frontend/config/default.conf -> /etc/nginx/conf.d/default.conf
+```
+
+The default template is kept at `deploy/frontend/config/default.conf`. Deployment scripts create `/data/docker-data/frontend/config/default.conf` from the template only when the host file does not exist, so later manual changes on the server are preserved.
+
+After changing the host Nginx config, reload the frontend container:
+
+```sh
+docker exec robot-agent-frontend nginx -t
+docker exec robot-agent-frontend nginx -s reload
+```
+
 ## GitHub Actions
 
 Each workflow only runs when files in its area change:
@@ -41,6 +58,8 @@ Each workflow only runs when files in its area change:
 - `java-ci-cd.yml`: `pom.xml`, `java-backend/**`
 - `python-ci-cd.yml`: `python-ai/**`
 - `middleware-ci-cd.yml`: `docker-compose*.yml`, `deploy/**`
+
+If GitHub Actions is unavailable for the account, use the webhook-based deployment described in `docs/webhook-deployment.md`.
 
 ## Required repository settings
 

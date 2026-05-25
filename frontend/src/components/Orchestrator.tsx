@@ -883,11 +883,30 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     replaceSelectedConfig(nextConfig)
   }
 
-  const toggleSelectedVariable = (field: 'input_variable_ids' | 'output_variable_ids', variableId: string) => {
+  const addSelectedVariable = (field: 'input_variable_ids' | 'output_variable_ids') => {
     if (!selectedNodeData) return
     const current = Array.isArray(selectedNodeData.config[field]) ? [...(selectedNodeData.config[field] as string[])] : []
-    const next = current.includes(variableId) ? current.filter((item) => item !== variableId) : [...current, variableId]
+    updateSelectedConfigField(field, [...current, ''])
+  }
+
+  const updateSelectedVariable = (
+    field: 'input_variable_ids' | 'output_variable_ids',
+    index: number,
+    variableId: string
+  ) => {
+    if (!selectedNodeData) return
+    const current = Array.isArray(selectedNodeData.config[field]) ? [...(selectedNodeData.config[field] as string[])] : []
+    const next = current.map((item, itemIndex) => (itemIndex === index ? variableId : item))
     updateSelectedConfigField(field, next)
+  }
+
+  const removeSelectedVariable = (field: 'input_variable_ids' | 'output_variable_ids', index: number) => {
+    if (!selectedNodeData) return
+    const current = Array.isArray(selectedNodeData.config[field]) ? [...(selectedNodeData.config[field] as string[])] : []
+    updateSelectedConfigField(
+      field,
+      current.filter((_, itemIndex) => itemIndex !== index)
+    )
   }
 
   const removeSelectedNode = () => {
@@ -1151,22 +1170,74 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   const renderVariableListSelector = (field: 'input_variable_ids' | 'output_variable_ids') => {
     const selectedIds = Array.isArray(selectedNodeData?.config[field]) ? (selectedNodeData?.config[field] as string[]) : []
+    const availableVariables = allVariables.filter((variable) => !selectedIds.includes(variable.id))
+    const fieldLabel = field === 'input_variable_ids' ? '输入变量' : '输出变量'
+    const testPrefix = field === 'input_variable_ids' ? 'workflow-input-variable' : 'workflow-output-variable'
 
     return (
       <div className="space-y-2">
         {allVariables.length === 0 && <div className="text-xs text-slate-500">请先在下方面板创建变量。</div>}
-        {allVariables.map((variable) => (
-          <label key={variable.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
-            <span className="min-w-0">
-              <span className="block font-medium text-slate-700">{variable.name}</span>
-              <span className="block text-xs text-slate-400">
-                {displayVariableScope(variable.scope)} / {displayVariableType(variable.type)}
-              </span>
-              {variable.description && <span className="mt-1 block text-xs text-slate-500">{variable.description}</span>}
-            </span>
-            <input type="checkbox" checked={selectedIds.includes(variable.id)} onChange={() => toggleSelectedVariable(field, variable.id)} />
-          </label>
-        ))}
+        {selectedIds.length === 0 && allVariables.length > 0 && (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            点击 + 选择变量管理中已维护的变量。
+          </div>
+        )}
+        {selectedIds.map((selectedId, index) => {
+          const selectedVariable = allVariables.find((variable) => variable.id === selectedId)
+          const rowOptions = selectedVariable ? [selectedVariable, ...availableVariables] : availableVariables
+          const selectValue = selectedVariable ? selectedVariable.id : ''
+
+          return (
+            <div key={`${field}_${index}_${selectedId || 'empty'}`} className="rounded-lg border border-slate-200 px-3 py-2">
+              <div className="flex items-start gap-2">
+                <select
+                  value={selectValue}
+                  onChange={(event) => updateSelectedVariable(field, index, event.target.value)}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                  data-testid={`${testPrefix}-select`}
+                  aria-label={`${fieldLabel}变量`}
+                >
+                  {!selectedVariable && <option value="">请选择变量</option>}
+                  {rowOptions.map((variable) => (
+                    <option key={variable.id} value={variable.id}>
+                      {variable.name}（{displayVariableScope(variable.scope)} / {displayVariableType(variable.type)}）
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-500 hover:bg-rose-50"
+                  onClick={() => removeSelectedVariable(field, index)}
+                  data-testid={`${testPrefix}-remove`}
+                  aria-label={`移除${fieldLabel}`}
+                >
+                  -
+                </button>
+              </div>
+              {selectedVariable && (
+                <div className="mt-2 text-xs text-slate-500">
+                  <span className="font-medium text-slate-600">{selectedVariable.name}</span>
+                  <span className="ml-2 text-slate-400">
+                    {displayVariableScope(selectedVariable.scope)} / {displayVariableType(selectedVariable.type)}
+                  </span>
+                  {selectedVariable.description && <div className="mt-1">{selectedVariable.description}</div>}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {allVariables.length > 0 && (
+          <button
+            type="button"
+            className="flex w-full items-center justify-center rounded-lg border border-dashed border-sky-300 px-3 py-2 text-sm font-semibold text-sky-600 hover:bg-sky-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300 disabled:hover:bg-transparent"
+            onClick={() => addSelectedVariable(field)}
+            disabled={availableVariables.length === 0}
+            data-testid={`${testPrefix}-add`}
+            aria-label={`增加${fieldLabel}`}
+          >
+            + 变量
+          </button>
+        )}
       </div>
     )
   }
