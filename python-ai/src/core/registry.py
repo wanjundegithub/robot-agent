@@ -193,10 +193,12 @@ class ExecutionRegistry:
     def _normalize_workflow_definition(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(workflow, dict):
             return workflow
-        if "graphs" not in workflow or "main_graph_id" not in workflow:
-            return workflow
-
         normalized = deepcopy(workflow)
+        variable_definitions = self._workflow_variable_definitions(normalized)
+        if "graphs" not in workflow or "main_graph_id" not in workflow:
+            self._enrich_start_nodes(normalized.get("nodes", {}), variable_definitions)
+            return normalized
+
         graphs = normalized.get("graphs", {})
         if not isinstance(graphs, dict):
             return normalized
@@ -215,8 +217,75 @@ class ExecutionRegistry:
                     node["type"] = "coordinator"
                 elif node_type == "subflow":
                     node["type"] = "sub_agent"
+                if str(node.get("type", "")).strip().lower() == "start":
+                    self._enrich_start_node(node, variable_definitions)
 
         return normalized
+
+    def _workflow_variable_definitions(self, workflow: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        variables = workflow.get("variables")
+        if not isinstance(variables, dict):
+            return {}
+        definitions: Dict[str, Dict[str, Any]] = {}
+        for scope_key in ("global", "temporary", "temp"):
+            values = variables.get(scope_key)
+            if isinstance(values, list):
+                for item in values:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    if name:
+                        definitions[name] = dict(item)
+            elif isinstance(values, dict):
+                for name, value in values.items():
+                    if isinstance(value, dict):
+                        definitions[str(name)] = {"name": str(name), **value}
+        return definitions
+
+    def _enrich_start_nodes(self, nodes: Any, variable_definitions: Dict[str, Dict[str, Any]]) -> None:
+        if not isinstance(nodes, dict):
+            return
+        for node in nodes.values():
+            if isinstance(node, dict) and str(node.get("type", "")).strip().lower() == "start":
+                self._enrich_start_node(node, variable_definitions)
+
+    def _enrich_start_node(self, node: Dict[str, Any], variable_definitions: Dict[str, Dict[str, Any]]) -> None:
+        config = node.setdefault("config", {})
+        if not isinstance(config, dict):
+            return
+        initial_variables = config.get("initial_variables", node.get("variables", {}))
+        if not isinstance(initial_variables, dict):
+            initial_variables = {}
+        existing = config.get("input_variables")
+        existing_items = existing if isinstance(existing, list) else []
+        existing_by_name = {
+            str(item.get("name")): item
+            for item in existing_items
+            if isinstance(item, dict) and item.get("name")
+        }
+        ordered_names: list[str] = []
+        for item in existing_items:
+            if isinstance(item, dict) and item.get("name") and str(item.get("name")) not in ordered_names:
+                ordered_names.append(str(item.get("name")))
+        for name in initial_variables.keys():
+            if str(name) not in ordered_names:
+                ordered_names.append(str(name))
+        if not ordered_names:
+            return
+        enriched = []
+        for name in ordered_names:
+            current = existing_by_name.get(name, {})
+            definition = variable_definitions.get(name, {})
+            item = {
+                "name": name,
+                "type": current.get("type") or definition.get("type") or "string",
+                "description": current.get("description") or definition.get("description") or definition.get("label") or "",
+                "default": current.get("default", initial_variables.get(name, "")),
+            }
+            if current.get("scope") or definition.get("scope"):
+                item["scope"] = current.get("scope") or definition.get("scope")
+            enriched.append(item)
+        config["input_variables"] = enriched
 
     def _count_nodes(self, workflow: Dict[str, Any]) -> int:
         if not isinstance(workflow, dict):

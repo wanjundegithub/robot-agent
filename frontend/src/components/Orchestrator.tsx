@@ -1891,6 +1891,7 @@ function normalizeNodeConfig(
       return {
         prompt: String(config.prompt || ''),
         initial_variables: mapVariableIdsToObject(config.input_variable_ids, variableNameMap, '', true),
+        input_variables: mapVariableIdsToDefinitions(config.input_variable_ids, variableNameMap),
       }
     case 'coordinator':
     case 'sub_agent': {
@@ -1957,6 +1958,20 @@ function mapVariableIdsToObject(
     .filter((item): item is VariableDefinition => Boolean(item))
     .map((item) => [item.name, (prefix ? `$${prefix}.${item.name}` : useEmptyDefault ? '' : item.name)])
   return Object.fromEntries(entries)
+}
+
+function mapVariableIdsToDefinitions(source: unknown, variableNameMap: Map<string, VariableDefinition>) {
+  const ids = Array.isArray(source) ? (source as string[]) : []
+  return ids
+    .map((id) => variableNameMap.get(id))
+    .filter((item): item is VariableDefinition => Boolean(item))
+    .map((item) => ({
+      name: item.name,
+      type: item.type,
+      scope: item.scope,
+      description: item.description,
+      default: '',
+    }))
 }
 
 function ensureObject(value: unknown) {

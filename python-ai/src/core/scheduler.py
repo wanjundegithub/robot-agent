@@ -109,7 +109,7 @@ class WorkflowScheduler:
 
         try:
             if self._is_graph_definition_v2(workflow):
-                graph_runtime_metrics = await self._run_graph_runtime_v2(runtime)
+                graph_runtime_metrics = await self._run_graph_runtime_v2(runtime, state_machine)
                 total_cost = float(graph_runtime_metrics.get("total_cost", 0.0))
                 total_input_tokens = int(graph_runtime_metrics.get("input_tokens", 0))
                 total_output_tokens = int(graph_runtime_metrics.get("output_tokens", 0))
@@ -300,50 +300,11 @@ class WorkflowScheduler:
                         "trace_id": context.trace_id,
                     })
 
-                if node_def["type"] == "form":
-                    runtime.last_form_definition = result.get("form_definition", {})
-                    state_machine.transition(TransitionEvent.WAIT_USER)
-                    self.logger.info(
-                        "scheduler.form.waiting sessionId=%s executionId=%s nodeId=%s formKeys=%s status=%s",
-                        context.session_id,
-                        context.execution_id,
-                        node_def["id"],
-                        sorted(runtime.last_form_definition.keys()) if isinstance(runtime.last_form_definition, dict) else [],
-                        context.status,
-                    )
-                    runtime.emit("form.requested", {
-                        "execution_id": context.execution_id,
-                        "session_id": context.session_id,
-                        "node_id": node_def["id"],
-                        "form_definition": runtime.last_form_definition,
-                        "trace_id": context.trace_id,
-                    })
-                    runtime.emit("execution.waiting_user", {
-                        "execution_id": context.execution_id,
-                        "session_id": context.session_id,
-                        "reason": "form_requested",
-                        "status": context.status,
-                        "trace_id": context.trace_id,
-                    })
-                    runtime.prepare_wait()
-                    form_data = await runtime.wait_for_resume()
-                    context.add_execution_variables(form_data)
-                    state_machine.transition(TransitionEvent.RESUME)
-                    self.logger.info(
-                        "scheduler.form.resumed sessionId=%s executionId=%s nodeId=%s formKeys=%s status=%s",
-                        context.session_id,
-                        context.execution_id,
-                        node_def["id"],
-                        sorted((form_data or {}).keys()),
-                        context.status,
-                    )
-                    runtime.emit("execution.resumed", {
-                        "execution_id": context.execution_id,
-                        "session_id": context.session_id,
-                        "status": context.status,
-                        "resume_type": "form_submit",
-                        "trace_id": context.trace_id,
-                    })
+                if self._requires_user_input(node_def, result):
+                    await self._wait_for_user_input(runtime, state_machine, node_def, result)
+                    if node_def.get("type") == "start":
+                        current_node_id = node_def["id"]
+                        continue
                 else:
                     if result.get("tool_called"):
                         called = result["tool_called"]
@@ -630,7 +591,74 @@ class WorkflowScheduler:
             "trace_id": context.trace_id,
         })
 
-    async def _run_graph_runtime_v2(self, runtime: ExecutionRuntime) -> Dict[str, Any]:
+    def _requires_user_input(self, node_def: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        if node_def.get("type") == "form":
+            return True
+        return result.get("status") == "suspended" and (
+            isinstance(result.get("form_definition"), dict) or isinstance(result.get("slot_request"), dict)
+        )
+
+    async def _wait_for_user_input(
+        self,
+        runtime: ExecutionRuntime,
+        state_machine: ExecutionStateMachine,
+        node_def: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        context = runtime.context
+        is_form_request = node_def.get("type") == "form" or isinstance(result.get("form_definition"), dict)
+        runtime.last_form_definition = result.get("form_definition", {}) if is_form_request else None
+        if state_machine.can_transition(TransitionEvent.WAIT_USER):
+            state_machine.transition(TransitionEvent.WAIT_USER)
+        wait_reason = "form_requested" if is_form_request else "start_input_variables_missing"
+        self.logger.info(
+            "scheduler.user_input.waiting sessionId=%s executionId=%s nodeId=%s nodeType=%s reason=%s formKeys=%s status=%s",
+            context.session_id,
+            context.execution_id,
+            node_def["id"],
+            node_def["type"],
+            wait_reason,
+            sorted(runtime.last_form_definition.keys()) if isinstance(runtime.last_form_definition, dict) else [],
+            context.status,
+        )
+        if is_form_request:
+            runtime.emit("form.requested", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "node_id": node_def["id"],
+                "form_definition": runtime.last_form_definition,
+                "trace_id": context.trace_id,
+            })
+        runtime.emit("execution.waiting_user", {
+            "execution_id": context.execution_id,
+            "session_id": context.session_id,
+            "reason": wait_reason,
+            "status": context.status,
+            "slot_request": result.get("slot_request") if not is_form_request else None,
+            "trace_id": context.trace_id,
+        })
+        runtime.prepare_wait()
+        form_data = await runtime.wait_for_resume()
+        context.add_execution_variables(form_data)
+        if state_machine.can_transition(TransitionEvent.RESUME):
+            state_machine.transition(TransitionEvent.RESUME)
+        self.logger.info(
+            "scheduler.user_input.resumed sessionId=%s executionId=%s nodeId=%s formKeys=%s status=%s",
+            context.session_id,
+            context.execution_id,
+            node_def["id"],
+            sorted((form_data or {}).keys()),
+            context.status,
+        )
+        runtime.emit("execution.resumed", {
+            "execution_id": context.execution_id,
+            "session_id": context.session_id,
+            "status": context.status,
+            "resume_type": "form_submit",
+            "trace_id": context.trace_id,
+        })
+
+    async def _run_graph_runtime_v2(self, runtime: ExecutionRuntime, state_machine: ExecutionStateMachine) -> Dict[str, Any]:
         context = runtime.context
         workflow = runtime.workflow
         total_cost = 0.0
@@ -896,6 +924,12 @@ class WorkflowScheduler:
                     "output": output if isinstance(output, dict) else {},
                     "trace_id": context.trace_id,
                 })
+
+            if self._requires_user_input(node_def, result):
+                await self._wait_for_user_input(runtime, state_machine, node_def, result)
+                if node_def.get("type") == "start":
+                    current_node_id = node_def["id"]
+                    continue
 
             enter_subgraph = result.get("enter_subgraph")
             if enter_subgraph:

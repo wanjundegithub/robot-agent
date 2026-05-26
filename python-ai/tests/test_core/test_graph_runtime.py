@@ -35,6 +35,214 @@ def reset_runtime_protection():
 
 
 @pytest.mark.asyncio
+async def test_v2_start_node_missing_declared_input_waits_and_resumes():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {
+                            "prompt": "缺少出行城市时需要向用户询问。",
+                            "initial_variables": {"city": "", "priority": "普通"},
+                            "input_variables": [
+                                {"name": "city", "type": "string", "description": "用户要去的城市", "default": ""},
+                                {"name": "priority", "type": "string", "description": "服务优先级", "default": "普通"},
+                            ],
+                        },
+                    },
+                    "message": {"id": "message", "type": "message", "config": {"message_text": "继续执行"}},
+                    "end": {"id": "end", "type": "end", "config": {"output_format": {"city": "execution.city"}}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "message"},
+                    {"id": "e2", "source": "message", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-start-input-wait",
+        "session_id": "session-v2-start-input-wait",
+        "workflow_code": "travel",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "input_variables": {"user_message": "帮我安排一下"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.context.status == "waiting_user":
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({"city": "上海"})
+    await run_task
+    events = await _collect_events(runtime)
+
+    assert runtime.context.status == "completed"
+    assert runtime.context.execution_variables["city"] == "上海"
+    assert runtime.context.execution_variables["priority"] == "普通"
+    form_events = [payload for event, payload in events if event == "form.requested"]
+    message_events = [payload for event, payload in events if event == "message.delta"]
+    waiting_events = [payload for event, payload in events if event == "execution.waiting_user"]
+    assert form_events == []
+    assert message_events[0]["content"] == "请提供用户要去的城市。"
+    assert "city" not in message_events[0]["content"]
+    assert waiting_events[0]["reason"] == "start_input_variables_missing"
+
+
+@pytest.mark.asyncio
+async def test_v2_start_node_extracts_slot_from_chat_reply_after_wait(monkeypatch):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        payload = json.loads(kwargs["user_prompt"])
+        calls.append(payload["user_message"])
+        if "上海" in payload["user_message"]:
+            return json.dumps({"variables": {"city": "上海"}}, ensure_ascii=False)
+        return json.dumps({"variables": {}, "missing_fields": ["city"]}, ensure_ascii=False)
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {
+                            "prompt": "缺少出行城市时需要向用户询问。",
+                            "initial_variables": {"city": ""},
+                            "input_variables": [
+                                {"name": "city", "type": "string", "description": "用户要去的城市", "default": ""},
+                            ],
+                        },
+                    },
+                    "message": {"id": "message", "type": "message", "config": {"message_text": "继续执行"}},
+                    "end": {"id": "end", "type": "end", "config": {}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "message"},
+                    {"id": "e2", "source": "message", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-start-chat-reply",
+        "session_id": "session-v2-start-chat-reply",
+        "workflow_code": "travel",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "workflow_config": {"llm_defaults": {"model_code": "slot-model"}},
+        "provider_configs": [{"provider_code": "test-provider"}],
+        "model_records": [{"model_code": "slot-model", "provider_code": "test-provider"}],
+        "input_variables": {"user_message": "帮我安排一下"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.context.status == "waiting_user":
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({"user_message": "我的目的地是上海"})
+    await run_task
+
+    assert runtime.context.status == "completed"
+    assert runtime.context.execution_variables["city"] == "上海"
+    assert calls == ["帮我安排一下", "我的目的地是上海"]
+
+
+@pytest.mark.asyncio
+async def test_v2_start_node_uses_workflow_variable_descriptions_for_slot_question():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "variables": {
+            "global": [
+                {"name": "id", "type": "string", "description": "您的身份证号"},
+                {"name": "room_type", "type": "string", "description": "房间类型"},
+                {"name": "startDate", "type": "date", "description": "入住日期"},
+                {"name": "departmentDate", "type": "date", "description": "离开日期"},
+            ]
+        },
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {
+                            "prompt": "收集酒店预订信息。",
+                            "initial_variables": {
+                                "id": "",
+                                "room_type": "",
+                                "startDate": "",
+                                "departmentDate": "",
+                            },
+                        },
+                    },
+                    "end": {"id": "end", "type": "end", "config": {}},
+                },
+                "edges": [{"id": "e1", "source": "start", "target": "end"}],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-start-description-question",
+        "session_id": "session-v2-start-description-question",
+        "workflow_code": "hotel",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "input_variables": {"user_message": "我要订酒店"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.context.status == "waiting_user":
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({
+        "id": "310101199001011234",
+        "room_type": "大床房",
+        "startDate": "2026-06-01",
+        "departmentDate": "2026-06-03",
+    })
+    await run_task
+    events = await _collect_events(runtime)
+
+    message_events = [payload for event, payload in events if event == "message.delta"]
+    question = message_events[0]["content"]
+    assert "您的身份证号" in question
+    assert "房间类型" in question
+    assert "入住日期" in question
+    assert "离开日期" in question
+    assert "room_type" not in question
+    assert "startDate" not in question
+    assert "departmentDate" not in question
+
+
+@pytest.mark.asyncio
 async def test_v2_sub_agent_enters_subgraph_and_returns_to_parent():
     registry = ExecutionRegistry()
     scheduler = WorkflowScheduler()

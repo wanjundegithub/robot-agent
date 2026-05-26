@@ -210,6 +210,9 @@ public class ExecutionService {
         }
 
         Execution activeExecution = resolveActiveExecution(session);
+        if (activeExecution != null && activeExecution.getStatus() == ExecutionStatus.WAITING_USER) {
+            return resumeWaitingExecutionFromChat(session, activeExecution, request);
+        }
         RoutingDecision forcedRoutingDecision = candidateActionResult == null ? null : candidateActionResult.routingDecision();
         boolean explicitWorkflowExecution = forcedRoutingDecision != null
                 || (request.getWorkflowCode() != null
@@ -532,6 +535,37 @@ public class ExecutionService {
         log.info("execution.started executionId={} sessionId={} workflowCode={} workflowVersion={}", saved.getId(), session.getId(), saved.getWorkflowCode(), saved.getWorkflowVersion());
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.start", "execution", saved.getId(), routingDecision, ApplicationConstants.HTTP_STATUS_OK);
         return buildSendMessageResponse(saved, routingDecision, activeExecution, experimentAssignment);
+    }
+
+    private SendMessageResponse resumeWaitingExecutionFromChat(
+            Session session,
+            Execution execution,
+            SendMessageRequest request
+    ) {
+        log.info(
+                "execution.waiting_user.chat_resume sessionId={} executionId={} contentPreview={}",
+                session.getId(),
+                execution.getId(),
+                preview(request == null ? null : request.getContent())
+        );
+        Map<String, Object> resumeData = new LinkedHashMap<>();
+        resumeData.put("user_message", request == null ? null : request.getContent());
+        try {
+            pythonClient.submitSlotAnswer(execution.getId(), resumeData).block(Duration.ofSeconds(5));
+            execution.setStatus(ExecutionStatus.RUNNING);
+            execution.setError(null);
+            executionRepository.save(execution);
+        } catch (RuntimeException error) {
+            log.error("execution.waiting_user.chat_resume.failed executionId={} message={}", execution.getId(), error.getMessage(), error);
+            execution.setStatus(ExecutionStatus.FAILED);
+            execution.setError(error.getMessage());
+            executionRepository.save(execution);
+            throw error;
+        }
+        SendMessageResponse response = buildSendMessageResponse(execution, null, null);
+        response.setStatus("running");
+        response.setRouteDecision("resume_waiting_user");
+        return response;
     }
 
     private CandidateActionResult handleIntentCandidateAction(

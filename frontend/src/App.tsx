@@ -149,6 +149,7 @@ const App: React.FC = () => {
   const activeSocketBindingKeyRef = useRef<string | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
   const reconnectAttemptsRef = useRef(0)
+  const streamMessageIdsRef = useRef(new Map<string, string>())
   const pendingRequestsRef = useRef(
     new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeoutId: number }>()
   )
@@ -711,19 +712,25 @@ const App: React.FC = () => {
   }
 
   const finalizeStreamingMessage = (activeExecutionId: string) => {
+    const messageId = streamMessageIdsRef.current.get(activeExecutionId) || `stream_${activeExecutionId}`
     setMessages((prev) =>
       prev.map((message) =>
-        message.id === `stream_${activeExecutionId}`
+        message.id === messageId
           ? { ...message, streaming: false }
           : message
       )
     )
+    streamMessageIdsRef.current.delete(activeExecutionId)
   }
 
   const handleMessageDelta = (payload: MessageDeltaEnvelope) => {
     if (payload.session_id && payload.session_id !== sessionId) return
 
-    const messageId = `stream_${payload.execution_id}`
+    const existingMessageId = streamMessageIdsRef.current.get(payload.execution_id)
+    const messageId = existingMessageId || `stream_${payload.execution_id}_${createId('part')}`
+    if (!existingMessageId) {
+      streamMessageIdsRef.current.set(payload.execution_id, messageId)
+    }
     setMessages((prev) => {
       const index = prev.findIndex((message) => message.id === messageId)
       if (index >= 0) {
@@ -750,6 +757,7 @@ const App: React.FC = () => {
     })
 
     if (payload.is_complete) {
+      streamMessageIdsRef.current.delete(payload.execution_id)
       setIsLoading(false)
       setExecutionStatus('completed')
     }
@@ -824,6 +832,12 @@ const App: React.FC = () => {
         setPendingForm({ executionId: payload.execution_id, form: definition })
         setExecutionStatus('waiting_user')
       }
+    }
+
+    if (payload.event_type === 'execution.waiting_user') {
+      finalizeStreamingMessage(payload.execution_id)
+      setExecutionStatus('waiting_user')
+      setIsLoading(false)
     }
 
     if (payload.event_type === 'execution.switch_requested') {
@@ -1199,10 +1213,13 @@ const App: React.FC = () => {
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingMessageId && response.execution_id
-            ? { ...message, id: `stream_${response.execution_id}` }
+            ? { ...message, id: `stream_${response.execution_id}_${messageId}` }
             : message
         )
       )
+      if (response.execution_id) {
+        streamMessageIdsRef.current.set(response.execution_id, `stream_${response.execution_id}_${messageId}`)
+      }
       markSessionPersisted(activeSessionId)
       await refreshExecutions(activeSessionId)
       await refreshSessionDetail(activeSessionId)

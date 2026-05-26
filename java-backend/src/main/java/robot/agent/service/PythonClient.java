@@ -74,6 +74,14 @@ public class PythonClient {
                 .doOnError(error -> log.error("python.form.submit.failed executionId={} message={}", executionId, error.getMessage(), error));
     }
 
+    public Mono<Void> submitSlotAnswer(String executionId, Map<String, Object> formData) {
+        FormSubmitRequest request = new FormSubmitRequest();
+        request.setSubmitId("slot_answer_" + System.currentTimeMillis());
+        request.setFormData(formData);
+        log.info("python.slot.submit executionId={} fieldKeys={}", executionId, formData == null ? List.of() : formData.keySet());
+        return submitForm(executionId, request);
+    }
+
     public Mono<Map<String, Object>> suspendExecution(String executionId, String reason) {
         log.info("python.execution.suspend executionId={} reason={}", executionId, reason);
         return webClient.post()
