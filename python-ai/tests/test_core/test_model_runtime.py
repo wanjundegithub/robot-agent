@@ -10,6 +10,43 @@ from src.core.model_runtime import (
 )
 
 
+class _FakeLineIterator:
+    def __init__(self, lines):
+        self._lines = iter(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._lines)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines):
+        self.lines = lines
+        self.status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def aiter_lines(self):
+        return _FakeLineIterator(self.lines)
+
+
+class _FakeStreamContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 @pytest.mark.asyncio
 async def test_execute_model_completion_calls_openai_compatible_provider():
     provider_configs = {
@@ -62,6 +99,97 @@ async def test_execute_model_completion_calls_openai_compatible_provider():
     assert body["temperature"] == 0.2
     assert body["top_p"] == 0.9
     assert body["max_tokens"] == 256
+
+
+@pytest.mark.asyncio
+async def test_execute_model_completion_streams_openai_compatible_delta_chunks():
+    provider_configs = {
+        "openai-compatible-prod": {
+            "provider_code": "openai-compatible-prod",
+            "provider_type": "openai_compatible",
+            "base_url": "https://llm.example.com/v1",
+        }
+    }
+    model_records = {
+        "general-chat-v1": {
+            "model_code": "general-chat-v1",
+            "provider_code": "openai-compatible-prod",
+            "upstream_model_code": "qwen-plus",
+        }
+    }
+    streamed = []
+
+    with patch("src.core.model_runtime.httpx.AsyncClient") as mock_client:
+        stream_response = _FakeStreamResponse([
+            'data: {"choices":[{"delta":{"content":"你好"}}]}',
+            'data: {"choices":[{"delta":{"content":"，世界"}}]}',
+            'data: [DONE]',
+        ])
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.stream = Mock(return_value=_FakeStreamContext(stream_response))
+        mock_client.return_value = mock_instance
+
+        result = await execute_model_completion(
+            model_code="general-chat-v1",
+            provider_configs=provider_configs,
+            model_records=model_records,
+            system_prompt="system",
+            user_prompt="user",
+            stream_callback=lambda chunk, is_complete=False: streamed.append((chunk, is_complete)),
+        )
+
+    assert result == "你好，世界"
+    assert streamed == [("你好", False), ("，世界", False), ("", True)]
+    body = mock_instance.stream.call_args.kwargs["json"]
+    assert body["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_model_completion_streams_doubao_openai_compatible_delta_chunks():
+    provider_configs = {
+        "doubao-prod": {
+            "provider_code": "doubao-prod",
+            "provider_type": "doubao",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        }
+    }
+    model_records = {
+        "doubao-chat": {
+            "model_code": "doubao-chat",
+            "provider_code": "doubao-prod",
+            "upstream_model_code": "doubao-seed",
+        }
+    }
+    streamed = []
+
+    with patch("src.core.model_runtime.httpx.AsyncClient") as mock_client:
+        stream_response = _FakeStreamResponse([
+            'data: {"choices":[{"delta":{"content":"\u8c46\u5305"}}]}',
+            'data: {"choices":[{"delta":{"content":"\u6d41\u5f0f"}}]}',
+            'data: [DONE]',
+        ])
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.stream = Mock(return_value=_FakeStreamContext(stream_response))
+        mock_client.return_value = mock_instance
+
+        result = await execute_model_completion(
+            model_code="doubao-chat",
+            provider_configs=provider_configs,
+            model_records=model_records,
+            system_prompt="system",
+            user_prompt="user",
+            stream_callback=lambda chunk, is_complete=False: streamed.append((chunk, is_complete)),
+        )
+
+    assert result == "\u8c46\u5305\u6d41\u5f0f"
+    assert streamed == [("\u8c46\u5305", False), ("\u6d41\u5f0f", False), ("", True)]
+    body = mock_instance.stream.call_args.kwargs["json"]
+    assert body["stream"] is True
+    mock_instance.post.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-import React, { useRef } from 'react'
+import React, { useRef, useState } from 'react'
 import { Message } from '../types'
 
 interface MessageListProps {
@@ -8,6 +8,7 @@ interface MessageListProps {
 
 const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(() => new Set())
   const visibleMessages = messages.filter((message) => message.type !== 'system')
 
   React.useEffect(() => {
@@ -21,15 +22,30 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
     })
   }
 
+  const toggleProcess = (messageId: string) => {
+    setExpandedProcessIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(messageId)) {
+        next.delete(messageId)
+      } else {
+        next.add(messageId)
+      }
+      return next
+    })
+  }
+
   const renderMessage = (message: Message) => {
     const isUser = message.type === 'user'
     const isAI = message.type === 'ai'
     const isSystem = message.type === 'system'
     const isError = message.type === 'error'
+    const processSteps = isAI ? message.processSteps ?? [] : []
+    const isProcessExpanded = expandedProcessIds.has(message.id)
 
     return (
       <div
         key={message.id}
+        data-testid={`message-${message.type}`}
         className={`flex mb-4 ${isUser ? 'justify-end' : 'justify-start'}`}
       >
         <div
@@ -44,16 +60,45 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
           }`}
         >
           <div className="flex items-center gap-2 mb-1">
-            {isUser && <span className="text-xs opacity-75">用户</span>}
-            {isAI && <span className="text-xs opacity-75">机器人</span>}
-            {isSystem && <span className="text-xs opacity-75">系统</span>}
-            {isError && <span className="text-xs opacity-75">错误</span>}
+            {isUser && <span className="text-xs opacity-75">{'\u7528\u6237'}</span>}
+            {isAI && <span className="text-xs opacity-75">{'\u673a\u5668\u4eba'}</span>}
+            {isSystem && <span className="text-xs opacity-75">{'\u7cfb\u7edf'}</span>}
+            {isError && <span className="text-xs opacity-75">{'\u9519\u8bef'}</span>}
             <span className="text-xs opacity-60">{formatTime(message.timestamp)}</span>
           </div>
-          <p className={`whitespace-pre-wrap break-words ${message.streaming ? 'opacity-80 italic' : ''}`}>
-            {message.content}
-            {message.streaming && <span className="inline-block animate-pulse ml-1">...</span>}
-          </p>
+          {processSteps.length > 0 && (
+            <div className="mb-2 rounded border border-gray-200 bg-white/70 text-xs text-gray-600">
+              <button
+                type="button"
+                data-testid="execution-process-toggle"
+                className="flex w-full items-center justify-between gap-3 px-2 py-1 text-left hover:bg-gray-50"
+                onClick={() => toggleProcess(message.id)}
+                aria-expanded={isProcessExpanded}
+              >
+                <span>{'\u6267\u884c\u8fc7\u7a0b'}</span>
+                <span className="opacity-70">{isProcessExpanded ? '\u6536\u8d77' : `${processSteps.length} \u6b65`}</span>
+              </button>
+              {isProcessExpanded && (
+                <ol data-testid="execution-process-panel" className="space-y-1 border-t border-gray-200 px-3 py-2">
+                  {processSteps.map((step) => (
+                    <li key={step.id} className="flex gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 flex-none rounded-full bg-blue-400"></span>
+                      <span>
+                        {step.label}
+                        {step.detail && <span className="ml-1 opacity-70">{step.detail}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
+          {(message.content || message.streaming) && (
+            <p className={`whitespace-pre-wrap break-words ${message.streaming && message.content ? 'opacity-80 italic' : ''}`}>
+              {message.content}
+              {message.streaming && message.content && <span className="inline-block animate-pulse ml-1">...</span>}
+            </p>
+          )}
         </div>
       </div>
     )

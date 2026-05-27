@@ -35,6 +35,47 @@ def reset_runtime_protection():
 
 
 @pytest.mark.asyncio
+async def test_replay_snapshot_filters_internal_streaming_emitter():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "message_1",
+                "nodes": {
+                    "message_1": {"id": "message_1", "type": "message", "config": {"message_text": "hello"}},
+                    "end": {"id": "end", "type": "end", "config": {"output_format": {"done": "literal.ok"}}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "message_1", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-snapshot-internal-filter",
+        "session_id": "session-snapshot-internal-filter",
+        "workflow_code": "snapshot_filter",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+    })
+    await scheduler.run(runtime)
+    events = await _collect_events(runtime)
+
+    assert runtime.context.status == "completed"
+    assert not any(event == "execution.failed" for event, _ in events)
+    snapshot_events = [payload for event, payload in events if event == "replay.snapshot_ready"]
+    assert len(snapshot_events) == 1
+    snapshot = snapshot_events[0]["snapshot"]
+    assert "_emit_message_delta" not in snapshot["variables"]
+
+
+@pytest.mark.asyncio
 async def test_v2_start_node_missing_declared_input_waits_and_resumes():
     registry = ExecutionRegistry()
     scheduler = WorkflowScheduler()
@@ -240,6 +281,49 @@ async def test_v2_start_node_uses_workflow_variable_descriptions_for_slot_questi
     assert "room_type" not in question
     assert "startDate" not in question
     assert "departmentDate" not in question
+
+
+@pytest.mark.asyncio
+async def test_v2_long_message_node_is_chunked_into_message_deltas():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    long_text = "这是一段很长的机器人输出。" * 80
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {"id": "start", "type": "start", "config": {}},
+                    "message": {"id": "message", "type": "message", "config": {"message_text": long_text}},
+                    "end": {"id": "end", "type": "end", "config": {}},
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "message"},
+                    {"id": "e2", "source": "message", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-long-message",
+        "session_id": "session-v2-long-message",
+        "workflow_code": "long_message",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "input_variables": {"user_message": "开始"},
+    })
+    await scheduler.run(runtime)
+    events = await _collect_events(runtime)
+
+    message_events = [payload for event, payload in events if event == "message.delta"]
+    assert len(message_events) > 1
+    assert "".join(payload["content"] for payload in message_events) == long_text
+    assert message_events[-1]["is_complete"] is True
 
 
 @pytest.mark.asyncio

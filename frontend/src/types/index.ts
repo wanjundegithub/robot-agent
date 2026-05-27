@@ -1,5 +1,12 @@
 export type MessageType = 'user' | 'ai' | 'system' | 'error'
 
+export interface ExecutionProcessStep {
+  id: string
+  label: string
+  detail?: string
+  timestamp: string
+}
+
 export interface Message {
   id: string
   type: MessageType
@@ -7,6 +14,7 @@ export interface Message {
   timestamp: string
   streaming?: boolean
   executionId?: string
+  processSteps?: ExecutionProcessStep[]
 }
 
 export interface IntentCandidate {

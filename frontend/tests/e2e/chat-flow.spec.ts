@@ -233,6 +233,90 @@ test.beforeEach(async ({ page }) => {
           return
         }
 
+        if (payload.payload.content === 'Show execution process and stream reply') {
+          window
+            .fetch(`/api/sessions/${payload.session_id}/messages`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message_id: payload.payload.message_id ?? `msg-${Date.now()}`,
+                content: payload.payload.content,
+              }),
+            })
+            .catch(() => {})
+
+          const executionId = `exec-${payload.session_id}`
+          const sendSocketMessage = (body: Record<string, unknown>) => {
+            this.onmessage?.(
+              new MessageEvent('message', {
+                data: JSON.stringify(body),
+              })
+            )
+          }
+
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'event',
+              event_type: 'routing.decided',
+              execution_id: executionId,
+              session_id: payload.session_id,
+              data: { route_decision: 'workflow_hotel' },
+            })
+          }, 0)
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'event',
+              event_type: 'node.started',
+              execution_id: executionId,
+              session_id: payload.session_id,
+              data: { node_id: 'start_1', node_type: 'start' },
+            })
+          }, 5)
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'event',
+              event_type: 'node.started',
+              execution_id: executionId,
+              session_id: payload.session_id,
+              data: { node_id: 'answer_1', node_type: 'llm' },
+            })
+          }, 10)
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'message_delta',
+              execution_id: executionId,
+              session_id: payload.session_id,
+              content: 'First streamed ',
+              is_complete: false,
+            })
+          }, 15)
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'message_delta',
+              execution_id: executionId,
+              session_id: payload.session_id,
+              content: 'answer.',
+              is_complete: true,
+            })
+          }, 20)
+          window.setTimeout(() => {
+            sendSocketMessage({
+              type: 'ack',
+              request_id: payload.request_id,
+              action: 'chat.send',
+              status: 'ok',
+              data: {
+                session_id: payload.session_id,
+                execution_id: executionId,
+                workflow_code: 'test-workflow',
+                workflow_version: 'v1',
+                status: 'completed',
+              },
+            })
+          }, 25)
+          return
+        }
+
         if (payload.payload.content === 'This message gets a reply before the socket disconnects') {
           window
             .fetch(`/api/sessions/${payload.session_id}/messages`, {
@@ -677,6 +761,45 @@ test.describe('session history panel', () => {
     await expect(panel.getByTestId('session-history-item-session-current-2')).toContainText(
       'Keep this session in his...'
     )
+  })
+
+
+  test('renders user and assistant labels without question marks', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
+    await page.getByTestId('chat-input').fill('Label sanity check')
+    await page.getByTestId('chat-send').click()
+
+    const messageList = page.getByTestId('message-list')
+    await expect(messageList.getByTestId('message-user').first()).toContainText('\u7528\u6237')
+    await expect(messageList.getByTestId('message-ai').first()).toContainText('\u673a\u5668\u4eba')
+    await expect(messageList.getByText('???')).toHaveCount(0)
+  })
+
+  test('shows execution process collapsed and streams answer into current AI message', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
+    await page.getByTestId('chat-input').fill('Show execution process and stream reply')
+    await page.getByTestId('chat-send').click()
+
+    const messageList = page.getByTestId('message-list')
+    const assistantMessage = messageList.getByTestId('message-ai').filter({ hasText: 'First streamed answer.' })
+    await expect(assistantMessage).toHaveCount(1)
+    await expect(assistantMessage).toContainText('First streamed answer.')
+    await expect(assistantMessage.getByText('\u6b63\u5728\u8bc6\u522b\u610f\u56fe')).toHaveCount(0)
+
+    const processToggle = assistantMessage.getByTestId('execution-process-toggle')
+    await expect(processToggle).toContainText('\u6267\u884c\u8fc7\u7a0b')
+    await processToggle.click()
+
+    const processPanel = assistantMessage.getByTestId('execution-process-panel')
+    await expect(processPanel).toContainText('\u6b63\u5728\u8bc6\u522b\u610f\u56fe')
+    await expect(processPanel).toContainText('\u6b63\u5728\u68c0\u67e5\u5f00\u59cb\u8282\u70b9\u53d8\u91cf')
+    await expect(processPanel).toContainText('\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d')
+    await expect(messageList.getByTestId('message-ai')).toHaveCount(1)
+    await expect(messageList.getByTestId('message-ai').filter({ hasText: '1 \u6b65' })).toHaveCount(0)
   })
 
   test('keeps user messages visible when the initial empty history request resolves after send', async ({ page }) => {

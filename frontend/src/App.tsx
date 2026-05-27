@@ -150,6 +150,7 @@ const App: React.FC = () => {
   const reconnectTimerRef = useRef<number | null>(null)
   const reconnectAttemptsRef = useRef(0)
   const streamMessageIdsRef = useRef(new Map<string, string>())
+  const pendingStreamMessageIdsRef = useRef<string[]>([])
   const pendingRequestsRef = useRef(
     new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeoutId: number }>()
   )
@@ -212,6 +213,7 @@ const App: React.FC = () => {
     setPendingIntentCandidate(null)
     setResumeOffer(null)
     setPendingForm(null)
+    pendingStreamMessageIdsRef.current = []
     setIsLoading(false)
   }, [])
 
@@ -297,7 +299,12 @@ const App: React.FC = () => {
       } else {
         removePersistedSession(activeSessionId)
       }
-      setMessages(normalizedHistory)
+      setMessages((prev) => {
+        if (!hasUserMessage(normalizedHistory) && hasUserMessage(prev)) {
+          return prev
+        }
+        return normalizedHistory
+      })
     } catch (error) {
       console.error('Failed to load session messages:', error)
       cacheSessionMessages(activeSessionId, [])
@@ -711,6 +718,104 @@ const App: React.FC = () => {
     appendSystemMessage(`${title}: ${detail}`)
   }
 
+  const removePendingStreamingMessage = (pendingMessageId: string) => {
+    pendingStreamMessageIdsRef.current = pendingStreamMessageIdsRef.current.filter((id) => id !== pendingMessageId)
+    setMessages((prev) =>
+      prev.filter((message) => (
+        message.id !== pendingMessageId ||
+        message.content.trim().length > 0 ||
+        Boolean(message.executionId)
+      ))
+    )
+  }
+
+  const summarizeExecutionEvent = (payload: ExecutionEventEnvelope): string | null => {
+    const data = payload.data || {}
+    const nodeType = String((data as any).node_type || '').toLowerCase()
+    switch (payload.event_type) {
+      case 'routing.decided':
+        return '\u6b63\u5728\u8bc6\u522b\u610f\u56fe'
+      case 'node.started':
+        if (nodeType === 'start') return '\u6b63\u5728\u68c0\u67e5\u5f00\u59cb\u8282\u70b9\u53d8\u91cf'
+        if (nodeType === 'llm') return '\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d'
+        if (nodeType === 'tool') return '\u6b63\u5728\u51c6\u5907\u8c03\u7528\u5de5\u5177'
+        return '\u6b63\u5728\u8bc6\u522b\u610f\u56fe'
+      case 'tool.called':
+        return '\u6b63\u5728\u8c03\u7528\u5de5\u5177'
+      case 'execution.waiting_user':
+        return '\u6b63\u5728\u7b49\u5f85\u7528\u6237\u8865\u5145\u4fe1\u606f'
+      default:
+        return null
+    }
+  }
+
+  const resolveStreamingMessageId = (activeExecutionId: string, createWhenMissing: boolean): string | null => {
+    let existingMessageId = streamMessageIdsRef.current.get(activeExecutionId)
+    if (!existingMessageId) {
+      existingMessageId = pendingStreamMessageIdsRef.current.shift()
+      if (existingMessageId) {
+        streamMessageIdsRef.current.set(activeExecutionId, existingMessageId)
+      }
+    }
+    if (!existingMessageId && !createWhenMissing) {
+      return null
+    }
+    const messageId = existingMessageId || `stream_${activeExecutionId}_${createId('part')}`
+    if (!existingMessageId) {
+      streamMessageIdsRef.current.set(activeExecutionId, messageId)
+    }
+    setMessages((prev) => {
+      if (prev.some((message) => message.id === messageId)) {
+        return prev.map((message) =>
+          message.id === messageId && !message.executionId
+            ? { ...message, executionId: activeExecutionId }
+            : message
+        )
+      }
+      return [
+        ...prev,
+        {
+          id: messageId,
+          type: 'ai',
+          content: '',
+          streaming: true,
+          executionId: activeExecutionId,
+          timestamp: new Date().toISOString(),
+        },
+      ]
+    })
+    return messageId
+  }
+
+  const ensureStreamingMessage = (activeExecutionId: string): string => (
+    resolveStreamingMessageId(activeExecutionId, true) as string
+  )
+
+  const appendProcessStep = (activeExecutionId: string, label: string, detail?: string) => {
+    const messageId = resolveStreamingMessageId(activeExecutionId, false)
+    if (!messageId) return
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== messageId) return message
+        const processSteps = message.processSteps ?? []
+        const lastStep = processSteps[processSteps.length - 1]
+        if (lastStep?.label === label && lastStep?.detail === detail) return message
+        return {
+          ...message,
+          processSteps: [
+            ...processSteps,
+            {
+              id: createId('step'),
+              label,
+              detail,
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }
+      })
+    )
+  }
+
   const finalizeStreamingMessage = (activeExecutionId: string) => {
     const messageId = streamMessageIdsRef.current.get(activeExecutionId) || `stream_${activeExecutionId}`
     setMessages((prev) =>
@@ -726,11 +831,7 @@ const App: React.FC = () => {
   const handleMessageDelta = (payload: MessageDeltaEnvelope) => {
     if (payload.session_id && payload.session_id !== sessionId) return
 
-    const existingMessageId = streamMessageIdsRef.current.get(payload.execution_id)
-    const messageId = existingMessageId || `stream_${payload.execution_id}_${createId('part')}`
-    if (!existingMessageId) {
-      streamMessageIdsRef.current.set(payload.execution_id, messageId)
-    }
+    const messageId = ensureStreamingMessage(payload.execution_id)
     setMessages((prev) => {
       const index = prev.findIndex((message) => message.id === messageId)
       if (index >= 0) {
@@ -751,6 +852,7 @@ const App: React.FC = () => {
           type: 'ai',
           content: payload.content,
           streaming: !payload.is_complete,
+          executionId: payload.execution_id,
           timestamp: new Date().toISOString(),
         },
       ]
@@ -811,6 +913,10 @@ const App: React.FC = () => {
     }
 
     setEvents((prev) => [event, ...prev])
+    const processLabel = summarizeExecutionEvent(payload)
+    if (processLabel) {
+      appendProcessStep(payload.execution_id, processLabel)
+    }
 
     if (
       payload.event_type === 'execution.started' ||
@@ -1049,9 +1155,17 @@ const App: React.FC = () => {
           type: 'ai',
           content: '',
           streaming: true,
+          processSteps: [
+            {
+              id: createId('step'),
+              label: '\u6b63\u5728\u8bc6\u522b\u610f\u56fe',
+              timestamp: new Date().toISOString(),
+            },
+          ],
           timestamp: new Date().toISOString(),
         },
       ])
+      pendingStreamMessageIdsRef.current.push(pendingMessageId)
     }
 
     setIsLoading(true)
@@ -1105,7 +1219,7 @@ const App: React.FC = () => {
       })
 
       if (response.status === 'permission_denied') {
-        setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+        removePendingStreamingMessage(pendingMessageId)
         setExecutionStatus('permission_denied')
         setPendingConfirmation(null)
         setPendingIntentCandidate(null)
@@ -1115,7 +1229,7 @@ const App: React.FC = () => {
       }
 
       if (response.status === 'confirmation_required') {
-        setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+        removePendingStreamingMessage(pendingMessageId)
         setPendingConfirmation({ content, messageId, response })
         setPendingIntentCandidate(null)
         setExecutionStatus('confirmation_required')
@@ -1130,7 +1244,7 @@ const App: React.FC = () => {
       if (response.status === 'confirmation_cancelled') {
         setPendingConfirmation(null)
         setPendingIntentCandidate(null)
-        setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+        removePendingStreamingMessage(pendingMessageId)
         setExecutionStatus('idle')
         pushGovernanceNotice('已取消确认', '敏感操作已取消，流程不会继续执行。')
         appendSystemMessage('敏感操作已取消。')
@@ -1138,7 +1252,7 @@ const App: React.FC = () => {
       }
 
       if (response.status === 'rate_limited' || response.status === 'degraded') {
-        setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+        removePendingStreamingMessage(pendingMessageId)
         setExecutionStatus(response.status)
         setPendingConfirmation(null)
         setPendingIntentCandidate(null)
@@ -1152,7 +1266,7 @@ const App: React.FC = () => {
       }
 
       if (response.status === 'switch_required') {
-        setMessages((prev) => prev.filter((message) => message.id !== pendingMessageId))
+        removePendingStreamingMessage(pendingMessageId)
         setPendingSwitch({ content, messageId, response })
         setPendingIntentCandidate(null)
         setExecutionStatus('switch_required')
@@ -1164,7 +1278,11 @@ const App: React.FC = () => {
 
       if (response.status === 'clarification_required') {
         setMessages((prev) => {
-          const next = prev.filter((message) => message.id !== pendingMessageId)
+          const next = prev.filter((message) => (
+            message.id !== pendingMessageId ||
+            message.content.trim().length > 0 ||
+            Boolean(message.executionId)
+          ))
           const clarification = (response.clarification_question || '').trim()
           if (!clarification) {
             return next
@@ -1213,12 +1331,13 @@ const App: React.FC = () => {
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingMessageId && response.execution_id
-            ? { ...message, id: `stream_${response.execution_id}_${messageId}` }
+            ? { ...message, id: `stream_${response.execution_id}_${messageId}`, executionId: response.execution_id }
             : message
         )
       )
       if (response.execution_id) {
         streamMessageIdsRef.current.set(response.execution_id, `stream_${response.execution_id}_${messageId}`)
+        pendingStreamMessageIdsRef.current = pendingStreamMessageIdsRef.current.filter((id) => id !== pendingMessageId)
       }
       markSessionPersisted(activeSessionId)
       await refreshExecutions(activeSessionId)
@@ -1233,9 +1352,7 @@ const App: React.FC = () => {
         active_socket_session_id: activeSocketSessionIdRef.current,
         active_binding_key: activeSocketBindingKeyRef.current,
       })
-      setMessages((prev) =>
-        prev.filter((message) => message.id !== pendingMessageId)
-      )
+      removePendingStreamingMessage(pendingMessageId)
       if (activeSessionId) {
         cacheSessionMessages(activeSessionId, baselineMessages)
       }

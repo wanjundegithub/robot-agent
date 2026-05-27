@@ -64,6 +64,41 @@ async def test_llm_node_extracts_chinese_flight_slots(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_llm_node_streams_unstructured_answer_to_runtime_callback(monkeypatch):
+    captured_callback = None
+
+    async def fake_completion(**kwargs):
+        nonlocal captured_callback
+        captured_callback = kwargs.get("stream_callback")
+        captured_callback("第一段", False)
+        captured_callback("第二段", False)
+        captured_callback("", True)
+        return "第一段第二段"
+
+    context = ExecutionContext(
+        execution_id="exec_stream_llm",
+        session_id="sess_stream_llm",
+        workflow_code="general_query",
+        workflow_version="1.0.0",
+        workflow_config={"llm_defaults": {"model_code": "chat-v1"}},
+        provider_configs={"provider": {"provider_code": "provider"}},
+        model_records={"chat-v1": {"model_code": "chat-v1", "provider_code": "provider"}},
+    )
+    emitted = []
+    context.add_execution_variable("user_message", "讲一个故事")
+    context.add_execution_variable("_emit_message_delta", lambda content, is_complete=False: emitted.append((content, is_complete)))
+    node = LLMNode("answer", {"config": {"prompt": "answer"}})
+    monkeypatch.setattr("src.nodes.llm.execute_model_completion", fake_completion)
+
+    result = await node.execute(context)
+
+    assert captured_callback is not None
+    assert emitted == [("第一段", False), ("第二段", False), ("", True)]
+    assert result["output"]["text"] == "第一段第二段"
+    assert "message_deltas" not in result
+
+
+@pytest.mark.asyncio
 async def test_llm_node_extracts_english_route_and_date(monkeypatch):
     context = ExecutionContext(
         execution_id="exec_test",

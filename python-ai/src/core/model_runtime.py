@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 from urllib.parse import quote
 
 import httpx
@@ -96,6 +96,26 @@ def _model_option(model_record: Dict[str, Any], option_key: str, default_value: 
     if option_key in options and options.get(option_key) is not None:
         return options.get(option_key)
     return default_value
+
+
+def _build_openai_compatible_body(
+    upstream_model_code: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    return {
+        "model": upstream_model_code,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+    }
 
 
 async def classify_intent_with_model_code(
@@ -210,10 +230,11 @@ async def execute_model_completion(
     system_prompt: str | None,
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
+    stream_callback: Callable[[str, bool], None] | None = None,
 ) -> str:
     model_record = resolve_model_record(model_records, model_code)
     provider = resolve_provider(provider_configs, str(model_record.get("provider_code")))
-    return await _invoke_provider(provider, model_record, system_prompt, user_prompt, response_format)
+    return await _invoke_provider(provider, model_record, system_prompt, user_prompt, response_format, stream_callback)
 
 
 async def _invoke_provider(
@@ -222,6 +243,7 @@ async def _invoke_provider(
     system_prompt: str | None,
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
+    stream_callback: Callable[[str, bool], None] | None = None,
 ) -> str:
     start_time = time.perf_counter()
     provider_type = str(provider.get("provider_type", "")).strip().lower()
@@ -335,6 +357,30 @@ async def _invoke_provider(
             summarize_payload(body),
         )
         try:
+            if stream_callback and response_format is None and protocol in {"openai", "openai_compatible", "deepseek", "qwen", "doubao"}:
+                stream_body = body
+                stream_url = request_url
+                if protocol == "doubao":
+                    stream_body = _build_openai_compatible_body(
+                        upstream_model_code,
+                        resolved_system_prompt,
+                        user_prompt,
+                        temperature,
+                        top_p,
+                        max_tokens,
+                    )
+                    stream_url = _join_url(base_url, str(meta.get("stream_chat_path", meta.get("chat_completions_path", "/chat/completions"))))
+                stream_body["stream"] = True
+                text = await _stream_openai_compatible(client, stream_url, headers, stream_body, stream_callback)
+                logger.info(
+                    "Model API stream completed providerType=%s protocol=%s model=%s durationMs=%.2f outputLength=%s",
+                    provider_type,
+                    protocol,
+                    upstream_model_code,
+                    duration_ms(start_time),
+                    len(text),
+                )
+                return text
             response = await client.post(request_url, headers=headers, json=body)
             response.raise_for_status()
             payload = response.json()
@@ -371,6 +417,52 @@ async def _invoke_provider(
         return str(payload["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as exc:  # pragma: no cover - defensive
         raise ModelExecutionError(f"Invalid provider payload: {payload}") from exc
+
+
+async def _stream_openai_compatible(
+    client: httpx.AsyncClient,
+    request_url: str,
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+    stream_callback: Callable[[str, bool], None],
+) -> str:
+    chunks: List[str] = []
+    async with client.stream("POST", request_url, headers=headers, json=body) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line:
+                continue
+            text = line.strip()
+            if not text.startswith("data:"):
+                continue
+            data = text[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            delta = _extract_openai_stream_delta(payload)
+            if not delta:
+                continue
+            chunks.append(delta)
+            stream_callback(delta, False)
+    stream_callback("", True)
+    return "".join(chunks)
+
+
+def _extract_openai_stream_delta(payload: Dict[str, Any]) -> str:
+    try:
+        choice = payload.get("choices", [{}])[0]
+        delta = choice.get("delta") if isinstance(choice, dict) else {}
+        if isinstance(delta, dict) and delta.get("content") is not None:
+            return str(delta.get("content"))
+        message = choice.get("message") if isinstance(choice, dict) else {}
+        if isinstance(message, dict) and message.get("content") is not None:
+            return str(message.get("content"))
+    except Exception:
+        return ""
+    return ""
 
 
 def _extract_doubao_text(payload: Dict[str, Any]) -> str | None:

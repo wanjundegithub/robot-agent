@@ -34,6 +34,8 @@ from src.nodes import (
 class WorkflowScheduler:
     """Workflow scheduler with planning, path resolution and node readiness checks."""
 
+    MESSAGE_DELTA_CHUNK_SIZE = 240
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.context_assembler = ContextAssembler()
@@ -104,6 +106,7 @@ class WorkflowScheduler:
             "threshold_source": context.threshold_source,
             "trace_id": context.trace_id,
         })
+        self._install_message_delta_emitter(runtime)
 
         current_node_id = workflow.get("entry")
 
@@ -339,13 +342,7 @@ class WorkflowScheduler:
                             "status": "completed",
                             "trace_id": context.trace_id,
                         })
-                    for delta in result.get("message_deltas", []):
-                        runtime.emit("message.delta", {
-                            "execution_id": context.execution_id,
-                            "session_id": context.session_id,
-                            "content": delta,
-                            "delta_type": "text",
-                        })
+                    self._emit_message_deltas(runtime, result.get("message_deltas", []))
 
                 metrics = dict(result.get("metrics", {}))
                 metrics.setdefault("duration_ms", duration_ms)
@@ -398,7 +395,7 @@ class WorkflowScheduler:
                     "node_id": node_def["id"],
                     "node_type": node_def["type"],
                     "status": "completed",
-                    "output": output,
+                    "output": self._public_execution_variables(output) if isinstance(output, dict) else output,
                     "metrics": metrics,
                     "trace_id": context.trace_id,
                 })
@@ -448,13 +445,14 @@ class WorkflowScheduler:
                 sorted(models_used),
                 context.plan_round,
             )
+            public_variables = self._public_execution_variables(context.execution_variables)
             runtime.emit("execution.completed", {
                 "execution_id": context.execution_id,
                 "session_id": context.session_id,
                 "status": "completed",
                 "ended_at": utc_now_iso(),
-                "output": dict(context.execution_variables),
-                "variables": dict(context.execution_variables),
+                "output": dict(public_variables),
+                "variables": dict(public_variables),
                 "metrics": {
                     "trace_id": context.trace_id,
                     "total_cost": round(total_cost, 6),
@@ -476,7 +474,7 @@ class WorkflowScheduler:
                 "session_id": context.session_id,
                 "workflow_code": context.workflow_code,
                 "workflow_version": context.workflow_version,
-                "snapshot": runtime.snapshot(),
+                "snapshot": self._public_runtime_snapshot(runtime.snapshot()),
                 "trace_id": context.trace_id,
             })
         except InvalidOutputError as exc:
@@ -576,7 +574,7 @@ class WorkflowScheduler:
             "workflow_version": context.workflow_version,
             "reason": reason,
             "status": context.status,
-            "snapshot": runtime.snapshot(),
+            "snapshot": self._public_runtime_snapshot(runtime.snapshot()),
             "trace_id": context.trace_id,
         })
         runtime.prepare_wait()
@@ -590,6 +588,77 @@ class WorkflowScheduler:
             "resume_type": "manual_resume",
             "trace_id": context.trace_id,
         })
+
+    def _public_runtime_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        public_snapshot = dict(snapshot)
+        variables = public_snapshot.get("variables")
+        if isinstance(variables, dict):
+            public_snapshot["variables"] = self._public_execution_variables(variables)
+        context_snapshot = public_snapshot.get("context")
+        if isinstance(context_snapshot, dict):
+            context_snapshot = dict(context_snapshot)
+            execution_variables = context_snapshot.get("execution_variables")
+            if isinstance(execution_variables, dict):
+                context_snapshot["execution_variables"] = self._public_execution_variables(execution_variables)
+            public_snapshot["context"] = context_snapshot
+        return public_snapshot
+
+    def _public_execution_variables(self, variables: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in variables.items()
+            if not str(key).startswith("_") and not callable(value)
+        }
+
+    def _install_message_delta_emitter(self, runtime: ExecutionRuntime) -> None:
+        context = runtime.context
+
+        def emit_delta(content: str, is_complete: bool = False) -> None:
+            runtime.emit("message.delta", {
+                "execution_id": context.execution_id,
+                "session_id": context.session_id,
+                "content": content,
+                "is_complete": is_complete,
+                "delta_type": "text",
+                "trace_id": context.trace_id,
+            })
+
+        context.add_execution_variable("_emit_message_delta", emit_delta)
+
+    def _emit_message_deltas(
+        self,
+        runtime: ExecutionRuntime,
+        deltas: Any,
+        graph_id: Optional[str] = None,
+    ) -> None:
+        if not isinstance(deltas, list):
+            return
+        context = runtime.context
+        for delta in deltas:
+            text = str(delta or "")
+            if not text:
+                continue
+            chunks = self._split_message_delta(text)
+            for index, chunk in enumerate(chunks):
+                payload = {
+                    "execution_id": context.execution_id,
+                    "session_id": context.session_id,
+                    "content": chunk,
+                    "is_complete": index == len(chunks) - 1,
+                    "delta_type": "text",
+                    "trace_id": context.trace_id,
+                }
+                if graph_id:
+                    payload["graph_id"] = graph_id
+                runtime.emit("message.delta", payload)
+
+    def _split_message_delta(self, text: str) -> List[str]:
+        if len(text) <= self.MESSAGE_DELTA_CHUNK_SIZE:
+            return [text]
+        return [
+            text[index:index + self.MESSAGE_DELTA_CHUNK_SIZE]
+            for index in range(0, len(text), self.MESSAGE_DELTA_CHUNK_SIZE)
+        ]
 
     def _requires_user_input(self, node_def: Dict[str, Any], result: Dict[str, Any]) -> bool:
         if node_def.get("type") == "form":
@@ -689,6 +758,7 @@ class WorkflowScheduler:
             "parent_node_id": None,
             "trace_id": context.trace_id,
         })
+        self._install_message_delta_emitter(runtime)
 
         current_graph_id = main_graph_id
         current_node_id = main_graph.get("entry_node_id")
@@ -834,15 +904,7 @@ class WorkflowScheduler:
                     "status": "completed",
                     "trace_id": context.trace_id,
                 })
-            for delta in result.get("message_deltas", []):
-                runtime.emit("message.delta", {
-                    "execution_id": context.execution_id,
-                    "session_id": context.session_id,
-                    "graph_id": current_graph_id,
-                    "content": delta,
-                    "delta_type": "text",
-                    "trace_id": context.trace_id,
-                })
+            self._emit_message_deltas(runtime, result.get("message_deltas", []), graph_id=current_graph_id)
 
             output = result.get("output", {})
             output_snapshot = output if isinstance(output, dict) else {"value": output}
@@ -898,7 +960,7 @@ class WorkflowScheduler:
                 "node_id": node_def["id"],
                 "node_type": node_def["type"],
                 "status": "completed",
-                "output": output,
+                "output": self._public_execution_variables(output) if isinstance(output, dict) else output,
                 "metrics": metrics,
                 "trace_id": context.trace_id,
             })

@@ -102,6 +102,7 @@ class LLMNode(BaseNode):
             system_prompt=self._build_system_prompt(),
             user_prompt=self._build_user_prompt(message, context),
             response_format={"type": "json_object"} if self.structured_output.get("enabled") else None,
+            stream_callback=self._stream_callback(context) if not self.structured_output.get("enabled") else None,
         )
         extracted = self._parse_output(completion)
         self._validate_output(extracted)
@@ -138,6 +139,10 @@ class LLMNode(BaseNode):
             "security_events": security_events,
             "metrics": cost_metrics,
         })
+
+    def _stream_callback(self, context):
+        emitter = context.get_variable("_emit_message_delta")
+        return emitter if callable(emitter) else None
 
     def _resolve_model_code(self, context) -> str:
         workflow_defaults = context.workflow_config.get("llm_defaults", {}) if isinstance(context.workflow_config, dict) else {}
