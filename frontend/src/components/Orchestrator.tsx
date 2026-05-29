@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import ReactFlow, {
   addEdge,
   applyEdgeChanges,
@@ -6,6 +6,7 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  PanOnScrollMode,
   type Connection,
   type Edge,
   type EdgeChange,
@@ -31,23 +32,20 @@ import type {
 
 type DesignerNodeType = 'start' | 'coordinator' | 'sub_agent' | 'tool' | 'message' | 'function' | 'end'
 type VariableScope = 'global' | 'temp'
+type WorkflowEditorColumnKey = 'graph' | 'canvas' | 'properties' | 'variables'
 type VariableType =
-  | 'string'
-  | 'text'
-  | 'integer'
-  | 'number'
-  | 'boolean'
-  | 'date'
-  | 'datetime'
-  | 'time'
-  | 'enum'
-  | 'array'
-  | 'object'
-  | 'json'
-  | 'markdown'
-  | 'file'
-  | 'image'
-  | 'any'
+  | 'String'
+  | 'Integer'
+  | 'Long'
+  | 'Double'
+  | 'BigDecimal'
+  | 'Boolean'
+  | 'LocalDate'
+  | 'LocalDateTime'
+  | 'LocalTime'
+  | 'List'
+  | 'Map'
+  | 'Object'
 
 interface VariableDefinition {
   id: string
@@ -55,6 +53,16 @@ interface VariableDefinition {
   type: VariableType
   scope: VariableScope
   description: string
+}
+
+interface VariablePointerState {
+  scope: VariableScope
+  variableId: string
+}
+
+interface VariableContextMenuState extends VariablePointerState {
+  x: number
+  y: number
 }
 
 interface CanvasNodeData {
@@ -153,6 +161,22 @@ interface OrchestratorProps {
 const DRAFT_VERSION = 'draft'
 const WORKFLOW_SCHEMA_VERSION = 'workflow-designer/v2'
 const MAIN_GRAPH_ID = 'main'
+const workflowCanvasDefaultViewport = { x: 0, y: 0, zoom: 1 }
+const workflowEditorColumnKeys: WorkflowEditorColumnKey[] = ['graph', 'canvas', 'properties', 'variables']
+const workflowEditorInitialColumnRatios: Record<WorkflowEditorColumnKey, number> = {
+  graph: 16,
+  canvas: 44,
+  properties: 20,
+  variables: 20,
+}
+const workflowEditorMinColumnRatios: Record<WorkflowEditorColumnKey, number> = {
+  graph: 10,
+  canvas: 28,
+  properties: 14,
+  variables: 14,
+}
+const workflowResizeHandleWidth = 16
+const variablePageSize = 6
 
 const defaultModelBindings: ModelBindingsState = {
   routing_model_code: 'intent-router',
@@ -162,22 +186,18 @@ const defaultModelBindings: ModelBindingsState = {
 }
 
 const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
-  { value: 'string', label: '字符串' },
-  { value: 'text', label: '长文本' },
-  { value: 'integer', label: '整数' },
-  { value: 'number', label: '数值' },
-  { value: 'boolean', label: '布尔值' },
-  { value: 'date', label: '日期' },
-  { value: 'datetime', label: '日期时间' },
-  { value: 'time', label: '时间' },
-  { value: 'enum', label: '枚举' },
-  { value: 'array', label: '数组' },
-  { value: 'object', label: '对象' },
-  { value: 'json', label: '结构文本' },
-  { value: 'markdown', label: '富文本' },
-  { value: 'file', label: '文件' },
-  { value: 'image', label: '图片' },
-  { value: 'any', label: '任意类型' },
+  { value: 'String', label: 'String' },
+  { value: 'Integer', label: 'Integer' },
+  { value: 'Long', label: 'Long' },
+  { value: 'Double', label: 'Double' },
+  { value: 'BigDecimal', label: 'BigDecimal' },
+  { value: 'Boolean', label: 'Boolean' },
+  { value: 'LocalDate', label: 'LocalDate' },
+  { value: 'LocalDateTime', label: 'LocalDateTime' },
+  { value: 'LocalTime', label: 'LocalTime' },
+  { value: 'List', label: 'List' },
+  { value: 'Map', label: 'Map' },
+  { value: 'Object', label: 'Object' },
 ]
 
 const mainInitialNodes: Node<CanvasNodeData>[] = [
@@ -302,7 +322,7 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
 
 const emptyVariableForm = {
   name: '',
-  type: 'string' as VariableType,
+  type: 'String' as VariableType,
   scope: 'global' as VariableScope,
   description: '',
 }
@@ -363,6 +383,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const [tempVariables, setTempVariables] = useState<VariableDefinition[]>([])
   const [modelBindings, setModelBindings] = useState<ModelBindingsState>(defaultModelBindings)
   const [variableForm, setVariableForm] = useState(emptyVariableForm)
+  const [editingVariable, setEditingVariable] = useState<VariablePointerState | null>(null)
+  const [selectedVariable, setSelectedVariable] = useState<VariablePointerState | null>(null)
+  const [variableContextMenu, setVariableContextMenu] = useState<VariableContextMenuState | null>(null)
+  const [variablePages, setVariablePages] = useState<Record<VariableScope, number>>({ global: 1, temp: 1 })
+  const [workflowColumnRatios, setWorkflowColumnRatios] = useState<Record<WorkflowEditorColumnKey, number>>(() => ({
+    ...workflowEditorInitialColumnRatios,
+  }))
   const [capabilityGroups, setCapabilityGroups] = useState<CapabilityGroupSummary[]>([])
   const [capabilityItems, setCapabilityItems] = useState<CapabilityItemSummary[]>([])
 
@@ -382,6 +409,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   )
   const subgraphIds = useMemo(() => graphOrder.filter((graphId) => graphId !== MAIN_GRAPH_ID), [graphOrder])
   const visibleNodeGroups = currentGraphIsMain ? mainGraphNodeGroups : subflowNodeGroups
+  const workflowEditorGridStyle = useMemo(() => {
+    const gridTemplateColumns = workflowEditorColumnKeys
+      .flatMap((key, index) => {
+        const columnWidth = `minmax(0, ${workflowColumnRatios[key]}fr)`
+        return index === workflowEditorColumnKeys.length - 1
+          ? [columnWidth]
+          : [columnWidth, `${workflowResizeHandleWidth}px`]
+      })
+      .join(' ')
+    return { gridTemplateColumns }
+  }, [workflowColumnRatios])
 
   const loadCapabilityItems = async (groupId: number) => {
     if (!groupId) {
@@ -404,6 +442,44 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       const current = prev[currentGraphId] ?? createInitialGraph(currentGraphId)
       return { ...prev, [currentGraphId]: updater(current) }
     })
+  }
+
+  const startWorkflowColumnResize = (
+    leftKey: WorkflowEditorColumnKey,
+    rightKey: WorkflowEditorColumnKey,
+    event: ReactMouseEvent<HTMLDivElement>
+  ) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startLeftRatio = workflowColumnRatios[leftKey]
+    const startRightRatio = workflowColumnRatios[rightKey]
+    const minLeftRatio = workflowEditorMinColumnRatios[leftKey]
+    const minRightRatio = workflowEditorMinColumnRatios[rightKey]
+    const totalRatio = workflowEditorColumnKeys.reduce((sum, key) => sum + workflowColumnRatios[key], 0)
+    const parentWidth = event.currentTarget.parentElement?.getBoundingClientRect().width || 1
+    const availableWidth = Math.max(1, parentWidth - workflowResizeHandleWidth * (workflowEditorColumnKeys.length - 1))
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const rawDelta = moveEvent.clientX - startX
+      const ratioDelta = (rawDelta * totalRatio) / availableWidth
+      const constrainedDelta = Math.max(
+        minLeftRatio - startLeftRatio,
+        Math.min(ratioDelta, startRightRatio - minRightRatio)
+      )
+      setWorkflowColumnRatios((prev) => ({
+        ...prev,
+        [leftKey]: startLeftRatio + constrainedDelta,
+        [rightKey]: startRightRatio - constrainedDelta,
+      }))
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', stopResize)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', stopResize)
   }
 
   const updateWorkflowName = (name: string) => {
@@ -971,11 +1047,69 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [removeSelectedNode, selectedNodeId])
 
-  const addVariable = () => {
+  useEffect(() => {
+    if (!variableContextMenu) return
+    const closeContextMenu = () => setVariableContextMenu(null)
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setVariableContextMenu(null)
+      }
+    }
+
+    window.addEventListener('click', closeContextMenu)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('click', closeContextMenu)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [variableContextMenu])
+
+  const resetVariableForm = () => {
+    setVariableForm(emptyVariableForm)
+    setEditingVariable(null)
+    setVariableContextMenu(null)
+  }
+
+  const beginEditVariable = (scope: VariableScope, variableId: string) => {
+    const source = scope === 'global' ? globalVariables : tempVariables
+    const variable = source.find((item) => item.id === variableId)
+    if (!variable) return
+    setSelectedVariable({ scope, variableId })
+    setEditingVariable({ scope, variableId })
+    setVariableForm({
+      name: variable.name,
+      type: variable.type,
+      scope: variable.scope,
+      description: variable.description,
+    })
+    setVariableContextMenu(null)
+  }
+
+  const submitVariable = () => {
     const name = variableForm.name.trim()
     if (!name) return
+
+    if (editingVariable) {
+      const setter = editingVariable.scope === 'global' ? setGlobalVariables : setTempVariables
+      setter((prev) =>
+        prev.map((item) =>
+          item.id === editingVariable.variableId
+            ? {
+                ...item,
+                name,
+                type: variableForm.type,
+                description: variableForm.description.trim(),
+              }
+            : item
+        )
+      )
+      resetVariableForm()
+      return
+    }
+
+    const currentLength = variableForm.scope === 'global' ? globalVariables.length : tempVariables.length
     const nextVariable: VariableDefinition = {
-      id: `${variableForm.scope}_${Date.now()}`,
+      id: `${variableForm.scope}_${Date.now()}_${currentLength + 1}`,
       name,
       type: variableForm.type,
       scope: variableForm.scope,
@@ -987,21 +1121,23 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     } else {
       setTempVariables((prev) => [...prev, nextVariable])
     }
-    setVariableForm(emptyVariableForm)
-  }
-
-  const updateVariable = (scope: VariableScope, variableId: string, field: 'name' | 'type' | 'description', value: string) => {
-    const setter = scope === 'global' ? setGlobalVariables : setTempVariables
-    setter((prev) =>
-      prev.map((item) =>
-        item.id === variableId ? { ...item, [field]: field === 'type' ? (value as VariableType) : value } : item
-      )
-    )
+    resetVariableForm()
   }
 
   const removeVariable = (scope: VariableScope, variableId: string) => {
     const setter = scope === 'global' ? setGlobalVariables : setTempVariables
+    const currentLength = scope === 'global' ? globalVariables.length : tempVariables.length
     setter((prev) => prev.filter((item) => item.id !== variableId))
+    setVariablePages((prev) => ({
+      ...prev,
+      [scope]: Math.max(1, Math.min(prev[scope], Math.ceil(Math.max(currentLength - 1, 0) / variablePageSize))),
+    }))
+    setSelectedVariable((prev) => (prev?.scope === scope && prev.variableId === variableId ? null : prev))
+    if (editingVariable?.scope === scope && editingVariable.variableId === variableId) {
+      setEditingVariable(null)
+      setVariableForm(emptyVariableForm)
+    }
+    setVariableContextMenu(null)
     setGraphs((prev) =>
       Object.fromEntries(
         Object.entries(prev).map(([graphId, graph]) => [
@@ -1475,51 +1611,96 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     )
   }
 
-  const renderVariableManager = (scope: VariableScope, items: VariableDefinition[]) => (
-    <div className="space-y-2">
-      {items.length === 0 && <div className="text-xs text-slate-500">{scope === 'global' ? '暂无全局变量。' : '暂无临时变量。'}</div>}
-      {items.map((item) => (
-        <div key={item.id} className="space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-3">
-          <div className="grid gap-2 md:grid-cols-[1fr_140px_88px]">
-            <input
-              value={item.name}
-              onChange={(event) => updateVariable(scope, item.id, 'name', event.target.value)}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              placeholder="变量名称"
-            />
-            <select
-              value={item.type}
-              onChange={(event) => updateVariable(scope, item.id, 'type', event.target.value)}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            >
-              {variableTypeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <button
-              className="rounded-lg border border-red-200 px-3 py-2 text-xs text-red-600"
-              onClick={() => removeVariable(scope, item.id)}
-              type="button"
-            >
-              删除
-            </button>
-          </div>
-          <textarea
-            value={item.description}
-            onChange={(event) => updateVariable(scope, item.id, 'description', event.target.value)}
-            className="min-h-[72px] w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            placeholder="描述变量语义，便于其余节点和代理正确使用。"
-          />
-        </div>
-      ))}
+  const renderWorkflowResizeHandle = (
+    leftKey: WorkflowEditorColumnKey,
+    rightKey: WorkflowEditorColumnKey,
+    testId: string,
+    label: string
+  ) => (
+    <div
+      className="flex min-h-0 cursor-col-resize items-stretch justify-center px-1"
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      data-testid="workflow-resize-handle"
+      onMouseDown={(event) => startWorkflowColumnResize(leftKey, rightKey, event)}
+    >
+      <div
+        className="h-full w-1 rounded-full bg-slate-200 transition hover:bg-sky-300"
+        data-testid={testId}
+      />
     </div>
   )
 
+  const renderVariableManager = (scope: VariableScope, items: VariableDefinition[]) => {
+    const totalPages = Math.max(1, Math.ceil(items.length / variablePageSize))
+    const currentPage = Math.min(variablePages[scope], totalPages)
+    const startIndex = (currentPage - 1) * variablePageSize
+    const pageItems = items.slice(startIndex, startIndex + variablePageSize)
+
+    return (
+      <div className="space-y-2" data-testid={`workflow-variable-list-${scope}`}>
+        {items.length === 0 && (
+          <div className="text-xs text-slate-500">{scope === 'global' ? '暂无全局变量。' : '暂无临时变量。'}</div>
+        )}
+        {pageItems.map((item) => {
+          const selected = selectedVariable?.scope === scope && selectedVariable.variableId === item.id
+          return (
+            <button
+              key={item.id}
+              className={`w-full truncate rounded-lg border px-3 py-2 text-left text-sm transition ${
+                selected ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-slate-200 bg-white text-slate-700'
+              }`}
+              type="button"
+              data-testid="workflow-variable-name-item"
+              aria-selected={selected}
+              onClick={() => {
+                setSelectedVariable({ scope, variableId: item.id })
+                beginEditVariable(scope, item.id)
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setSelectedVariable({ scope, variableId: item.id })
+                setVariableContextMenu({ scope, variableId: item.id, x: event.clientX, y: event.clientY })
+              }}
+            >
+              {item.name}
+            </button>
+          )
+        })}
+        {items.length > variablePageSize && (
+          <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+            <button
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 disabled:opacity-40"
+              type="button"
+              disabled={currentPage <= 1}
+              data-testid={`workflow-variable-page-prev-${scope}`}
+              onClick={() => setVariablePages((prev) => ({ ...prev, [scope]: Math.max(1, currentPage - 1) }))}
+            >
+              上一页
+            </button>
+            <span data-testid={`workflow-variable-page-summary-${scope}`}>
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 disabled:opacity-40"
+              type="button"
+              disabled={currentPage >= totalPages}
+              data-testid={`workflow-variable-page-next-${scope}`}
+              onClick={() => setVariablePages((prev) => ({ ...prev, [scope]: Math.min(totalPages, currentPage + 1) }))}
+            >
+              下一页
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderWorkflowInfoPanel = () => (
     <div
-      className="min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4"
+      className="h-full min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4"
       data-testid="workflow-info-panel"
     >
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -1567,7 +1748,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   const renderVariableManagementPanel = () => (
     <aside
-      className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-slate-50/90 p-4"
+      className="flex h-full min-h-0 min-w-0 flex-col rounded-3xl border border-slate-200 bg-slate-50/90 p-4"
       data-testid="workflow-variable-panel"
     >
       <div className="mb-3">
@@ -1580,12 +1761,14 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           onChange={(event) => setVariableForm((prev) => ({ ...prev, name: event.target.value }))}
           className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
           placeholder="变量名称"
+          data-testid="workflow-variable-name-input"
         />
         <div className="grid gap-2 sm:grid-cols-[1fr_120px] xl:grid-cols-1 2xl:grid-cols-[1fr_120px]">
           <select
             value={variableForm.type}
             onChange={(event) => setVariableForm((prev) => ({ ...prev, type: event.target.value as VariableType }))}
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            data-testid="workflow-variable-type-select"
           >
             {variableTypeOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -1597,6 +1780,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
             value={variableForm.scope}
             onChange={(event) => setVariableForm((prev) => ({ ...prev, scope: event.target.value as VariableScope }))}
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            disabled={Boolean(editingVariable)}
+            data-testid="workflow-variable-scope-select"
           >
             <option value="global">全局变量</option>
             <option value="temp">临时变量</option>
@@ -1607,10 +1792,23 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           onChange={(event) => setVariableForm((prev) => ({ ...prev, description: event.target.value }))}
           className="min-h-[80px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
           placeholder="描述变量语义、预期格式和使用约束。"
+          data-testid="workflow-variable-description-input"
         />
-        <button className="prompt-primary" type="button" onClick={addVariable}>
-          添加变量
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="prompt-primary flex-1"
+            type="button"
+            onClick={submitVariable}
+            data-testid={editingVariable ? 'workflow-variable-save' : 'workflow-variable-add'}
+          >
+            {editingVariable ? '保存变量' : '添加变量'}
+          </button>
+          {editingVariable && (
+            <button className="prompt-secondary" type="button" onClick={resetVariableForm} data-testid="workflow-variable-cancel">
+              取消
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid flex-1 min-h-0 gap-4 overflow-auto pr-1">
@@ -1623,6 +1821,31 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           {renderVariableManager('temp', tempVariables)}
         </div>
       </div>
+      {variableContextMenu && (
+        <div
+          className="fixed z-50 w-28 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-xl"
+          style={{ left: variableContextMenu.x, top: variableContextMenu.y }}
+          data-testid="workflow-variable-context-menu"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            className="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50"
+            type="button"
+            data-testid="workflow-variable-context-edit"
+            onClick={() => beginEditVariable(variableContextMenu.scope, variableContextMenu.variableId)}
+          >
+            编辑
+          </button>
+          <button
+            className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
+            type="button"
+            data-testid="workflow-variable-context-delete"
+            onClick={() => removeVariable(variableContextMenu.scope, variableContextMenu.variableId)}
+          >
+            删除
+          </button>
+        </div>
+      )}
     </aside>
   )
 
@@ -1638,8 +1861,8 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   )
 
   return (
-    <div className="panel-card h-full overflow-hidden">
-      <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="panel-card flex h-[calc(100vh-168px)] min-h-[720px] flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(244,247,251,0.96))] px-5 py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -1674,9 +1897,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           </div>
         </div>
 
-        <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_360px_360px]">
+        <div
+          className="min-h-0 flex-1 overflow-auto overscroll-contain pr-1"
+          data-testid="workflow-editor-workspace"
+        >
+          <div className="grid min-h-[900px] w-full max-w-full items-stretch" style={workflowEditorGridStyle}>
           <aside
-            className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4"
+            className="flex min-h-0 min-w-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4"
             data-testid="workflow-graph-nav"
           >
             <div className="mb-4">
@@ -1726,8 +1953,12 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               })}
             </div>
           </aside>
+          {renderWorkflowResizeHandle('graph', 'canvas', 'workflow-resize-handle-graph-canvas', '调整流程导航区和画布编辑区宽度')}
 
-          <section className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4">
+          <section
+            className="flex min-h-0 min-w-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4"
+            data-testid="workflow-canvas-panel"
+          >
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="panel-title">画布编辑区</div>
@@ -1769,14 +2000,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
-                fitView
+                defaultViewport={workflowCanvasDefaultViewport}
                 data-testid="workflow-reactflow"
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
                 onNodeClick={handleNodeClick}
                 onPaneClick={() => setSelectedNodeId(null)}
+                panOnDrag
                 panOnScroll
+                panOnScrollMode={PanOnScrollMode.Free}
+                zoomOnScroll={false}
               >
                 <Background gap={12} size={1} />
                 <MiniMap pannable zoomable />
@@ -1784,14 +2018,15 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               </ReactFlow>
             </div>
           </section>
+          {renderWorkflowResizeHandle('canvas', 'properties', 'workflow-resize-handle-canvas-properties', '调整画布编辑区和右侧属性列宽度')}
 
           <aside
-            className="grid min-h-0 gap-4 xl:grid-rows-[minmax(0,3fr)_minmax(0,7fr)]"
+            className="grid min-h-0 min-w-0 gap-4 xl:grid-rows-[minmax(0,3fr)_minmax(0,7fr)]"
             data-testid="workflow-properties-panel"
           >
             {renderWorkflowInfoPanel()}
             <div
-              className="min-h-0 rounded-3xl border border-slate-200 bg-white/95 p-4"
+              className="flex min-h-0 flex-col rounded-3xl border border-slate-200 bg-white/95 p-4"
               data-testid="workflow-process-properties-card"
             >
               <div className="mb-3">
@@ -1804,10 +2039,12 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
                     : '当前显示流程级属性，可直接调整当前画布名称。'}
                 </div>
               </div>
-              <div className="max-h-full overflow-auto pr-1">{renderNodeEditor()}</div>
+              <div className="min-h-0 flex-1 overflow-auto pr-1">{renderNodeEditor()}</div>
             </div>
           </aside>
+          {renderWorkflowResizeHandle('properties', 'variables', 'workflow-resize-handle-properties-variables', '调整流程属性和变量管理区宽度')}
           {renderVariableManagementPanel()}
+          </div>
         </div>
       </div>
     </div>
@@ -2480,26 +2717,41 @@ function toVariableDefinitions(source: unknown, scope: VariableScope): VariableD
 }
 
 function normalizeVariableType(value: string | null): VariableType {
-  if (!value) return 'string'
-  const allowedTypes: VariableType[] = [
-    'string',
-    'text',
-    'integer',
-    'number',
-    'boolean',
-    'date',
-    'datetime',
-    'time',
-    'enum',
-    'array',
-    'object',
-    'json',
-    'markdown',
-    'file',
-    'image',
-    'any',
-  ]
-  return allowedTypes.includes(value as VariableType) ? (value as VariableType) : 'string'
+  const rawValue = (value || '').trim()
+  if (!rawValue) return 'String'
+  const matchedType = variableTypeOptions.find((option) => option.value === rawValue)
+  if (matchedType) return matchedType.value
+
+  const legacyTypeMap: Record<string, VariableType> = {
+    string: 'String',
+    text: 'String',
+    enum: 'String',
+    markdown: 'String',
+    file: 'String',
+    image: 'String',
+    integer: 'Integer',
+    int: 'Integer',
+    long: 'Long',
+    number: 'Double',
+    double: 'Double',
+    decimal: 'BigDecimal',
+    bigdecimal: 'BigDecimal',
+    boolean: 'Boolean',
+    bool: 'Boolean',
+    date: 'LocalDate',
+    localdate: 'LocalDate',
+    datetime: 'LocalDateTime',
+    localdatetime: 'LocalDateTime',
+    time: 'LocalTime',
+    localtime: 'LocalTime',
+    array: 'List',
+    list: 'List',
+    json: 'Map',
+    map: 'Map',
+    object: 'Object',
+    any: 'Object',
+  }
+  return legacyTypeMap[rawValue.toLowerCase()] || 'String'
 }
 
 function normalizeDesignerNodeType(value: string | null): DesignerNodeType {

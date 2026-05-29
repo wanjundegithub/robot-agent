@@ -145,6 +145,78 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
   }),
 })
 
+const mockEmptyWorkflowEditorApis = async (page: Page) => {
+  let nextSessionIndex = 1
+
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const { pathname } = url
+
+    if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname === '/api/workflows' && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/versions') && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname === '/api/capabilities/groups' && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname.startsWith('/api/capabilities/groups/') && pathname.endsWith('/items') && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname === '/api/sessions' && request.method() === 'POST') {
+      const createdId = `session-e2e-${nextSessionIndex}`
+      nextSessionIndex += 1
+      await route.fulfill({
+        json: {
+          id: createdId,
+          workspaceId: 1,
+          userId: 'demo-user',
+          status: 'active',
+          currentExecutionId: null,
+        },
+      })
+      return
+    }
+    if (pathname === '/api/sessions' && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+    if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+      const sessionId = pathname.split('/').pop() || 'session-e2e-1'
+      await route.fulfill({
+        json: {
+          id: sessionId,
+          workspaceId: 1,
+          userId: 'demo-user',
+          status: 'active',
+          currentExecutionId: null,
+        },
+      })
+      return
+    }
+    if (pathname === '/api/executions' && request.method() === 'GET') {
+      await route.fulfill({ json: [] })
+      return
+    }
+
+    await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+  })
+}
+
 test.describe('workflow designer v2 contract', () => {
   test('shows published workflow list by default with pagination and new entry', async ({ page }) => {
     let nextSessionIndex = 1
@@ -434,7 +506,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-current-graph')).toContainText('主流程')
   })
 
-  test('uses a full-width workspace with right variable management and workflow info above properties', async ({ page }) => {
+  test('uses a full-width workspace with original four-column editor proportions', async ({ page }) => {
     let nextSessionIndex = 1
 
     await page.route('**/api/**', async (route) => {
@@ -527,16 +599,171 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-validate')).toHaveCount(0)
 
     const mainBox = await page.getByTestId('workflow-page-main').boundingBox()
+    const workspaceBox = await page.getByTestId('workflow-editor-workspace').boundingBox()
+    const graphBox = await page.getByTestId('workflow-graph-nav').boundingBox()
+    const canvasBox = await page.getByTestId('workflow-canvas-panel').boundingBox()
     const variableBox = await page.getByTestId('workflow-variable-panel').boundingBox()
     const infoBox = await page.getByTestId('workflow-info-panel').boundingBox()
     const propertiesBox = await page.getByTestId('workflow-process-properties-card').boundingBox()
 
     expect(mainBox).not.toBeNull()
+    expect(workspaceBox).not.toBeNull()
+    expect(graphBox).not.toBeNull()
+    expect(canvasBox).not.toBeNull()
     expect(variableBox).not.toBeNull()
     expect(infoBox).not.toBeNull()
     expect(propertiesBox).not.toBeNull()
-    expect((variableBox as { x: number }).x).toBeGreaterThan((mainBox as { x: number }).x)
+    expect((canvasBox as { x: number }).x).toBeGreaterThan((graphBox as { x: number }).x)
+    expect(Math.abs((infoBox as { x: number }).x - (propertiesBox as { x: number }).x)).toBeLessThan(2)
     expect((infoBox as { y: number }).y).toBeLessThan((propertiesBox as { y: number }).y)
+    expect(Math.abs((infoBox as { width: number }).width - (propertiesBox as { width: number }).width)).toBeLessThan(2)
+    expect((variableBox as { x: number }).x).toBeGreaterThan((propertiesBox as { x: number }).x)
+    expect(((variableBox as { x: number; width: number }).x + (variableBox as { width: number }).width)).toBeLessThanOrEqual(
+      (workspaceBox as { x: number; width: number }).x + (workspaceBox as { width: number }).width + 4
+    )
+  })
+
+  test('keeps the editor layout scale and allows two-axis workspace and canvas dragging', async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 720 })
+    await mockEmptyWorkflowEditorApis(page)
+
+    await openNewWorkflowEditor(page)
+
+    const workspaceMetrics = await page.getByTestId('workflow-editor-workspace').evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    }))
+    expect(workspaceMetrics.scrollHeight).toBeGreaterThan(workspaceMetrics.clientHeight)
+
+    await page.getByTestId('workflow-editor-workspace').evaluate((element) => {
+      element.scrollTop = 120
+    })
+    const scrolledPosition = await page.getByTestId('workflow-editor-workspace').evaluate((element) => ({
+      scrollTop: element.scrollTop,
+    }))
+    expect(scrolledPosition.scrollTop).toBeGreaterThan(0)
+
+    await page.getByTestId('workflow-editor-workspace').evaluate((element) => {
+      element.scrollTop = 0
+    })
+    const viewport = page.locator('.react-flow__viewport').first()
+    const initialTransform = await viewport.getAttribute('style')
+    expect(initialTransform || '').toContain('scale(1)')
+
+    const paneBox = await page.locator('.react-flow__pane').first().boundingBox()
+    expect(paneBox).not.toBeNull()
+    await page.mouse.move((paneBox?.x || 0) + 24, (paneBox?.y || 0) + 24)
+    await page.mouse.down()
+    await page.mouse.move((paneBox?.x || 0) + 144, (paneBox?.y || 0) + 104, { steps: 6 })
+    await page.mouse.up()
+
+    await expect.poll(() => viewport.getAttribute('style')).not.toBe(initialTransform)
+  })
+
+  test('resizes all workflow editor regions horizontally with drag handles', async ({ page }) => {
+    await mockEmptyWorkflowEditorApis(page)
+
+    await openNewWorkflowEditor(page)
+
+    const readPanelWidths = async () => ({
+      graph: (await page.getByTestId('workflow-graph-nav').boundingBox())?.width || 0,
+      canvas: (await page.getByTestId('workflow-canvas-panel').boundingBox())?.width || 0,
+      info: (await page.getByTestId('workflow-info-panel').boundingBox())?.width || 0,
+      properties: (await page.getByTestId('workflow-process-properties-card').boundingBox())?.width || 0,
+      variables: (await page.getByTestId('workflow-variable-panel').boundingBox())?.width || 0,
+    })
+
+    await expect(page.getByTestId('workflow-resize-handle')).toHaveCount(3)
+    const before = await readPanelWidths()
+
+    const dragHandle = async (handleId: string, delta: number) => {
+      const handle = page.getByTestId(handleId)
+      await handle.scrollIntoViewIfNeeded()
+      const handleBox = await handle.boundingBox()
+      expect(handleBox).not.toBeNull()
+      await page.mouse.move((handleBox?.x || 0) + (handleBox?.width || 0) / 2, (handleBox?.y || 0) + 80)
+      await page.mouse.down()
+      await page.mouse.move((handleBox?.x || 0) + (handleBox?.width || 0) / 2 + delta, (handleBox?.y || 0) + 80, {
+        steps: 5,
+      })
+      await page.mouse.up()
+    }
+
+    await dragHandle('workflow-resize-handle-graph-canvas', 60)
+    const afterGraphDrag = await readPanelWidths()
+    expect(afterGraphDrag.graph).toBeGreaterThan(before.graph)
+    expect(afterGraphDrag.canvas).toBeLessThan(before.canvas)
+
+    await dragHandle('workflow-resize-handle-canvas-properties', -60)
+    const afterCanvasDrag = await readPanelWidths()
+    expect(afterCanvasDrag.canvas).toBeLessThan(afterGraphDrag.canvas)
+    expect(afterCanvasDrag.properties).toBeGreaterThan(afterGraphDrag.properties)
+    expect(Math.abs(afterCanvasDrag.info - afterCanvasDrag.properties)).toBeLessThan(2)
+
+    await dragHandle('workflow-resize-handle-properties-variables', -60)
+    const afterPropertiesDrag = await readPanelWidths()
+    expect(afterPropertiesDrag.properties).toBeLessThan(afterCanvasDrag.properties)
+    expect(afterPropertiesDrag.variables).toBeGreaterThan(afterCanvasDrag.variables)
+  })
+
+  test('shows paginated variable names and supports click edit plus context menu actions', async ({ page }) => {
+    await mockEmptyWorkflowEditorApis(page)
+
+    await openNewWorkflowEditor(page)
+
+    const panel = page.getByTestId('workflow-variable-panel')
+    await expect(panel.getByTestId('workflow-variable-type-select').locator('option')).toHaveText([
+      'String',
+      'Integer',
+      'Long',
+      'Double',
+      'BigDecimal',
+      'Boolean',
+      'LocalDate',
+      'LocalDateTime',
+      'LocalTime',
+      'List',
+      'Map',
+      'Object',
+    ])
+
+    for (let index = 1; index <= 8; index += 1) {
+      await panel.getByTestId('workflow-variable-name-input').fill(`globalVar${index}`)
+      await panel.getByTestId('workflow-variable-type-select').selectOption(index === 1 ? 'Long' : 'String')
+      await panel.getByTestId('workflow-variable-description-input').fill(`变量 ${index}`)
+      await panel.getByTestId('workflow-variable-add').click()
+    }
+
+    const globalList = panel.getByTestId('workflow-variable-list-global')
+    await expect(globalList.getByTestId('workflow-variable-name-item')).toHaveText([
+      'globalVar1',
+      'globalVar2',
+      'globalVar3',
+      'globalVar4',
+      'globalVar5',
+      'globalVar6',
+    ])
+    await expect(globalList).not.toContainText('Long')
+    await expect(globalList).not.toContainText('变量 1')
+
+    await globalList.getByRole('button', { name: 'globalVar1' }).click()
+    await expect(panel.getByTestId('workflow-variable-name-input')).toHaveValue('globalVar1')
+    await panel.getByTestId('workflow-variable-name-input').fill('renamedGlobalVar')
+    await panel.getByTestId('workflow-variable-save').click()
+    await expect(globalList.getByRole('button', { name: 'renamedGlobalVar' })).toBeVisible()
+
+    await globalList.getByRole('button', { name: 'globalVar2' }).click({ button: 'right' })
+    await page.getByTestId('workflow-variable-context-edit').click()
+    await expect(panel.getByTestId('workflow-variable-name-input')).toHaveValue('globalVar2')
+    await panel.getByTestId('workflow-variable-cancel').click()
+
+    await globalList.getByRole('button', { name: 'renamedGlobalVar' }).click({ button: 'right' })
+    await page.getByTestId('workflow-variable-context-delete').click()
+    await expect(globalList.getByRole('button', { name: 'renamedGlobalVar' })).toHaveCount(0)
+
+    await panel.getByTestId('workflow-variable-page-next-global').click()
+    await expect(globalList.getByRole('button', { name: 'globalVar8' })).toBeVisible()
   })
 
   test('restricts main graph nodes and exposes start/message/function/end inside subflows', async ({ page }) => {
