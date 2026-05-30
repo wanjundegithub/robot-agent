@@ -219,6 +219,53 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void routeMessage_fallsBackToDefaultRuntimeModelWhenRoutingModelRecordIsMissing() throws Exception {
+        WorkflowVersion hotelVersion = publishedVersion(
+                "hotel_booking",
+                "1.0.0",
+                Map.of("routing_model_code", "intent-router"),
+                List.of(),
+                List.of("book_hotel")
+        );
+        Workflow hotelWorkflow = publishedWorkflow("hotel_booking", "1.0.0", "预定酒店", "帮助用户预定酒店");
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(hotelWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("hotel_booking", "1.0.0"))
+                .thenReturn(Optional.of(hotelVersion));
+        when(workflowRepository.findByWorkflowCode("hotel_booking"))
+                .thenReturn(Optional.of(hotelWorkflow));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("intent-router");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("intent-router")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+        when(modelConfigService.buildDefaultRuntimeBundle())
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(Map.of("provider_code", "demo")),
+                        List.of(Map.of("model_code", "default-chat", "provider_code", "demo"))
+                ));
+        when(pythonClient.classifyIntent(anyMap())).thenReturn(Mono.just(Map.of(
+                "matched", true,
+                "intent_code", "book_hotel",
+                "target_type", "workflow",
+                "target_code", "hotel_booking",
+                "workflow_code", "hotel_booking",
+                "confidence", 0.91d,
+                "reason", "default model routed"
+        )));
+
+        RoutingDecision decision = workflowService.routeMessage("定酒店", null);
+
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.workflowCode()).isEqualTo("hotel_booking");
+
+        ArgumentCaptor<Map<String, Object>> requestCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonClient).classifyIntent(requestCaptor.capture());
+        assertThat(requestCaptor.getValue()).containsEntry("routing_model_code", "default-chat");
+        assertThat((List<?>) requestCaptor.getValue().get("provider_configs")).hasSize(1);
+        assertThat((List<?>) requestCaptor.getValue().get("model_records")).hasSize(1);
+    }
+
+    @Test
     void routeMessage_acceptsWorkflowNamePhraseBeforeModelFallback() throws Exception {
         WorkflowVersion flightVersion = publishedVersion(
                 "flight_booking",
@@ -239,12 +286,79 @@ class WorkflowServiceTest {
         when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
 
-        RoutingDecision decision = workflowService.routeMessage("我要预定机票", null);
+        RoutingDecision decision = workflowService.routeMessage("我要机票预订", null);
 
         assertThat(decision.decision()).isEqualTo("start");
         assertThat(decision.workflowCode()).isEqualTo("flight_booking");
         assertThat(decision.workflowVersion()).isEqualTo("1.0.0");
         assertThat(decision.reason()).isEqualTo("phrase_match");
+    }
+
+    @Test
+    void routeMessage_matchesConfiguredIntentPhrases() throws Exception {
+        WorkflowVersion hotelVersion = publishedVersion(
+                "hotel_booking",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of("预订酒店", "预定酒店", "订酒店", "定酒店"),
+                List.of()
+        );
+        WorkflowVersion flightVersion = publishedVersion(
+                "flight_booking",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of("预订机票", "预定机票", "订机票", "定机票", "预订航班", "预定航班", "订航班", "定航班"),
+                List.of()
+        );
+        WorkflowVersion meetingRoomVersion = publishedVersion(
+                "meeting_room_booking",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of("预订会议室", "预定会议室", "订会议室", "定会议室"),
+                List.of()
+        );
+        Workflow hotelWorkflow = publishedWorkflow("hotel_booking", "1.0.0", "预订酒店", "帮助用户预订酒店");
+        Workflow flightWorkflow = publishedWorkflow("flight_booking", "1.0.0", "预定航班", "帮助用户预订航班和机票");
+        Workflow meetingRoomWorkflow = publishedWorkflow("meeting_room_booking", "1.0.0", "预订会议室", "帮助用户预订会议室");
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(hotelWorkflow, flightWorkflow, meetingRoomWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("hotel_booking", "1.0.0"))
+                .thenReturn(Optional.of(hotelVersion));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "1.0.0"))
+                .thenReturn(Optional.of(flightVersion));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("meeting_room_booking", "1.0.0"))
+                .thenReturn(Optional.of(meetingRoomVersion));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("route-model");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+
+        Map<String, String> expectedWorkflowCodes = Map.ofEntries(
+                Map.entry("我要预订酒店", "hotel_booking"),
+                Map.entry("我要预定酒店", "hotel_booking"),
+                Map.entry("我要订酒店", "hotel_booking"),
+                Map.entry("我要定酒店", "hotel_booking"),
+                Map.entry("我要预订机票", "flight_booking"),
+                Map.entry("我要预定机票", "flight_booking"),
+                Map.entry("我要订机票", "flight_booking"),
+                Map.entry("我要定机票", "flight_booking"),
+                Map.entry("我要预订航班", "flight_booking"),
+                Map.entry("我要预定航班", "flight_booking"),
+                Map.entry("我要订航班", "flight_booking"),
+                Map.entry("我要定航班", "flight_booking"),
+                Map.entry("我要预订会议室", "meeting_room_booking"),
+                Map.entry("我要预定会议室", "meeting_room_booking"),
+                Map.entry("我要订会议室", "meeting_room_booking"),
+                Map.entry("我要定会议室", "meeting_room_booking")
+        );
+
+        expectedWorkflowCodes.forEach((message, expectedWorkflowCode) -> {
+            RoutingDecision decision = workflowService.routeMessage(message, null);
+
+            assertThat(decision.decision()).as(message).isEqualTo("start");
+            assertThat(decision.workflowCode()).as(message).isEqualTo(expectedWorkflowCode);
+            assertThat(decision.reason()).as(message).isIn("regex_match", "phrase_match");
+        });
     }
 
     @Test

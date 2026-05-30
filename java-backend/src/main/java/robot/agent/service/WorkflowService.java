@@ -676,7 +676,14 @@ public class WorkflowService {
             );
         }
 
-        ModelIntent modelIntent = classifyIntent(normalizedContent, versions, routingModelCode, runtimeBundle, ragCandidates);
+        RuntimeRoutingModel runtimeRoutingModel = resolveRuntimeRoutingModel(routingModelCode, runtimeBundle);
+        ModelIntent modelIntent = classifyIntent(
+                normalizedContent,
+                versions,
+                runtimeRoutingModel.routingModelCode(),
+                runtimeRoutingModel.runtimeBundle(),
+                ragCandidates
+        );
         log.info(
                 "workflow.route.llm_result matched={} workflowCode={} targetType={} confidence={} reason={}",
                 modelIntent.matched(),
@@ -686,6 +693,29 @@ public class WorkflowService {
                 modelIntent.reason()
         );
         return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
+    }
+
+    private RuntimeRoutingModel resolveRuntimeRoutingModel(
+            String routingModelCode,
+            ModelConfigService.RuntimeModelBundle runtimeBundle
+    ) {
+        if (!runtimeBundle.providerConfigs().isEmpty() && !runtimeBundle.modelRecords().isEmpty()) {
+            return new RuntimeRoutingModel(routingModelCode, runtimeBundle);
+        }
+        ModelConfigService.RuntimeModelBundle defaultRuntimeBundle = modelConfigService.buildDefaultRuntimeBundle();
+        if (defaultRuntimeBundle == null) {
+            return new RuntimeRoutingModel(routingModelCode, runtimeBundle);
+        }
+        String defaultModelCode = firstRuntimeModelCode(defaultRuntimeBundle.modelRecords());
+        if (defaultModelCode != null) {
+            log.info(
+                    "workflow.intent.classify.model.fallback reason=routing_model_unavailable routingModelCode={} defaultModelCode={}",
+                    routingModelCode,
+                    defaultModelCode
+            );
+            return new RuntimeRoutingModel(defaultModelCode, defaultRuntimeBundle);
+        }
+        return new RuntimeRoutingModel(routingModelCode, runtimeBundle);
     }
 
     private RoutingDecision buildAcceptedRoutingDecision(
@@ -1003,10 +1033,7 @@ public class WorkflowService {
         if (value == null) {
             return "";
         }
-        return normalizeText(value)
-                .replace("预订", "预定")
-                .replace("預訂", "预定")
-                .replace("預定", "预定");
+        return normalizeText(value);
     }
 
     private List<RoutingDecision.IntentCandidate> collectRagCandidates(
@@ -1558,48 +1585,6 @@ public class WorkflowService {
                 true,
                 null
         );
-    }
-
-    private boolean containsAny(String normalizedContent, String... keywords) {
-        for (String keyword : keywords) {
-            if (normalizedContent.contains(keyword.toLowerCase(Locale.ROOT))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private DynamicThreshold resolveDynamicThreshold(
-            String workflowCode,
-            String intentCode,
-            double confidence,
-            String normalizedContent
-    ) {
-        double base = switch (workflowCode) {
-            case "flight_booking" -> 0.72d;
-            case "hotel_booking" -> 0.68d;
-            case "general_query" -> 0.52d;
-            default -> 0.60d;
-        };
-        String source = "dynamic:default";
-
-        if (normalizedContent.length() <= 8) {
-            base += 0.05d;
-            source = "dynamic:short_query";
-        } else if (containsAny(normalizedContent, "政策", "规则", "policy", "refund")) {
-            base -= 0.04d;
-            source = "dynamic:knowledge_query";
-        } else if (containsAny(normalizedContent, "航班", "机票", "flight", "ticket")) {
-            base -= 0.02d;
-            source = "dynamic:travel_query";
-        }
-
-        if ("general_query".equals(intentCode)) {
-            base = Math.min(base, 0.58d);
-        }
-
-        double threshold = Math.max(0.45d, Math.min(0.85d, Math.round(base * 100.0d) / 100.0d));
-        return new DynamicThreshold(threshold, source, confidence >= threshold);
     }
 
     private int countMatches(JsonNode values, String normalizedContent) {
@@ -2432,6 +2417,12 @@ public class WorkflowService {
     ) {
     }
 
+    private record RuntimeRoutingModel(
+            String routingModelCode,
+            ModelConfigService.RuntimeModelBundle runtimeBundle
+    ) {
+    }
+
     private record WorkflowScore(WorkflowVersion version, int entryRuleScore, int modelScore, int priority) {
         int totalScore() {
             return entryRuleScore + modelScore;
@@ -2449,9 +2440,6 @@ public class WorkflowService {
             RoutingDecision.IntentCandidate candidate,
             int priority
     ) {
-    }
-
-    private record DynamicThreshold(double threshold, String thresholdSource, boolean accepted) {
     }
 
     public record RuntimeExecutionBundle(
