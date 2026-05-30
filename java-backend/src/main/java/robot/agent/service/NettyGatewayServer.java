@@ -1,5 +1,6 @@
 package robot.agent.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
@@ -12,15 +13,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
-import robot.agent.gateway.GatewayActionHandler;
-import robot.agent.gateway.RobotChannelInitializer;
+import robot.agent.channel.core.UserConnectionManager;
+import robot.agent.channel.dispatch.UserEventDispatcher;
+import robot.agent.channel.netty.UserChannelInitializer;
 
 @Component
 public class NettyGatewayServer implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(NettyGatewayServer.class);
 
-    private final GatewayActionHandler gatewayActionHandler;
+    private final ObjectMapper objectMapper;
+    private final UserConnectionManager connectionManager;
+    private final UserEventDispatcher dispatcher;
     private final int gatewayPort;
 
     private volatile boolean running;
@@ -30,10 +34,14 @@ public class NettyGatewayServer implements SmartLifecycle {
     private Channel serverChannel;
 
     public NettyGatewayServer(
-            GatewayActionHandler gatewayActionHandler,
+            ObjectMapper objectMapper,
+            UserConnectionManager connectionManager,
+            UserEventDispatcher dispatcher,
             @Value("${robot.gateway.port:8091}") int gatewayPort
     ) {
-        this.gatewayActionHandler = gatewayActionHandler;
+        this.objectMapper = objectMapper;
+        this.connectionManager = connectionManager;
+        this.dispatcher = dispatcher;
         this.gatewayPort = gatewayPort;
     }
 
@@ -52,7 +60,7 @@ public class NettyGatewayServer implements SmartLifecycle {
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
-                    .childHandler(new RobotChannelInitializer(gatewayActionHandler, gatewayHandlerGroup));
+                    .childHandler(new UserChannelInitializer(objectMapper, connectionManager, dispatcher, gatewayHandlerGroup));
             serverChannel = bootstrap.bind(gatewayPort).sync().channel();
             running = true;
         } catch (InterruptedException exception) {

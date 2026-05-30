@@ -115,7 +115,7 @@ export interface MessageDeltaEnvelope {
   is_complete?: boolean
 }
 
-export interface GatewayAckEnvelope<T = Record<string, unknown>> {
+export interface LegacyAckEnvelope<T = Record<string, unknown>> {
   type: 'ack'
   request_id: string
   action: string
@@ -123,26 +123,33 @@ export interface GatewayAckEnvelope<T = Record<string, unknown>> {
   data?: T
 }
 
-export interface GatewayErrorEnvelope {
+export interface LegacyErrorEnvelope {
   type: 'error'
   request_id?: string
   error_code: string
   message: string
 }
 
-export interface GatewayActionEnvelope {
-  type: 'action'
-  request_id: string
-  action: string
+
+export type UserFrameCode = 8 | 9 | number
+
+export interface UserFrameEnvelope<T = Record<string, unknown>> {
+  frame: UserFrameCode
+  request_id?: string
+  user_id?: string
   session_id?: string
-  payload?: Record<string, unknown>
+  execution_id?: string | null
+  event_type?: string
+  payload?: T
+  timestamp?: string
 }
 
 export type WebSocketEnvelope =
   | ExecutionEventEnvelope
   | MessageDeltaEnvelope
-  | GatewayAckEnvelope
-  | GatewayErrorEnvelope
+  | LegacyAckEnvelope
+  | LegacyErrorEnvelope
+  | UserFrameEnvelope
 
 export interface ExecutionEventView {
   id: string

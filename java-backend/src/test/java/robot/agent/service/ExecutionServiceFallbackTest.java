@@ -39,7 +39,7 @@ class ExecutionServiceFallbackTest {
     private PythonClient pythonClient;
 
     @Mock
-    private WebSocketPublisher webSocketPublisher;
+    private robot.agent.channel.core.UserConnectionManager userConnectionManager;
 
     @Mock
     private AuditService auditService;
@@ -72,7 +72,7 @@ class ExecutionServiceFallbackTest {
                 executionRepository,
                 executionNodeLogRepository,
                 pythonClient,
-                webSocketPublisher,
+                userConnectionManager,
                 auditService,
                 new ObjectMapper(),
                 accessControlService,

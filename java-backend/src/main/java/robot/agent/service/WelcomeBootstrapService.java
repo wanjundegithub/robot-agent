@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import robot.agent.channel.core.UserConnectionManager;
 import robot.agent.config.WorkflowPromptProperties;
 import robot.agent.dto.response.WorkflowVersionResponse;
 
@@ -30,7 +31,7 @@ public class WelcomeBootstrapService {
     private final WorkflowService workflowService;
     private final ModelConfigService modelConfigService;
     private final PythonClient pythonClient;
-    private final WebSocketPublisher webSocketPublisher;
+    private final UserConnectionManager userConnectionManager;
     private final WorkflowPromptProperties workflowPromptProperties;
     private final Set<String> bootstrapKeys = ConcurrentHashMap.newKeySet();
 
@@ -40,14 +41,14 @@ public class WelcomeBootstrapService {
             WorkflowService workflowService,
             ModelConfigService modelConfigService,
             PythonClient pythonClient,
-            WebSocketPublisher webSocketPublisher,
+            UserConnectionManager userConnectionManager,
             WorkflowPromptProperties workflowPromptProperties
     ) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.workflowService = Objects.requireNonNull(workflowService, "workflowService");
         this.modelConfigService = Objects.requireNonNull(modelConfigService, "modelConfigService");
         this.pythonClient = Objects.requireNonNull(pythonClient, "pythonClient");
-        this.webSocketPublisher = Objects.requireNonNull(webSocketPublisher, "webSocketPublisher");
+        this.userConnectionManager = Objects.requireNonNull(userConnectionManager, "userConnectionManager");
         this.workflowPromptProperties = Objects.requireNonNull(workflowPromptProperties, "workflowPromptProperties");
     }
 
@@ -56,14 +57,14 @@ public class WelcomeBootstrapService {
             WorkflowService workflowService,
             ModelConfigService modelConfigService,
             PythonClient pythonClient,
-            WebSocketPublisher webSocketPublisher
+            UserConnectionManager userConnectionManager
     ) {
         this(
                 objectMapper,
                 workflowService,
                 modelConfigService,
                 pythonClient,
-                webSocketPublisher,
+                userConnectionManager,
                 new WorkflowPromptProperties()
         );
     }
@@ -126,7 +127,7 @@ public class WelcomeBootstrapService {
                         welcomeModelBundle.providerConfigs().size(),
                         welcomeModelBundle.modelRecords().size()
                 );
-                boolean fallbackPublished = publishFallbackOpeningMessage(
+                boolean fallbackSent = sendFallbackOpeningMessage(
                         connectionId,
                         sessionId,
                         workflowCode,
@@ -134,7 +135,7 @@ public class WelcomeBootstrapService {
                         workflowVersionResponse,
                         runtimeBundle
                 );
-                if (!fallbackPublished) {
+                if (!fallbackSent) {
                     bootstrapKeys.remove(bootstrapKey);
                 }
                 return;
@@ -163,13 +164,13 @@ public class WelcomeBootstrapService {
             if (shouldGreet && !isBlank(message)) {
                 String executionId = welcomeExecutionId(sessionId, workflowCode, workflowVersion);
                 log.info(
-                        "welcome.bootstrap.publish connectionId={} sessionId={} executionId={} contentLength={}",
+                        "welcome.bootstrap.frame connectionId={} sessionId={} executionId={} contentLength={}",
                         connectionId,
                         sessionId,
                         executionId,
                         message.length()
                 );
-                webSocketPublisher.publishMessageDelta(executionId, sessionId, message, true);
+                userConnectionManager.sendMessageDeltaFrame(executionId, sessionId, message, true);
             }
         } catch (Exception exception) {
             log.warn(
@@ -181,14 +182,14 @@ public class WelcomeBootstrapService {
                     exception.getMessage(),
                     exception
             );
-            boolean fallbackPublished = publishFallbackOpeningMessage(connectionId, sessionId, workflowCode, workflowVersion);
-            if (!fallbackPublished) {
+            boolean fallbackSent = sendFallbackOpeningMessage(connectionId, sessionId, workflowCode, workflowVersion);
+            if (!fallbackSent) {
                 bootstrapKeys.remove(bootstrapKey);
             }
         }
     }
 
-    private boolean publishFallbackOpeningMessage(
+    private boolean sendFallbackOpeningMessage(
             String connectionId,
             String sessionId,
             String workflowCode,
@@ -197,7 +198,7 @@ public class WelcomeBootstrapService {
         try {
             WorkflowVersionResponse workflowVersionResponse = workflowService.getWorkflowVersion(workflowCode, workflowVersion);
             WorkflowService.RuntimeExecutionBundle runtimeBundle = workflowService.buildRuntimeExecutionBundle(workflowCode, workflowVersion);
-            return publishFallbackOpeningMessage(
+            return sendFallbackOpeningMessage(
                     connectionId,
                     sessionId,
                     workflowCode,
@@ -216,7 +217,7 @@ public class WelcomeBootstrapService {
         }
     }
 
-    private boolean publishFallbackOpeningMessage(
+    private boolean sendFallbackOpeningMessage(
             String connectionId,
             String sessionId,
             String workflowCode,
@@ -235,13 +236,13 @@ public class WelcomeBootstrapService {
         }
         String executionId = welcomeExecutionId(sessionId, workflowCode, workflowVersion);
         log.info(
-                "welcome.bootstrap.fallback.publish connectionId={} sessionId={} executionId={} contentLength={}",
+                "welcome.bootstrap.fallback.frame connectionId={} sessionId={} executionId={} contentLength={}",
                 connectionId,
                 sessionId,
                 executionId,
                 fallbackMessage.length()
         );
-        webSocketPublisher.publishMessageDelta(executionId, sessionId, fallbackMessage, true);
+        userConnectionManager.sendMessageDeltaFrame(executionId, sessionId, fallbackMessage, true);
         return true;
     }
 

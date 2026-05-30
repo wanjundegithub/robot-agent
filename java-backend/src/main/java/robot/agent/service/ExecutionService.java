@@ -10,6 +10,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
+import robot.agent.channel.core.UserConnectionManager;
 import robot.agent.common.ApplicationConstants;
 import robot.agent.config.ChatFallbackProperties;
 import robot.agent.config.WorkflowPromptProperties;
@@ -49,7 +50,7 @@ public class ExecutionService {
     private final ExecutionRepository executionRepository;
     private final ExecutionNodeLogRepository executionNodeLogRepository;
     private final PythonClient pythonClient;
-    private final WebSocketPublisher webSocketPublisher;
+    private final UserConnectionManager userConnectionManager;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final AccessControlService accessControlService;
@@ -67,7 +68,7 @@ public class ExecutionService {
             ExecutionRepository executionRepository,
             ExecutionNodeLogRepository executionNodeLogRepository,
             PythonClient pythonClient,
-            WebSocketPublisher webSocketPublisher,
+            UserConnectionManager userConnectionManager,
             AuditService auditService,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
@@ -83,7 +84,7 @@ public class ExecutionService {
         this.executionRepository = executionRepository;
         this.executionNodeLogRepository = executionNodeLogRepository;
         this.pythonClient = pythonClient;
-        this.webSocketPublisher = webSocketPublisher;
+        this.userConnectionManager = userConnectionManager;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
         this.accessControlService = accessControlService;
@@ -101,7 +102,7 @@ public class ExecutionService {
             ExecutionRepository executionRepository,
             ExecutionNodeLogRepository executionNodeLogRepository,
             PythonClient pythonClient,
-            WebSocketPublisher webSocketPublisher,
+            UserConnectionManager userConnectionManager,
             AuditService auditService,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
@@ -117,7 +118,7 @@ public class ExecutionService {
                 executionRepository,
                 executionNodeLogRepository,
                 pythonClient,
-                webSocketPublisher,
+                userConnectionManager,
                 auditService,
                 objectMapper,
                 accessControlService,
@@ -136,7 +137,7 @@ public class ExecutionService {
             ExecutionRepository executionRepository,
             ExecutionNodeLogRepository executionNodeLogRepository,
             PythonClient pythonClient,
-            WebSocketPublisher webSocketPublisher,
+            UserConnectionManager userConnectionManager,
             AuditService auditService,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
@@ -151,7 +152,7 @@ public class ExecutionService {
                 executionRepository,
                 executionNodeLogRepository,
                 pythonClient,
-                webSocketPublisher,
+                userConnectionManager,
                 auditService,
                 objectMapper,
                 accessControlService,
@@ -706,7 +707,7 @@ public class ExecutionService {
         Map<String, Object> resumeEvent = new LinkedHashMap<>();
         resumeEvent.put("status", status.getValue());
         resumeEvent.put("resume_type", "manual_resume");
-        webSocketPublisher.publishEvent("execution.resumed", executionId, session.getId(), resumeEvent);
+        sendEventFrame("execution.resumed", executionId, session.getId(), resumeEvent);
 
         ResumeExecutionResponse response = new ResumeExecutionResponse();
         response.setExecutionId(executionId);
@@ -716,7 +717,7 @@ public class ExecutionService {
             Map<String, Object> formEvent = new LinkedHashMap<>();
             formEvent.put("node_id", execution.getCurrentNodeId());
             formEvent.put("form_definition", resumePayload.get("form_definition"));
-            webSocketPublisher.publishEvent("form.requested", executionId, session.getId(), formEvent);
+            sendEventFrame("form.requested", executionId, session.getId(), formEvent);
         }
 
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.resume", "execution", executionId, resumePayload, ApplicationConstants.HTTP_STATUS_OK);
@@ -760,28 +761,28 @@ public class ExecutionService {
 
         switch (eventType) {
             case "routing.decided":
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "execution.started":
                 entryProtectionService.recordPythonSuccess();
                 updateExecutionStatus(executionId, ExecutionStatus.RUNNING, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "execution.waiting_user":
                 updateExecutionStatus(executionId, ExecutionStatus.WAITING_USER, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "execution.waiting_tool":
                 updateExecutionStatus(executionId, ExecutionStatus.WAITING_TOOL, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "execution.resumed":
                 updateExecutionStatus(executionId, ExecutionStatus.RUNNING, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "execution.completed":
                 updateExecutionStatus(executionId, ExecutionStatus.COMPLETED, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 maybeOfferResume(sessionId, executionId);
                 break;
             case "execution.failed":
@@ -796,31 +797,31 @@ public class ExecutionService {
                         payload.get("error")
                 );
                 updateExecutionStatus(executionId, ExecutionStatus.FAILED, payload, payload.get("error"));
-                webSocketPublisher.publishMessageDelta(
+                sendMessageDeltaFrame(
                         executionId,
                         sessionId,
                         chatFallbackProperties.getModelUnavailableMessage(),
                         true
                 );
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, sanitizeFailurePayload(payload));
+                sendEventFrame(eventType, executionId, sessionId, sanitizeFailurePayload(payload));
                 maybeOfferResume(sessionId, executionId);
                 break;
             case "execution.suspended":
                 updateExecutionStatus(executionId, ExecutionStatus.SUSPENDED, payload, null);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "node.started":
             case "node.completed":
             case "node.skipped":
             case "node.failed":
                 updateExecutionNode(executionId, eventType, payload);
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "plan.created":
             case "plan.replanned":
             case "branch.decided":
             case "tool.called":
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "tool.returned":
                 capabilityAuditService.recordToolReturn(payload);
@@ -835,16 +836,24 @@ public class ExecutionService {
             case "protection.degraded":
             case "protection.circuit_open":
             case "optimization.vector_access":
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
             case "message.delta":
                 String content = payload.getOrDefault("content", "").toString();
                 Boolean isComplete = payload.containsKey("is_complete") ? Boolean.valueOf(payload.get("is_complete").toString()) : null;
-                webSocketPublisher.publishMessageDelta(executionId, sessionId, content, isComplete);
+                sendMessageDeltaFrame(executionId, sessionId, content, isComplete);
                 break;
             default:
-                webSocketPublisher.publishEvent(eventType, executionId, sessionId, payload);
+                sendEventFrame(eventType, executionId, sessionId, payload);
         }
+    }
+
+    private void sendEventFrame(String eventType, String executionId, String sessionId, Map<String, Object> payload) {
+        userConnectionManager.sendEventFrame(eventType, executionId, sessionId, payload);
+    }
+
+    private void sendMessageDeltaFrame(String executionId, String sessionId, String content, Boolean isComplete) {
+        userConnectionManager.sendMessageDeltaFrame(executionId, sessionId, content, isComplete);
     }
 
     private void updateExecutionStatus(String executionId, ExecutionStatus status, Map<String, Object> payload, Object error) {
@@ -1010,7 +1019,7 @@ public class ExecutionService {
         event.put("target_workflow_code", routingDecision.workflowCode());
         event.put("target_workflow_version", routingDecision.workflowVersion());
         event.put("reason", routingDecision.reason());
-        webSocketPublisher.publishEvent("execution.switch_requested", activeExecution.getId(), session.getId(), event);
+        sendEventFrame("execution.switch_requested", activeExecution.getId(), session.getId(), event);
         auditService.logAction(session.getWorkspaceId(), session.getUserId(), "execution.switch", "execution", activeExecution.getId(), snapshot, ApplicationConstants.HTTP_STATUS_OK);
     }
 
@@ -1025,7 +1034,7 @@ public class ExecutionService {
         sessionService.peekSuspendedExecution(session).ifPresent(snapshot -> {
             Map<String, Object> event = new LinkedHashMap<>(snapshot);
             event.put("offered_after_execution_id", completedExecutionId);
-            webSocketPublisher.publishEvent(
+            sendEventFrame(
                     "execution.resume_offered",
                     String.valueOf(snapshot.get("execution_id")),
                     sessionId,

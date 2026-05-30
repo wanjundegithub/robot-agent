@@ -34,7 +34,7 @@ class WelcomeBootstrapServiceTest {
     private PythonClient pythonClient;
 
     @Mock
-    private WebSocketPublisher webSocketPublisher;
+    private robot.agent.channel.core.UserConnectionManager userConnectionManager;
 
     @Mock
     private ModelConfigService modelConfigService;
@@ -45,14 +45,14 @@ class WelcomeBootstrapServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        welcomeBootstrapService = new WelcomeBootstrapService(objectMapper, workflowService, modelConfigService, pythonClient, webSocketPublisher);
+        welcomeBootstrapService = new WelcomeBootstrapService(objectMapper, workflowService, modelConfigService, pythonClient, userConnectionManager);
     }
 
     @Test
     void bootstrap_skips_when_binding_is_incomplete() {
         welcomeBootstrapService.bootstrap("session-1", "hotel_booking", null);
 
-        verifyNoInteractions(workflowService, pythonClient, webSocketPublisher);
+        verifyNoInteractions(workflowService, pythonClient, userConnectionManager);
     }
 
     @Test
@@ -69,7 +69,7 @@ class WelcomeBootstrapServiceTest {
 
         verify(workflowService, times(1)).requirePublishedWorkflowVersion("hotel_booking", "1.0.0");
         verify(pythonClient, times(1)).decideWorkflowWelcome(anyMap());
-        verify(webSocketPublisher, times(1)).publishMessageDelta(
+        verify(userConnectionManager, times(1)).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.startsWith("welcome_session-1_"),
                 org.mockito.ArgumentMatchers.eq("session-1"),
                 org.mockito.ArgumentMatchers.eq("您好，我是酒店预订助手。"),
@@ -89,7 +89,7 @@ class WelcomeBootstrapServiceTest {
         welcomeBootstrapService.bootstrap("session-1", "hotel_booking", "1.0.0");
 
         verify(pythonClient).decideWorkflowWelcome(anyMap());
-        verify(webSocketPublisher, never()).publishMessageDelta(
+        verify(userConnectionManager, never()).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
@@ -127,7 +127,7 @@ class WelcomeBootstrapServiceTest {
         assertThat(castListOfMaps(summary.get("coordinator_prompts"))).hasSize(1);
         assertThat(castListOfMaps(summary.get("opening_messages"))).hasSize(1);
 
-        verify(webSocketPublisher).publishMessageDelta(
+        verify(userConnectionManager).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.startsWith("welcome_session-1_"),
                 org.mockito.ArgumentMatchers.eq("session-1"),
                 org.mockito.ArgumentMatchers.eq("您好，我是酒店预订助手，可以帮您查询城市、日期和房型信息。"),
@@ -160,7 +160,7 @@ class WelcomeBootstrapServiceTest {
         assertThat(request.get("routing_model_code")).isEqualTo("default-chat");
         assertThat((List<?>) request.get("provider_configs")).hasSize(1);
         assertThat((List<?>) request.get("model_records")).hasSize(1);
-        verify(webSocketPublisher).publishMessageDelta(
+        verify(userConnectionManager).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.startsWith("welcome_session-1_"),
                 org.mockito.ArgumentMatchers.eq("session-1"),
                 org.mockito.ArgumentMatchers.eq("您好，我是机票预订助手。"),
@@ -175,7 +175,7 @@ class WelcomeBootstrapServiceTest {
 
         welcomeBootstrapService.bootstrap("session-1", "hotel_booking", "1.0.0");
 
-        verify(webSocketPublisher).publishMessageDelta(
+        verify(userConnectionManager).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.startsWith("welcome_session-1_"),
                 org.mockito.ArgumentMatchers.eq("session-1"),
                 org.mockito.ArgumentMatchers.eq("您好，我是酒店预订助手。"),
@@ -195,7 +195,7 @@ class WelcomeBootstrapServiceTest {
 
         welcomeBootstrapService.bootstrap("session-1", "hotel_booking", "1.0.0");
 
-        verify(webSocketPublisher).publishMessageDelta(
+        verify(userConnectionManager).sendMessageDeltaFrame(
                 org.mockito.ArgumentMatchers.startsWith("welcome_session-1_"),
                 org.mockito.ArgumentMatchers.eq("session-1"),
                 org.mockito.ArgumentMatchers.eq("您好，已进入「酒店预订助手」流程。请告诉我您需要什么服务。"),

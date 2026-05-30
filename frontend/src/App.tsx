@@ -20,20 +20,22 @@ import {
   getWorkflowVersions,
 } from './services/api'
 import { downloadCallLogs, logGatewayEvent } from './services/callLogger'
+import { createInitFrame, createInteractiveFrame, isUserFrameEnvelope, toInteractiveEventType } from './services/frameProtocol'
 import { displayExecutionStatus, displaySessionStatus, displaySocketState, displayUserLabel } from './utils/displayText'
 import type {
   ExecutionDetail,
   ExecutionEventEnvelope,
   ExecutionEventView,
   FormDefinition,
-  GatewayAckEnvelope,
-  GatewayErrorEnvelope,
+  LegacyAckEnvelope,
+  LegacyErrorEnvelope,
   IntentCandidate,
   Message,
   MessageDeltaEnvelope,
   SessionSummary,
   SendMessageResponse,
   SocketState,
+  UserFrameEnvelope,
   WebSocketEnvelope,
   WorkflowEditorSelection,
   WorkflowSummary,
@@ -517,6 +519,19 @@ const App: React.FC = () => {
         activeSocketBindingKeyRef.current = chatWorkflowConnectionKey
         setSocketState('connected')
         gatewayLog('ws.open', { sessionId: socketSessionId, wsUrl, binding_key: chatWorkflowConnectionKey })
+        const initFrame = createInitFrame({
+          requestId: createId('init'),
+          userId: currentUserId,
+          sessionId: socketSessionId,
+          workflow: selectedChatWorkflow,
+        })
+        socket.send(JSON.stringify(initFrame))
+        gatewayLog('ws.init_frame_sent', {
+          request_id: initFrame.request_id,
+          frame: initFrame.frame,
+          session_id: initFrame.session_id,
+          user_id: initFrame.user_id,
+        })
       }
 
       socket.onmessage = (event) => {
@@ -525,7 +540,12 @@ const App: React.FC = () => {
           return
         }
         try {
-          const payload = JSON.parse(event.data) as WebSocketEnvelope
+          const rawPayload = JSON.parse(event.data) as WebSocketEnvelope | UserFrameEnvelope
+          if (isUserFrameEnvelope(rawPayload)) {
+            handleUserFrame(rawPayload)
+            return
+          }
+          const payload = rawPayload as any
           gatewayLog('ws.message', {
             type: payload.type,
             session_id: (payload as any).session_id,
@@ -538,9 +558,9 @@ const App: React.FC = () => {
           } else if (payload.type === 'event') {
             handleExecutionEvent(payload)
           } else if (payload.type === 'ack') {
-            handleGatewayAck(payload)
+            handleLegacyAck(payload)
           } else if (payload.type === 'error') {
-            handleGatewayError(payload)
+            handleLegacyError(payload)
           }
         } catch (error) {
           console.error('Invalid WebSocket payload:', error)
@@ -599,7 +619,7 @@ const App: React.FC = () => {
       activeSocketBindingKeyRef.current = null
       wsRef.current?.close()
     }
-  }, [activePage, chatWorkflowConnectionKey])
+  }, [activePage, chatWorkflowConnectionKey, currentUserId])
 
   const buildWsUrl = (activeSessionId: string, workflow: WorkflowSummary | null) => {
     const base = import.meta.env.VITE_NETTY_WS_BASE_URL || import.meta.env.VITE_WS_BASE_URL
@@ -865,7 +885,7 @@ const App: React.FC = () => {
     }
   }
 
-  const handleGatewayAck = (payload: GatewayAckEnvelope) => {
+  const handleLegacyAck = (payload: LegacyAckEnvelope) => {
     gatewayLog('ack', {
       request_id: payload.request_id,
       action: payload.action,
@@ -878,7 +898,7 @@ const App: React.FC = () => {
     pending.resolve((payload.data as Record<string, unknown> | undefined) ?? undefined)
   }
 
-  const handleGatewayError = (payload: GatewayErrorEnvelope) => {
+  const handleLegacyError = (payload: LegacyErrorEnvelope) => {
     gatewayLog('error', {
       request_id: payload.request_id,
       error_code: payload.error_code,
@@ -895,6 +915,109 @@ const App: React.FC = () => {
     }
     appendSystemMessage(`网关错误：${payload.message}`)
   }
+
+  const resolvePendingFrameRequest = (frame: UserFrameEnvelope): boolean => {
+    if (!frame.request_id) return false
+    const pending = pendingRequestsRef.current.get(frame.request_id)
+    if (!pending) return false
+    window.clearTimeout(pending.timeoutId)
+    pendingRequestsRef.current.delete(frame.request_id)
+    const payload = frame.payload ?? {}
+    pending.resolve((payload as any).data ?? payload)
+    return true
+  }
+
+  const handleUserFrame = (frame: UserFrameEnvelope) => {
+    const eventType = frame.event_type || ''
+    const framePayload = frame.payload ?? {}
+    gatewayLog('frame.message', {
+      frame: frame.frame,
+      event_type: eventType,
+      request_id: frame.request_id,
+      session_id: frame.session_id,
+      execution_id: frame.execution_id,
+    })
+
+    if (eventType.startsWith('error.')) {
+      handleLegacyError({
+        type: 'error',
+        request_id: frame.request_id,
+        error_code: String((framePayload as any).code ?? eventType.replace('error.', '')),
+        message: String((framePayload as any).message ?? eventType),
+      })
+      return
+    }
+
+    if (frame.frame === 8) {
+      if (eventType === 'connection.replaced') {
+        gatewayLog('frame.connection_replaced', {
+          request_id: frame.request_id,
+          session_id: frame.session_id,
+          reason: (framePayload as any).reason,
+        })
+        if (wsRef.current) {
+          pendingRequestsRef.current.forEach(({ reject, timeoutId }) => {
+            window.clearTimeout(timeoutId)
+            reject(new Error('WebSocket connection replaced'))
+          })
+          pendingRequestsRef.current.clear()
+          reconnectAttemptsRef.current = 0
+          activeSocketSessionIdRef.current = null
+          activeSocketBindingKeyRef.current = null
+          wsRef.current.onclose = null
+          wsRef.current.close()
+          wsRef.current = null
+        }
+        setSocketState('disconnected')
+        return
+      }
+      resolvePendingFrameRequest(frame)
+      return
+    }
+
+    if (eventType === 'message.delta') {
+      handleMessageDelta({
+        type: 'message_delta',
+        execution_id: frame.execution_id || String((framePayload as any).execution_id ?? ''),
+        session_id: frame.session_id,
+        content: String((framePayload as any).content ?? ''),
+        is_complete: Boolean((framePayload as any).is_complete),
+      })
+      return
+    }
+
+    if (
+      eventType === 'message.accepted' ||
+      eventType === 'form.submitted' ||
+      eventType === 'execution.resumed' ||
+      eventType === 'request.ack' ||
+      eventType === 'heartbeat.pong'
+    ) {
+      if (resolvePendingFrameRequest(frame)) return
+    }
+
+    if (
+      eventType.startsWith('execution.') ||
+      eventType.startsWith('node.') ||
+      eventType.startsWith('tool.') ||
+      eventType.startsWith('security.') ||
+      eventType.startsWith('protection.') ||
+      eventType.startsWith('workflow.') ||
+      eventType === 'form.requested' ||
+      eventType === 'routing.decided' ||
+      eventType === 'budget.alert' ||
+      eventType === 'confirmation.required'
+    ) {
+      handleExecutionEvent({
+        type: 'event',
+        event_type: eventType as ExecutionEventEnvelope['event_type'],
+        execution_id: frame.execution_id || String((framePayload as any).execution_id ?? ''),
+        session_id: frame.session_id,
+        data: framePayload,
+      })
+    }
+  }
+
   const handleExecutionEvent = (payload: ExecutionEventEnvelope) => {
     if (payload.session_id && payload.session_id !== sessionId) return
 
@@ -1004,20 +1127,22 @@ const App: React.FC = () => {
     }
   }
 
-  const sendGatewayAction = (
-    action: string,
+  const sendInteractiveFrame = (
+    requestedEventType: string,
     payload: Record<string, unknown>,
     targetSessionId = sessionId,
     targetWorkflow = selectedChatWorkflow
   ): Promise<unknown> => {
     const requestId = createId('req')
     const targetBindingKey = buildSocketBindingKey(targetSessionId, targetWorkflow)
+    const eventType = toInteractiveEventType(requestedEventType)
 
     return new Promise((resolve, reject) => {
       let timeoutId: number | null = null
       gatewayLog('send.queued', {
         request_id: requestId,
-        action,
+        requested_event_type: requestedEventType,
+        event_type: eventType,
         session_id: targetSessionId,
         socket_session_id: socketSessionId,
         target_binding_key: targetBindingKey,
@@ -1051,29 +1176,33 @@ const App: React.FC = () => {
             pendingRequestsRef.current.delete(requestId)
             gatewayLog('send.timeout', {
               request_id: requestId,
-              action,
+              requested_event_type: requestedEventType,
+              event_type: eventType,
               session_id: targetSessionId,
               binding_key: targetBindingKey,
             })
-            reject(new Error(`Gateway ack timeout for ${action}`))
+            reject(new Error(`Frame ack timeout for ${eventType}`))
           }, 45000)
           pendingRequestsRef.current.set(requestId, { resolve, reject, timeoutId })
 
           gatewayLog('send', {
             request_id: requestId,
-            action,
+            requested_event_type: requestedEventType,
+            event_type: eventType,
             session_id: targetSessionId,
             binding_key: targetBindingKey,
             payload,
           })
+          const frame = createInteractiveFrame({
+            requestId,
+            userId: currentUserId,
+            sessionId: targetSessionId,
+            executionId: typeof payload.execution_id === 'string' ? payload.execution_id : executionId,
+            eventType,
+            payload,
+          })
           socket.send(
-            JSON.stringify({
-              type: 'action',
-              request_id: requestId,
-              action,
-              session_id: targetSessionId,
-              payload,
-            })
+            JSON.stringify(frame)
           )
         })
         .catch((error) => {
@@ -1083,7 +1212,8 @@ const App: React.FC = () => {
           pendingRequestsRef.current.delete(requestId)
           gatewayLog('send.not_ready', {
             request_id: requestId,
-            action,
+            requested_event_type: requestedEventType,
+            event_type: eventType,
             session_id: targetSessionId,
             binding_key: targetBindingKey,
             active_session_id: activeSocketSessionIdRef.current,
@@ -1209,7 +1339,7 @@ const App: React.FC = () => {
           chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE ? 'auto_route' : 'fixed',
         has_workflow: shouldSendFixedWorkflow,
       })
-      const response = (await sendGatewayAction('chat.send', chatSendPayload, activeSessionId)) as unknown as SendMessageResponse
+      const response = (await sendInteractiveFrame('message.text', chatSendPayload, activeSessionId)) as unknown as SendMessageResponse
       gatewayLog('send_message.response', {
         session_id: activeSessionId,
         execution_id: response.execution_id,
@@ -1374,7 +1504,7 @@ const App: React.FC = () => {
   const handleResume = async () => {
     if (!resumeOffer) return
     try {
-      const response = (await sendGatewayAction('execution.resume', {
+      const response = (await sendInteractiveFrame('execution.resume', {
         execution_id: resumeOffer.executionId,
       })) as unknown as {
         execution_id: string
@@ -2067,7 +2197,7 @@ const App: React.FC = () => {
           onClose={() => setPendingForm(null)}
           onSubmit={async (data) => {
             try {
-              await sendGatewayAction('form.submit', {
+              await sendInteractiveFrame('form.submit', {
                 execution_id: pendingForm.executionId,
                 submit_id: createId('submit'),
                 form_data: data,
