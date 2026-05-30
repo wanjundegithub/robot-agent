@@ -1,15 +1,77 @@
 import React, { useRef, useState } from 'react'
-import { Message } from '../types'
+import type { ExecutionProcessStep, Message } from '../types'
 
 interface MessageListProps {
   messages: Message[]
   isLoading: boolean
 }
 
+interface ThinkingProcessProps {
+  steps: ExecutionProcessStep[]
+  isStreaming: boolean
+  isExpanded: boolean
+  onToggle: () => void
+}
+
+const ThinkingProcess: React.FC<ThinkingProcessProps> = ({ steps, isStreaming, isExpanded, onToggle }) => {
+  const activeStep = steps[steps.length - 1]
+  const showTimeline = isStreaming || isExpanded
+  const activeLabel = isStreaming ? activeStep?.label ?? '正在思考' : `已完成 ${steps.length} 步思考`
+  const actionLabel = isStreaming ? `${steps.length} 步进行中` : isExpanded ? '收起' : `${steps.length} 步`
+
+  return (
+    <div className={`thinking-process ${isStreaming ? 'thinking-process-live' : 'thinking-process-complete'}`}>
+      <button
+        type="button"
+        data-testid="execution-process-toggle"
+        className="thinking-process-header"
+        onClick={onToggle}
+        aria-expanded={showTimeline}
+      >
+        <span className="thinking-orbit" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+        <span className="thinking-process-copy">
+          <span className="thinking-process-kicker">思考过程</span>
+          <span data-testid="execution-process-active" className="thinking-process-active">
+            {activeLabel}
+          </span>
+        </span>
+        <span className="thinking-process-action">{actionLabel}</span>
+      </button>
+
+      {showTimeline && (
+        <ol data-testid="execution-process-panel" className="thinking-process-timeline">
+          {steps.map((step, index) => {
+            const isActive = isStreaming && index === steps.length - 1
+            return (
+              <li
+                key={step.id}
+                className={`thinking-step ${isActive ? 'thinking-step-active' : 'thinking-step-done'}`}
+                style={{ animationDelay: `${Math.min(index * 70, 280)}ms` }}
+              >
+                <span className="thinking-step-index">{index + 1}</span>
+                <span className="thinking-step-content">
+                  <span>{step.label}</span>
+                  {step.detail && <span className="thinking-step-detail">{step.detail}</span>}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </div>
+  )
+}
+
 const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(() => new Set())
   const visibleMessages = messages.filter((message) => message.type !== 'system')
+  const hasStreamingAssistant = visibleMessages.some((message) => message.type === 'ai' && message.streaming)
 
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -66,32 +128,13 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
             {isError && <span className="text-xs opacity-75">{'\u9519\u8bef'}</span>}
             <span className="text-xs opacity-60">{formatTime(message.timestamp)}</span>
           </div>
-          {processSteps.length > 0 && (
-            <div className="mb-2 rounded border border-gray-200 bg-white/70 text-xs text-gray-600">
-              <button
-                type="button"
-                data-testid="execution-process-toggle"
-                className="flex w-full items-center justify-between gap-3 px-2 py-1 text-left hover:bg-gray-50"
-                onClick={() => toggleProcess(message.id)}
-                aria-expanded={isProcessExpanded}
-              >
-                <span>{'\u6267\u884c\u8fc7\u7a0b'}</span>
-                <span className="opacity-70">{isProcessExpanded ? '\u6536\u8d77' : `${processSteps.length} \u6b65`}</span>
-              </button>
-              {isProcessExpanded && (
-                <ol data-testid="execution-process-panel" className="space-y-1 border-t border-gray-200 px-3 py-2">
-                  {processSteps.map((step) => (
-                    <li key={step.id} className="flex gap-2">
-                      <span className="mt-1 h-1.5 w-1.5 flex-none rounded-full bg-blue-400"></span>
-                      <span>
-                        {step.label}
-                        {step.detail && <span className="ml-1 opacity-70">{step.detail}</span>}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
+          {message.streaming && processSteps.length > 0 && (
+            <ThinkingProcess
+              steps={processSteps}
+              isStreaming={true}
+              isExpanded={isProcessExpanded}
+              onToggle={() => toggleProcess(message.id)}
+            />
           )}
           {(message.content || message.streaming) && (
             <p className={`whitespace-pre-wrap break-words ${message.streaming && message.content ? 'opacity-80 italic' : ''}`}>
@@ -108,7 +151,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
     <div className="flex-1 overflow-y-auto p-4 bg-slate-50" data-testid="message-list">
       <div className="space-y-4">
         {visibleMessages.map(renderMessage)}
-        {isLoading && (
+        {isLoading && !hasStreamingAssistant && (
           <div className="flex justify-start">
             <div className="bg-gray-100 rounded-lg px-4 py-2 rounded-bl-none">
               <div className="flex items-center gap-2 mb-1">

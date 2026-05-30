@@ -289,7 +289,7 @@ test.beforeEach(async ({ page }) => {
               content: 'First streamed ',
               is_complete: false,
             })
-          }, 15)
+          }, 1200)
           window.setTimeout(() => {
             sendSocketMessage({
               type: 'message_delta',
@@ -298,7 +298,7 @@ test.beforeEach(async ({ page }) => {
               content: 'answer.',
               is_complete: true,
             })
-          }, 20)
+          }, 1500)
           window.setTimeout(() => {
             sendSocketMessage({
               type: 'ack',
@@ -313,7 +313,7 @@ test.beforeEach(async ({ page }) => {
                 status: 'completed',
               },
             })
-          }, 25)
+          }, 1550)
           return
         }
 
@@ -777,7 +777,7 @@ test.describe('session history panel', () => {
     await expect(messageList.getByText('???')).toHaveCount(0)
   })
 
-  test('shows execution process collapsed and streams answer into current AI message', async ({ page }) => {
+  test('shows animated execution process while streaming and removes it after answer', async ({ page }) => {
     await page.goto('/')
 
     await page.getByTestId('chat-workflow-select').selectOption('__AUTO_ROUTE__')
@@ -785,19 +785,20 @@ test.describe('session history panel', () => {
     await page.getByTestId('chat-send').click()
 
     const messageList = page.getByTestId('message-list')
+    const liveProcessPanel = messageList.getByTestId('execution-process-panel')
+    await expect(liveProcessPanel).toBeVisible()
+    await expect(liveProcessPanel).toContainText('\u6b63\u5728\u8bc6\u522b\u610f\u56fe')
+    await expect(liveProcessPanel).toContainText('\u6b63\u5728\u68c0\u67e5\u5f00\u59cb\u8282\u70b9\u53d8\u91cf')
+    await expect(liveProcessPanel).toContainText('\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d')
+    await expect(messageList.getByTestId('execution-process-active')).toContainText('\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d')
+
     const assistantMessage = messageList.getByTestId('message-ai').filter({ hasText: 'First streamed answer.' })
     await expect(assistantMessage).toHaveCount(1)
     await expect(assistantMessage).toContainText('First streamed answer.')
     await expect(assistantMessage.getByText('\u6b63\u5728\u8bc6\u522b\u610f\u56fe')).toHaveCount(0)
-
-    const processToggle = assistantMessage.getByTestId('execution-process-toggle')
-    await expect(processToggle).toContainText('\u6267\u884c\u8fc7\u7a0b')
-    await processToggle.click()
-
-    const processPanel = assistantMessage.getByTestId('execution-process-panel')
-    await expect(processPanel).toContainText('\u6b63\u5728\u8bc6\u522b\u610f\u56fe')
-    await expect(processPanel).toContainText('\u6b63\u5728\u68c0\u67e5\u5f00\u59cb\u8282\u70b9\u53d8\u91cf')
-    await expect(processPanel).toContainText('\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d')
+    await expect(assistantMessage.getByTestId('execution-process-panel')).toHaveCount(0)
+    await expect(assistantMessage.getByTestId('execution-process-toggle')).toHaveCount(0)
+    await expect(assistantMessage.getByTestId('execution-process-active')).toHaveCount(0)
     await expect(messageList.getByTestId('message-ai')).toHaveCount(1)
     await expect(messageList.getByTestId('message-ai').filter({ hasText: '1 \u6b65' })).toHaveCount(0)
   })
