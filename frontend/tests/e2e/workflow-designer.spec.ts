@@ -114,12 +114,6 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
       global: [],
       temporary: [],
     },
-    model_bindings: {
-      routing_model_code: 'intent-router',
-      llm_defaults: {
-        model_code: 'general-chat',
-      },
-    },
     editor_meta: {
       current_graph_id: 'main',
       graph_order: ['main'],
@@ -131,12 +125,6 @@ const createWorkflowVersionFixture = (workflow: PublishedWorkflow): WorkflowVers
     variable_registry: {
       global: [],
       temporary: [],
-    },
-    model_bindings: {
-      routing_model_code: 'intent-router',
-      llm_defaults: {
-        model_code: 'general-chat',
-      },
     },
   }),
   editorMeta: JSON.stringify({
@@ -1110,9 +1098,6 @@ test.describe('workflow designer v2 contract', () => {
     const rawDefinition = String((draftPayload || {}).definition || '{}')
     const definition = JSON.parse(rawDefinition) as Record<string, unknown>
     const graphs = (definition.graphs || {}) as Record<string, unknown>
-    const definitionBindings = (definition.model_bindings || {}) as Record<string, unknown>
-    const definitionLlmDefaults = (definitionBindings.llm_defaults || {}) as Record<string, unknown>
-
     expect(definition.schema_version).toBe('workflow-designer/v2')
     expect(draftPayload?.workflow_name).toBe('Nested Graph Contract')
     expect(draftPayload?.workflow_description).toBe('工作流描述')
@@ -1143,21 +1128,13 @@ test.describe('workflow designer v2 contract', () => {
     expect(Array.isArray(subGraph.edges)).toBe(true)
     expect(mainGraph).not.toHaveProperty('transitions')
     expect(mainGraph).not.toHaveProperty('entry')
-    expect(definitionBindings.routing_model_code).toBeTruthy()
-    expect(definitionLlmDefaults.model_code).toBeTruthy()
-    expect(definitionBindings).not.toHaveProperty('intent_profile_ref')
-    expect(definitionLlmDefaults).not.toHaveProperty('model_profile_ref')
+    expect(definition).not.toHaveProperty('model_bindings')
 
     const rawConfig = String((draftPayload || {}).config || '{}')
     const config = JSON.parse(rawConfig) as Record<string, unknown>
-    const configBindings = (config.model_bindings || {}) as Record<string, unknown>
-    const configLlmDefaults = (configBindings.llm_defaults || {}) as Record<string, unknown>
     expect(config.main_graph_id).toBe('main')
     expect(config).not.toHaveProperty('graphs')
-    expect(configBindings.routing_model_code).toBeTruthy()
-    expect(configLlmDefaults.model_code).toBeTruthy()
-    expect(configBindings).not.toHaveProperty('intent_profile_ref')
-    expect(configLlmDefaults).not.toHaveProperty('model_profile_ref')
+    expect(config).not.toHaveProperty('model_bindings')
   })
 
   test('publishes from editor without exposing chat debug entry', async ({ page }) => {

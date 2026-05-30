@@ -201,6 +201,16 @@ public class ModelConfigService {
         return defaultModelProperties.resolveModelCode(purpose);
     }
 
+    public boolean isModelCodeAvailable(String modelCode) {
+        String normalizedModelCode = blankToNull(modelCode);
+        if (normalizedModelCode == null) {
+            return false;
+        }
+        return modelRecordRepository.findByModelCode(normalizedModelCode)
+                .filter(LlmModelRecord::isEnabled)
+                .isPresent();
+    }
+
     public String resolveRoutingModelCode(Collection<Map<String, Object>> workflowDefinitions) {
         for (Map<String, Object> workflowDefinition : workflowDefinitions) {
             String modelCode = findRoutingModelCode(workflowDefinition);

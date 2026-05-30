@@ -1,6 +1,7 @@
 package robot.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -11,6 +12,7 @@ import robot.agent.model.Workflow;
 import robot.agent.model.WorkflowStatus;
 import robot.agent.model.WorkflowVersion;
 import robot.agent.model.WorkflowVersionStatus;
+import robot.agent.dto.request.CreateWorkflowVersionRequest;
 import robot.agent.repository.WorkflowRepository;
 import robot.agent.repository.WorkflowVersionRepository;
 import reactor.core.publisher.Mono;
@@ -359,6 +361,66 @@ class WorkflowServiceTest {
             assertThat(decision.workflowCode()).as(message).isEqualTo(expectedWorkflowCode);
             assertThat(decision.reason()).as(message).isIn("regex_match", "phrase_match");
         });
+    }
+
+    @Test
+    void saveWorkflowDraft_appliesBackendDefaultModelBindingsWhenFrontendOmitsThem() throws Exception {
+        Workflow workflow = publishedWorkflow("flight_booking", null, "机票预订", "预订航班和机票");
+        workflow.setWorkspaceId(1L);
+
+        CreateWorkflowVersionRequest request = new CreateWorkflowVersionRequest();
+        request.setWorkflowName("机票预订");
+        request.setWorkflowDescription("预订航班和机票");
+        request.setVersion("draft");
+        request.setDefinition(objectMapper.writeValueAsString(Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "graphs", Map.of(
+                        "main", Map.of(
+                                "graph_id", "main",
+                                "graph_type", "main",
+                                "graph_name", "机票预订",
+                                "graph_description", "预订航班和机票",
+                                "entry_node_id", "start",
+                                "nodes", Map.of(
+                                        "start", Map.of("id", "start", "type", "start", "config", Map.of())
+                                ),
+                                "edges", List.of()
+                        )
+                )
+        )));
+        request.setConfig(objectMapper.writeValueAsString(Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "variable_registry", Map.of("global", List.of(), "temporary", List.of())
+        )));
+
+        when(workflowRepository.findByWorkflowCode("flight_booking")).thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "draft"))
+                .thenReturn(Optional.empty());
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(modelConfigService.resolveConfiguredPurposeModelCode("routing")).thenReturn("doubao-chat");
+        when(modelConfigService.resolveConfiguredPurposeModelCode("default")).thenReturn("doubao-chat");
+        when(modelConfigService.isModelCodeAvailable("doubao-chat")).thenReturn(true);
+
+        workflowService.saveWorkflowDraft("demo-admin", "flight_booking", request);
+
+        ArgumentCaptor<WorkflowVersion> versionCaptor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(versionCaptor.capture());
+        WorkflowVersion saved = versionCaptor.getValue();
+
+        JsonNode definition = objectMapper.readTree(saved.getDefinition());
+        assertThat(definition.at("/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(definition.at("/model_bindings/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
+
+        JsonNode config = objectMapper.readTree(saved.getConfig());
+        assertThat(config.at("/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(config.at("/model_bindings/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(config.at("/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
+
+        JsonNode snapshot = objectMapper.readTree(saved.getWorkflowSnapshot());
+        assertThat(snapshot.at("/designer/definition/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(snapshot.at("/designer/workflow_config/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
     }
 
     @Test

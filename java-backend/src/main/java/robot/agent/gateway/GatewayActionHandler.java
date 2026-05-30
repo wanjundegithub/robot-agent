@@ -195,20 +195,7 @@ public class GatewayActionHandler extends SimpleChannelInboundHandler<TextWebSoc
                             request.getWorkflowVersion(),
                             request.getContent() == null ? 0 : request.getContent().length()
                     );
-                    log.info("gateway.chat_send.dispatch connectionId={} sessionId={} requestId={}", connection.connectionId(), sessionId, requestId);
-                    SendMessageResponse response = executionGateway.startExecution(sessionId, request);
-                    log.info(
-                            "gateway.chat_send.result connectionId={} sessionId={} requestId={} executionId={} status={} workflowCode={} workflowVersion={}",
-                            connection.connectionId(),
-                            sessionId,
-                            requestId,
-                            response.getExecutionId(),
-                            response.getStatus(),
-                            response.getWorkflowCode(),
-                            response.getWorkflowVersion()
-                    );
-                    writePayload(context, ack(requestId, action, "accepted", response));
-                    log.info("gateway.action.ack connectionId={} requestId={} action={} sessionId={} status=accepted", connection.connectionId(), requestId, action, sessionId);
+                    CompletableFuture.runAsync(() -> dispatchChatSend(context, connection, sessionId, requestId, action, request));
                 }
                 case "form.submit" -> {
                     FormSubmitRequest request = objectMapper.convertValue(payload, FormSubmitRequest.class);
@@ -243,6 +230,42 @@ public class GatewayActionHandler extends SimpleChannelInboundHandler<TextWebSoc
                     requestId,
                     action,
                     payload,
+                    exception
+            );
+            writePayload(context, error(requestId, "action_failed", formatException(exception)));
+        }
+    }
+
+    private void dispatchChatSend(
+            ChannelHandlerContext context,
+            NettyGatewayHub.GatewayConnection connection,
+            String sessionId,
+            String requestId,
+            String action,
+            SendMessageRequest request
+    ) {
+        try {
+            log.info("gateway.chat_send.dispatch connectionId={} sessionId={} requestId={}", connection.connectionId(), sessionId, requestId);
+            SendMessageResponse response = executionGateway.startExecution(sessionId, request);
+            log.info(
+                    "gateway.chat_send.result connectionId={} sessionId={} requestId={} executionId={} status={} workflowCode={} workflowVersion={}",
+                    connection.connectionId(),
+                    sessionId,
+                    requestId,
+                    response.getExecutionId(),
+                    response.getStatus(),
+                    response.getWorkflowCode(),
+                    response.getWorkflowVersion()
+            );
+            writePayload(context, ack(requestId, action, "accepted", response));
+            log.info("gateway.action.ack connectionId={} requestId={} action={} sessionId={} status=accepted mode=async", connection.connectionId(), requestId, action, sessionId);
+        } catch (Exception exception) {
+            log.error(
+                    "gateway.chat_send.failed connectionId={} sessionId={} requestId={} action={}",
+                    connection.connectionId(),
+                    sessionId,
+                    requestId,
+                    action,
                     exception
             );
             writePayload(context, error(requestId, "action_failed", formatException(exception)));

@@ -321,7 +321,7 @@ export interface WorkflowDesignerDefinitionV2 {
     global: unknown[]
     temporary: unknown[]
   }
-  model_bindings: {
+  model_bindings?: {
     routing_model_code: string
     llm_defaults: {
       model_code: string

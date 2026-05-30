@@ -79,13 +79,6 @@ interface WorkflowGraphState {
   edges: Edge[]
 }
 
-interface ModelBindingsState {
-  routing_model_code: string
-  llm_defaults: {
-    model_code: string
-  }
-}
-
 interface WorkflowDraftPayload {
   workflowCode: string
   workflowName?: string
@@ -111,7 +104,6 @@ interface HydratedWorkflowState {
   publishedVersion: string | null
   globalVariables: VariableDefinition[]
   tempVariables: VariableDefinition[]
-  modelBindings: ModelBindingsState
   graphs: Record<string, WorkflowGraphState>
   graphOrder: string[]
   currentGraphId: string
@@ -177,13 +169,6 @@ const workflowEditorMinColumnRatios: Record<WorkflowEditorColumnKey, number> = {
 }
 const workflowResizeHandleWidth = 16
 const variablePageSize = 6
-
-const defaultModelBindings: ModelBindingsState = {
-  routing_model_code: 'intent-router',
-  llm_defaults: {
-    model_code: 'general-chat',
-  },
-}
 
 const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
   { value: 'String', label: 'String' },
@@ -381,7 +366,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const [isPublishing, setIsPublishing] = useState(false)
   const [globalVariables, setGlobalVariables] = useState<VariableDefinition[]>([])
   const [tempVariables, setTempVariables] = useState<VariableDefinition[]>([])
-  const [modelBindings, setModelBindings] = useState<ModelBindingsState>(defaultModelBindings)
   const [variableForm, setVariableForm] = useState(emptyVariableForm)
   const [editingVariable, setEditingVariable] = useState<VariablePointerState | null>(null)
   const [selectedVariable, setSelectedVariable] = useState<VariablePointerState | null>(null)
@@ -595,7 +579,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       .map((graphId) => graphs[graphId])
       .filter((graph): graph is WorkflowGraphState => Boolean(graph))
     const normalizedGraphs = orderedGraphs.length > 0 ? orderedGraphs : [createInitialGraph(MAIN_GRAPH_ID)]
-    return {
+    const definition: WorkflowDesignerDefinitionV2 = {
       schema_version: WORKFLOW_SCHEMA_VERSION,
       workflow_code: workflowMeta.workflowCode,
       workflow_name: workflowName.trim(),
@@ -609,7 +593,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         global: globalVariables,
         temporary: tempVariables,
       },
-      model_bindings: modelBindings,
       editor_meta: {
         layout_engine: 'reactflow',
         viewport: { x: 0, y: 0, zoom: 0.92 },
@@ -620,13 +603,13 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         graph_layouts: buildGraphLayouts(normalizedGraphs),
       },
     }
+    return definition
   }, [
     currentGraphId,
     currentUserId,
     globalVariables,
     graphOrder,
     graphs,
-    modelBindings,
     tempVariables,
     variableNameMap,
     workflowMeta.draftVersion,
@@ -635,18 +618,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     workflowDescription,
   ])
 
-  const compatibilityWorkflowConfig = useMemo(
-    () => ({
+  const compatibilityWorkflowConfig = useMemo(() => {
+    const config: Record<string, unknown> = {
       schema_version: WORKFLOW_SCHEMA_VERSION,
       main_graph_id: MAIN_GRAPH_ID,
       variable_registry: {
         global: globalVariables,
         temporary: tempVariables,
       },
-      model_bindings: modelBindings,
-    }),
-    [globalVariables, modelBindings, tempVariables]
-  )
+    }
+    return config
+  }, [globalVariables, tempVariables])
 
   useEffect(() => {
     onWorkflowDraftChange?.({
@@ -701,7 +683,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     })
     setGlobalVariables(hydrated.globalVariables)
     setTempVariables(hydrated.tempVariables)
-    setModelBindings(hydrated.modelBindings)
     setVariableForm(emptyVariableForm)
     setValidationIssues([])
     setSaveStatus(`已加载版本 ${editorSelection.version.version}`)
@@ -2378,7 +2359,6 @@ function hydrateWorkflowSelection(selection: WorkflowEditorSelection): HydratedW
       (String(selection.version.status || '').toLowerCase() === 'published' ? selection.version.version : null),
     globalVariables,
     tempVariables,
-    modelBindings: resolveModelBindings(definition, effectiveConfig),
     graphs: synchronizedGraphs,
     graphOrder: hydratedGraphs.graphOrder,
     currentGraphId: hydratedGraphs.currentGraphId,
@@ -2396,39 +2376,6 @@ function parseWorkflowSnapshot(source?: string | null): WorkflowSnapshotV1 | nul
     return null
   }
   return snapshot as unknown as WorkflowSnapshotV1
-}
-
-function resolveModelBindings(definition: Record<string, unknown>, versionConfig: Record<string, unknown>): ModelBindingsState {
-  const definitionBindings = asRecord(definition.model_bindings)
-  if (Object.keys(definitionBindings).length > 0) {
-    const definitionDefaults = asRecord(definitionBindings.llm_defaults)
-    return {
-      routing_model_code: String(definitionBindings.routing_model_code || defaultModelBindings.routing_model_code),
-      llm_defaults: {
-        model_code: String(definitionDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
-      },
-    }
-  }
-
-  const configBindings = asRecord(versionConfig.model_bindings)
-  if (Object.keys(configBindings).length > 0) {
-    const configDefaults = asRecord(configBindings.llm_defaults)
-    return {
-      routing_model_code: String(configBindings.routing_model_code || defaultModelBindings.routing_model_code),
-      llm_defaults: {
-        model_code: String(configDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
-      },
-    }
-  }
-
-  const definitionConfig = asRecord(definition.config)
-  const definitionConfigDefaults = asRecord(definitionConfig.llm_defaults)
-  return {
-    routing_model_code: String(definitionConfig.routing_model_code || defaultModelBindings.routing_model_code),
-    llm_defaults: {
-      model_code: String(definitionConfigDefaults.model_code || defaultModelBindings.llm_defaults.model_code),
-    },
-  }
 }
 
 function resolveVariableSource(definition: Record<string, unknown>, versionConfig: Record<string, unknown>) {

@@ -1056,7 +1056,7 @@ const App: React.FC = () => {
               binding_key: targetBindingKey,
             })
             reject(new Error(`Gateway ack timeout for ${action}`))
-          }, 15000)
+          }, 45000)
           pendingRequestsRef.current.set(requestId, { resolve, reject, timeoutId })
 
           gatewayLog('send', {

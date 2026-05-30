@@ -292,7 +292,9 @@ public class WorkflowService {
 
         WorkflowVersion version = workflowVersionRepository.findByWorkflowCodeAndVersion(workflowCode, request.getVersion())
                 .orElseGet(WorkflowVersion::new);
-        String normalizedDefinitionJson = normalizeDefinitionJsonForPersist(request.getDefinition());
+        Map<String, Object> modelBindings = resolveDefaultModelBindingsForPersist();
+        String normalizedDefinitionJson = normalizeDefinitionJsonForPersist(request.getDefinition(), modelBindings);
+        String normalizedConfigJson = normalizeConfigJsonForPersist(request.getConfig(), modelBindings);
         String resolvedEntryRuleJson = resolveEntryRuleForPersist(request.getEntryRule(), workflowCode, workflow.getName());
         log.info(
                 "workflow.draft.normalized workflowCode={} version={} definitionLength={} entryRuleLength={} metadataChanged={}",
@@ -307,8 +309,8 @@ public class WorkflowService {
         version.setDefinition(normalizedDefinitionJson);
         version.setEntryRule(resolvedEntryRuleJson);
         version.setEditorMeta(request.getEditorMeta());
-        version.setConfig(request.getConfig());
-        version.setWorkflowSnapshot(resolveWorkflowSnapshotForPersist(workflow, request, normalizedDefinitionJson, resolvedEntryRuleJson));
+        version.setConfig(normalizedConfigJson);
+        version.setWorkflowSnapshot(resolveWorkflowSnapshotForPersist(workflow, request, normalizedDefinitionJson, resolvedEntryRuleJson, normalizedConfigJson, modelBindings));
         version.setStatus(WorkflowVersionStatus.DRAFT);
         version.setCreatedBy(userId);
         if (version.getCreatedAt() == null) {
@@ -1676,8 +1678,19 @@ public class WorkflowService {
     }
 
     private String normalizeDefinitionJsonForPersist(String definitionJson) {
+        return normalizeDefinitionJsonForPersist(definitionJson, null);
+    }
+
+    private String normalizeDefinitionJsonForPersist(String definitionJson, Map<String, Object> modelBindings) {
         Map<String, Object> parsed = parseJsonObjectStrict(definitionJson);
         Map<String, Object> normalized = normalizeWorkflowDefinition(parsed);
+        applyDefaultModelBindings(normalized, modelBindings, false);
+        return writeJsonObject(normalized);
+    }
+
+    private String normalizeConfigJsonForPersist(String configJson, Map<String, Object> modelBindings) {
+        Map<String, Object> normalized = normalizeWorkflowConfig(parseJsonObject(configJson));
+        applyDefaultModelBindings(normalized, modelBindings, true);
         return writeJsonObject(normalized);
     }
 
@@ -1686,6 +1699,24 @@ public class WorkflowService {
             CreateWorkflowVersionRequest request,
             String normalizedDefinitionJson,
             String entryRuleJson
+    ) {
+        return resolveWorkflowSnapshotForPersist(
+                workflow,
+                request,
+                normalizedDefinitionJson,
+                entryRuleJson,
+                request.getConfig(),
+                null
+        );
+    }
+
+    private String resolveWorkflowSnapshotForPersist(
+            Workflow workflow,
+            CreateWorkflowVersionRequest request,
+            String normalizedDefinitionJson,
+            String entryRuleJson,
+            String configJson,
+            Map<String, Object> modelBindings
     ) {
         String workflowCode = workflow.getWorkflowCode();
         String workflowName = firstNonBlank(
@@ -1708,7 +1739,8 @@ public class WorkflowService {
                     normalizedDefinitionJson,
                     entryRuleJson,
                     request.getEditorMeta(),
-                    request.getConfig()
+                    configJson,
+                    modelBindings
             );
         }
         return normalizeProvidedWorkflowSnapshot(
@@ -1719,7 +1751,8 @@ public class WorkflowService {
                 workflowVersion,
                 entryRuleJson,
                 request.getEditorMeta(),
-                request.getConfig()
+                configJson,
+                modelBindings
         );
     }
 
@@ -1744,7 +1777,8 @@ public class WorkflowService {
             String workflowVersion,
             String fallbackEntryRuleJson,
             String fallbackEditorMetaJson,
-            String fallbackConfigJson
+            String fallbackConfigJson,
+            Map<String, Object> modelBindings
     ) {
         Map<String, Object> providedSnapshot = parseJsonObjectStrict(snapshotJson);
         String schemaVersion = stringValue(providedSnapshot.get("schema_version"));
@@ -1758,6 +1792,7 @@ public class WorkflowService {
             throw new RuntimeException("Workflow snapshot designer.definition is required");
         }
         Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(providedDefinition);
+        applyDefaultModelBindings(normalizedDefinition, modelBindings, false);
         normalizedDefinition.put("workflow_code", workflowCode);
         normalizedDefinition.put("workflow_name", workflowName);
         normalizedDefinition.put("workflow_description", workflowDescription);
@@ -1768,9 +1803,11 @@ public class WorkflowService {
         if (asMap(normalizedDesigner.get("entry_rule")).isEmpty()) {
             normalizedDesigner.put("entry_rule", parseJsonObject(fallbackEntryRuleJson));
         }
-        if (!normalizedDesigner.containsKey("workflow_config")) {
-            normalizedDesigner.put("workflow_config", parseJsonObject(fallbackConfigJson));
-        }
+        Map<String, Object> workflowConfig = normalizedDesigner.containsKey("workflow_config")
+                ? normalizeWorkflowConfig(asMap(normalizedDesigner.get("workflow_config")))
+                : parseJsonObject(fallbackConfigJson);
+        applyDefaultModelBindings(workflowConfig, modelBindings, true);
+        normalizedDesigner.put("workflow_config", workflowConfig);
         if (!normalizedDesigner.containsKey("editor_meta")) {
             normalizedDesigner.put("editor_meta", parseJsonObject(fallbackEditorMetaJson));
         }
@@ -1792,7 +1829,32 @@ public class WorkflowService {
             String editorMetaJson,
             String configJson
     ) {
+        return buildCompatibilityWorkflowSnapshot(
+                workflowCode,
+                workflowName,
+                workflowDescription,
+                workflowVersion,
+                definitionJson,
+                entryRuleJson,
+                editorMetaJson,
+                configJson,
+                null
+        );
+    }
+
+    private String buildCompatibilityWorkflowSnapshot(
+            String workflowCode,
+            String workflowName,
+            String workflowDescription,
+            String workflowVersion,
+            String definitionJson,
+            String entryRuleJson,
+            String editorMetaJson,
+            String configJson,
+            Map<String, Object> modelBindings
+    ) {
         Map<String, Object> normalizedDefinition = normalizeWorkflowDefinition(parseJsonObjectStrict(definitionJson));
+        applyDefaultModelBindings(normalizedDefinition, modelBindings, false);
         normalizedDefinition.put("workflow_code", workflowCode);
         normalizedDefinition.put("workflow_name", workflowName);
         normalizedDefinition.put("workflow_description", workflowDescription);
@@ -1805,10 +1867,75 @@ public class WorkflowService {
         Map<String, Object> designer = new LinkedHashMap<>();
         designer.put("definition", normalizedDefinition);
         designer.put("entry_rule", parseJsonObject(entryRuleJson));
-        designer.put("workflow_config", parseJsonObject(configJson));
+        Map<String, Object> workflowConfig = normalizeWorkflowConfig(parseJsonObject(configJson));
+        applyDefaultModelBindings(workflowConfig, modelBindings, true);
+        designer.put("workflow_config", workflowConfig);
         designer.put("editor_meta", parseJsonObject(editorMetaJson));
         snapshot.put("designer", designer);
         return writeJsonObject(snapshot);
+    }
+
+    private Map<String, Object> resolveDefaultModelBindingsForPersist() {
+        String routingModelCode = firstNonBlank(
+                modelConfigService.resolveConfiguredPurposeModelCode("routing"),
+                modelConfigService.resolveConfiguredPurposeModelCode("default")
+        );
+        String defaultModelCode = firstNonBlank(
+                modelConfigService.resolveConfiguredPurposeModelCode("default"),
+                routingModelCode
+        );
+        requireAvailableModelCode(routingModelCode, "routing");
+        requireAvailableModelCode(defaultModelCode, "default");
+
+        Map<String, Object> llmDefaults = new LinkedHashMap<>();
+        llmDefaults.put("model_code", defaultModelCode);
+
+        Map<String, Object> modelBindings = new LinkedHashMap<>();
+        modelBindings.put("routing_model_code", routingModelCode);
+        modelBindings.put("llm_defaults", llmDefaults);
+        return modelBindings;
+    }
+
+    private void requireAvailableModelCode(String modelCode, String purpose) {
+        if (modelCode == null || !modelConfigService.isModelCodeAvailable(modelCode)) {
+            throw new IllegalStateException("Default model code for " + purpose + " is not available: " + modelCode);
+        }
+    }
+
+    private void applyDefaultModelBindings(
+            Map<String, Object> target,
+            Map<String, Object> defaultModelBindings,
+            boolean includeTopLevelCompat
+    ) {
+        if (target == null || defaultModelBindings == null || defaultModelBindings.isEmpty()) {
+            return;
+        }
+
+        String routingModelCode = stringValue(defaultModelBindings.get("routing_model_code"));
+        String defaultModelCode = readNestedString(defaultModelBindings, "llm_defaults", "model_code");
+
+        Map<String, Object> modelBindings = new LinkedHashMap<>(asMap(target.get("model_bindings")));
+        if (routingModelCode != null) {
+            modelBindings.put("routing_model_code", routingModelCode);
+            if (includeTopLevelCompat) {
+                target.put("routing_model_code", routingModelCode);
+            }
+        }
+
+        Map<String, Object> bindingDefaults = new LinkedHashMap<>(asMap(modelBindings.get("llm_defaults")));
+        if (defaultModelCode != null) {
+            bindingDefaults.put("model_code", defaultModelCode);
+        }
+        modelBindings.put("llm_defaults", bindingDefaults);
+        target.put("model_bindings", modelBindings);
+
+        if (includeTopLevelCompat) {
+            Map<String, Object> llmDefaults = new LinkedHashMap<>(asMap(target.get("llm_defaults")));
+            if (defaultModelCode != null) {
+                llmDefaults.put("model_code", defaultModelCode);
+            }
+            target.put("llm_defaults", llmDefaults);
+        }
     }
 
     private Map<String, Object> workflowMetadataMap(String workflowCode, String workflowName, String workflowDescription, String workflowVersion) {
