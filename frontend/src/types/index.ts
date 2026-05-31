@@ -478,6 +478,8 @@ export interface CapabilityItemSummary {
   status: string
   draftVersion?: string | null
   publishedVersion?: string | null
+  inputSchema?: string | null
+  outputSchema?: string | null
   lastTestStatus?: string | null
   lastTestTime?: string | null
   description?: string

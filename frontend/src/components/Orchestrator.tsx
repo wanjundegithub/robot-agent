@@ -17,6 +17,7 @@ import 'reactflow/dist/style.css'
 import {
   getCapabilitiesByGroup,
   getCapabilityGroups,
+  getCapabilityVersions,
   publishWorkflow,
   saveWorkflowDraft,
   validateWorkflowDraft,
@@ -24,13 +25,14 @@ import {
 import type {
   CapabilityGroupSummary,
   CapabilityItemSummary,
+  CapabilityVersionSummary,
   WorkflowDesignerDefinitionV2,
   WorkflowEditorSelection,
   WorkflowSnapshotV1,
   WorkflowValidationIssue,
 } from '../types'
 
-type DesignerNodeType = 'start' | 'coordinator' | 'sub_agent' | 'tool' | 'message' | 'function' | 'end'
+type DesignerNodeType = 'start' | 'coordinator' | 'sub_agent' | 'api' | 'message' | 'function' | 'end'
 type VariableScope = 'global' | 'temp'
 type WorkflowEditorColumnKey = 'graph' | 'canvas' | 'properties' | 'variables'
 type VariableType =
@@ -271,12 +273,16 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     },
   },
   {
-    nodeType: 'tool',
-    label: '工具节点',
+    nodeType: 'api',
+    label: 'API节点',
     config: {
       invoke_type: 'capability',
       group_id: '',
       capability_code: '',
+      capability_version: '',
+      group_snapshot_version: '',
+      input_schema: '',
+      output_schema: '',
       payload_mapping: {},
     },
   },
@@ -332,7 +338,7 @@ const subflowNodeGroups: Array<{
   },
   {
     title: '执行节点',
-    items: ['function', 'tool'],
+    items: ['function', 'api'],
   },
 ]
 
@@ -376,6 +382,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   }))
   const [capabilityGroups, setCapabilityGroups] = useState<CapabilityGroupSummary[]>([])
   const [capabilityItems, setCapabilityItems] = useState<CapabilityItemSummary[]>([])
+  const [selectedCapabilityVersion, setSelectedCapabilityVersion] = useState<CapabilityVersionSummary | null>(null)
 
   const currentGraph = graphs[currentGraphId] ?? createInitialGraph(currentGraphId)
   const currentGraphIsMain = currentGraphId === MAIN_GRAPH_ID
@@ -413,7 +420,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     try {
       const items = await getCapabilitiesByGroup(groupId)
       setCapabilityItems(
-        items.filter((item) => String(item.status || '').toUpperCase() === 'PUBLISHED')
+        items.filter((item) =>
+          String(item.status || '').toUpperCase() === 'PUBLISHED' &&
+          String(item.capabilityType || '').toUpperCase() === 'API'
+        )
       )
     } catch (error) {
       console.error('Failed to load capability node options:', error)
@@ -531,17 +541,52 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   useEffect(() => {
     const config = selectedNodeData?.config || {}
-    if (selectedNodeData?.nodeType !== 'tool' || String(config.invoke_type || 'capability') !== 'capability') {
+    if (selectedNodeData?.nodeType !== 'api') {
       setCapabilityItems([])
+      setSelectedCapabilityVersion(null)
       return
     }
     const groupId = Number(config.group_id || 0)
     if (!groupId) {
       setCapabilityItems([])
+      setSelectedCapabilityVersion(null)
       return
     }
 
     void loadCapabilityItems(groupId)
+  }, [selectedNodeData])
+
+  useEffect(() => {
+    const config = selectedNodeData?.config || {}
+    if (selectedNodeData?.nodeType !== 'api') {
+      setSelectedCapabilityVersion(null)
+      return
+    }
+    const groupId = Number(config.group_id || 0)
+    const capabilityCode = String(config.capability_code || '')
+    if (!groupId || !capabilityCode) {
+      setSelectedCapabilityVersion(null)
+      return
+    }
+
+    let isActive = true
+    void (async () => {
+      try {
+        const versions = await getCapabilityVersions(groupId, capabilityCode)
+        if (!isActive) return
+        const publishedVersion = versions.find((version) => String(version.status || '').toUpperCase() === 'PUBLISHED') ?? null
+        setSelectedCapabilityVersion(publishedVersion)
+      } catch (error) {
+        console.error('Failed to load API capability schema for workflow node:', error)
+        if (isActive) {
+          setSelectedCapabilityVersion(null)
+        }
+      }
+    })()
+
+    return () => {
+      isActive = false
+    }
   }, [selectedNodeData])
 
   const summaryRules = useMemo<WorkflowSummaryRule[]>(() => {
@@ -938,6 +983,35 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const nextConfig = structuredClone(selectedNodeData.config || {})
     assignPath(nextConfig, field, value)
     replaceSelectedConfig(nextConfig)
+  }
+
+  const selectApiCapabilityGroup = (groupId: string) => {
+    if (!selectedNodeData) return
+    const selectedGroup = capabilityGroups.find((group) => String(group.id) === groupId)
+    replaceSelectedConfig({
+      ...structuredClone(selectedNodeData.config || {}),
+      group_id: groupId,
+      group_snapshot_version: selectedGroup?.latestSnapshotVersion || '',
+      capability_code: '',
+      capability_version: '',
+      input_schema: '',
+      output_schema: '',
+      payload_mapping: {},
+    })
+    setSelectedCapabilityVersion(null)
+  }
+
+  const selectApiCapability = (capabilityCode: string) => {
+    if (!selectedNodeData) return
+    const selectedCapability = capabilityItems.find((item) => item.capabilityCode === capabilityCode)
+    replaceSelectedConfig({
+      ...structuredClone(selectedNodeData.config || {}),
+      capability_code: capabilityCode,
+      capability_version: selectedCapability?.publishedVersion || '',
+      input_schema: selectedCapability?.inputSchema || '',
+      output_schema: selectedCapability?.outputSchema || '',
+      payload_mapping: {},
+    })
   }
 
   const addSelectedVariable = (field: 'input_variable_ids' | 'output_variable_ids') => {
@@ -1490,83 +1564,55 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           </>
         )}
 
-        {nodeType === 'tool' && (
+        {nodeType === 'api' && (
           <>
             <select
-              value={String(config.invoke_type || 'capability')}
-              onChange={(event) => updateSelectedConfigField('invoke_type', event.target.value)}
+              value={String(config.group_id || '')}
+              onChange={(event) => selectApiCapabilityGroup(event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              data-testid="workflow-api-group-select"
             >
-              <option value="capability">已发布接口能力</option>
-              <option value="api">直接接口调用</option>
+              <option value="">选择已上线能力组</option>
+              {capabilityGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.groupName}
+                </option>
+              ))}
+            </select>
+            <select
+              value={String(config.capability_code || '')}
+              onChange={(event) => selectApiCapability(event.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              data-testid="workflow-api-capability-select"
+            >
+              <option value="">选择 API 能力</option>
+              {capabilityItems.map((item) => (
+                <option key={item.capabilityCode} value={item.capabilityCode}>
+                  {item.capabilityName}
+                </option>
+              ))}
             </select>
 
-            {String(config.invoke_type || 'capability') === 'capability' && (
-              <>
-                <select
-                  value={String(config.group_id || '')}
-                  onChange={(event) => {
-                    const nextGroupId = event.target.value
-                    updateSelectedConfigField('group_id', nextGroupId)
-                    updateSelectedConfigField('capability_code', '')
-                    void loadCapabilityItems(Number(nextGroupId || 0))
-                  }}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  data-testid="workflow-capability-group-select"
-                >
-                  <option value="">选择能力组</option>
-                  {capabilityGroups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.groupName}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={String(config.capability_code || '')}
-                  onChange={(event) => {
-                    const nextCapabilityCode = event.target.value
-                    updateSelectedConfigField('capability_code', nextCapabilityCode)
-                  }}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  data-testid="workflow-capability-code-select"
-                >
-                  <option value="">选择能力</option>
-                  {capabilityItems.map((item) => (
-                    <option key={item.capabilityCode} value={item.capabilityCode}>
-                      {item.capabilityName}
-                    </option>
-                  ))}
-                </select>
-              </>
+            {String(config.capability_version || '') && (
+              <div className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+                已选能力版本：{String(config.capability_version)}
+              </div>
             )}
 
-            {String(config.invoke_type || 'capability') === 'api' && (
-              <>
-                <input
-                  value={String(config.url || '')}
-                  onChange={(event) => updateSelectedConfigField('url', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="接口地址"
-                />
-                <select
-                  value={String(config.method || 'POST')}
-                  onChange={(event) => updateSelectedConfigField('method', event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                >
-                  <option value="GET">读取请求</option>
-                  <option value="POST">提交请求</option>
-                  <option value="PUT">整体更新</option>
-                  <option value="PATCH">局部更新</option>
-                  <option value="DELETE">删除请求</option>
-                </select>
-              </>
-            )}
+            <div data-testid="workflow-api-input-parameters">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输入参数</div>
+              {renderSchemaParameterList(selectedCapabilityVersion?.inputSchema ?? String(config.input_schema || ''), '暂无输入参数')}
+            </div>
+            <div data-testid="workflow-api-output-parameters">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输出参数</div>
+              {renderSchemaParameterList(selectedCapabilityVersion?.outputSchema ?? String(config.output_schema || ''), '暂无输出参数')}
+            </div>
 
             <textarea
               value={formatObject(config.payload_mapping)}
               onChange={(event) => updateJsonConfigField('payload_mapping', event.target.value, config, replaceSelectedConfig)}
               className="min-h-[120px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
-              placeholder="请填写载荷映射对象"
+              placeholder="请填写入参映射对象"
             />
           </>
         )}
@@ -2138,22 +2184,18 @@ function normalizeNodeConfig(
         operation_type: String(config.operation_type || 'assign'),
         assignments: ensureObject(config.assignments),
       }
-    case 'tool': {
-      const invokeType = String(config.invoke_type || 'capability')
-      const base: Record<string, unknown> = {
-        invoke_type: invokeType,
+    case 'api':
+      return {
+        invoke_type: 'capability',
+        group_id: Number(config.group_id || 0) || '',
+        group_snapshot_version: String(config.group_snapshot_version || ''),
+        capability_code: String(config.capability_code || ''),
+        capability_version: String(config.capability_version || ''),
+        tool_code: String(config.capability_code || ''),
+        input_schema: String(config.input_schema || ''),
+        output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
       }
-      if (invokeType === 'capability') {
-        base.group_id = Number(config.group_id || 0) || ''
-        base.capability_code = String(config.capability_code || '')
-        base.tool_code = String(config.capability_code || '')
-      } else if (invokeType === 'api') {
-        base.url = String(config.url || '')
-        base.method = String(config.method || 'POST')
-      }
-      return base
-    }
     case 'end':
       return {
         prompt: String(config.prompt || ''),
@@ -2200,6 +2242,38 @@ function formatObject(value: unknown) {
   return JSON.stringify(ensureObject(value), null, 2)
 }
 
+function renderSchemaParameterList(rawSchema: string, emptyText: string) {
+  const parameters = extractSchemaParameters(rawSchema)
+  if (parameters.length === 0) {
+    return <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-400">{emptyText}</div>
+  }
+
+  return (
+    <div className="space-y-2">
+      {parameters.map((parameter) => (
+        <div key={parameter.name} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <div className="font-semibold text-slate-700">{parameter.name}</div>
+          <div className="mt-1 text-slate-500">{parameter.type}</div>
+          {parameter.description && <div className="mt-1 text-slate-500">{parameter.description}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function extractSchemaParameters(rawSchema: string) {
+  const schema = parseJsonObject(rawSchema)
+  const properties = asRecord(schema.properties)
+  return Object.entries(properties).map(([name, value]) => {
+    const field = asRecord(value)
+    return {
+      name,
+      type: String(field.type || 'object'),
+      description: String(field.description || ''),
+    }
+  })
+}
+
 function updateJsonConfigField(
   field: string,
   rawValue: string,
@@ -2227,8 +2301,8 @@ function displayNodeType(nodeType: DesignerNodeType) {
       return '协调节点'
     case 'sub_agent':
       return '子代理节点'
-    case 'tool':
-      return '工具节点'
+    case 'api':
+      return 'API节点'
     case 'message':
       return '消息节点'
     case 'function':
@@ -2615,21 +2689,17 @@ function denormalizeNodeConfig(
         operation_type: String(config.operation_type || 'assign'),
         assignments: ensureObject(config.assignments),
       }
-    case 'tool': {
-      const invokeType = String(config.invoke_type || 'capability')
-      const restored: Record<string, unknown> = {
-        invoke_type: invokeType,
+    case 'api':
+      return {
+        invoke_type: 'capability',
+        group_id: String(config.group_id || ''),
+        group_snapshot_version: String(config.group_snapshot_version || ''),
+        capability_code: String(config.capability_code || config.tool_code || ''),
+        capability_version: String(config.capability_version || ''),
+        input_schema: String(config.input_schema || ''),
+        output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
       }
-      if (invokeType === 'capability') {
-        restored.group_id = String(config.group_id || '')
-        restored.capability_code = String(config.capability_code || config.tool_code || '')
-      } else if (invokeType === 'api') {
-        restored.url = String(config.url || '')
-        restored.method = String(config.method || 'POST')
-      }
-      return restored
-    }
     case 'end':
       return {
         prompt: String(config.prompt || ''),
@@ -2706,11 +2776,13 @@ function normalizeDesignerNodeType(value: string | null): DesignerNodeType {
     case 'start':
     case 'coordinator':
     case 'sub_agent':
-    case 'tool':
+    case 'api':
     case 'message':
     case 'function':
     case 'end':
       return value
+    case 'tool':
+      return 'api'
     case 'coordinate':
       return 'coordinator'
     default:

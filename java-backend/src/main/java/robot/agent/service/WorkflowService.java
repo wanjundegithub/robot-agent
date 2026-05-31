@@ -35,7 +35,7 @@ public class WorkflowService {
     private static final String WORKFLOW_SNAPSHOT_SCHEMA_V1 = "workflow-snapshot/v1";
     private static final String DEFAULT_MAIN_GRAPH_ID = "main";
     private static final Set<String> SUPPORTED_NODE_TYPES = Set.of(
-            "start", "coordinator", "sub_agent", "tool", "message", "function", "end"
+            "start", "coordinator", "sub_agent", "tool", "api", "message", "function", "end"
     );
 
     private final WorkflowRepository workflowRepository;
@@ -575,7 +575,7 @@ public class WorkflowService {
             Map<String, Object> node = asMap(nodeEntry.getValue());
             String type = stringValue(node.get("type"));
             Map<String, Object> nodeConfig = asMap(node.get("config"));
-            if (type == null || !Set.of("start", "coordinate", "sub_agent", "tool", "message", "end").contains(type)) {
+            if (type == null || !Set.of("start", "coordinate", "sub_agent", "tool", "api", "message", "end").contains(type)) {
                 issues.add(issue(nodeId, "type", "节点类型不受支持"));
                 continue;
             }
@@ -593,7 +593,7 @@ public class WorkflowService {
             if ("message".equals(type) && stringValue(nodeConfig.get("message_text")) == null) {
                 issues.add(issue(nodeId, "config.message_text", "消息节点缺少固定话术"));
             }
-            if ("tool".equals(type)) {
+            if ("tool".equals(type) || "api".equals(type)) {
                 validateToolNode(nodeId, nodeConfig, issues);
             }
         }

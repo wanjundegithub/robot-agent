@@ -475,6 +475,106 @@ class WorkflowServiceTest {
         verify(workflowRepository, never()).save(any(Workflow.class));
     }
 
+    @Test
+    void publishWorkflow_acceptsApiExecutionNodeInSubgraph() throws Exception {
+        Workflow workflow = publishedWorkflow("flight_booking", null, "机票预订", "预订航班和机票");
+        workflow.setWorkspaceId(1L);
+        WorkflowVersion version = new WorkflowVersion();
+        version.setWorkflowCode("flight_booking");
+        version.setVersion("v1");
+        version.setStatus(WorkflowVersionStatus.DRAFT);
+        version.setDefinition(objectMapper.writeValueAsString(Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "variables", Map.of("global", List.of(Map.of(
+                        "id", "origin",
+                        "name", "origin",
+                        "type", "String",
+                        "scope", "global"
+                )), "temporary", List.of()),
+                "graphs", Map.of(
+                        "main", Map.of(
+                                "graph_id", "main",
+                                "graph_type", "MAIN",
+                                "graph_name", "机票预订",
+                                "graph_description", "预订航班和机票",
+                                "entry_node_id", "coordinator_main",
+                                "nodes", Map.of(
+                                        "coordinator_main", Map.of(
+                                                "id", "coordinator_main",
+                                                "type", "coordinator",
+                                                "config", Map.of("prompt", "选择子流程")
+                                        ),
+                                        "book_flight", Map.of(
+                                                "id", "book_flight",
+                                                "type", "sub_agent",
+                                                "config", Map.of(
+                                                        "prompt", "预定机票",
+                                                        "subgraph_id", "book_flight_graph"
+                                                )
+                                        )
+                                ),
+                                "edges", List.of(Map.of(
+                                        "id", "e1",
+                                        "source", "coordinator_main",
+                                        "target", "book_flight"
+                                ))
+                        ),
+                        "book_flight_graph", Map.of(
+                                "graph_id", "book_flight_graph",
+                                "graph_type", "SUBGRAPH",
+                                "graph_name", "API 子流程",
+                                "graph_description", "调用能力中心 API",
+                                "entry_node_id", "start",
+                                "nodes", Map.of(
+                                        "start", Map.of(
+                                                "id", "start",
+                                                "type", "start",
+                                                "config", Map.of("prompt", "开始")
+                                        ),
+                                        "flight_price", Map.of(
+                                                "id", "flight_price",
+                                                "type", "api",
+                                                "config", Map.of(
+                                                        "invoke_type", "capability",
+                                                        "group_id", 91,
+                                                        "capability_code", "flight_price_api",
+                                                        "capability_version", "v202605300001",
+                                                        "payload_mapping", Map.of("origin", "$global.origin")
+                                                )
+                                        ),
+                                        "end", Map.of(
+                                                "id", "end",
+                                                "type", "end",
+                                                "config", Map.of("prompt", "结束", "output_format", Map.of())
+                                        )
+                                ),
+                                "edges", List.of(
+                                        Map.of("id", "s1", "source", "start", "target", "flight_price"),
+                                        Map.of("id", "s2", "source", "flight_price", "target", "end")
+                                )
+                        )
+                )
+        )));
+        version.setConfig("{}");
+
+        when(workflowRepository.findByWorkflowCode("flight_booking")).thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "v1"))
+                .thenReturn(Optional.of(version));
+        when(workflowVersionRepository.save(any(WorkflowVersion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        workflowService.publishWorkflow("demo-admin", "flight_booking", "v1");
+
+        ArgumentCaptor<WorkflowVersion> versionCaptor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(versionCaptor.capture());
+        JsonNode definition = objectMapper.readTree(versionCaptor.getValue().getDefinition());
+        assertThat(definition.at("/graphs/book_flight_graph/nodes/flight_price/type").asText()).isEqualTo("api");
+        assertThat(versionCaptor.getValue().getStatus()).isEqualTo(WorkflowVersionStatus.PUBLISHED);
+        verify(workflowRepository).save(any(Workflow.class));
+    }
+
     private WorkflowVersion publishedVersion(String workflowCode, String version, Map<String, Object> config) throws Exception {
         return publishedVersion(workflowCode, version, config, List.of("酒店"), List.of(workflowCode));
     }

@@ -758,6 +758,7 @@ const App: React.FC = () => {
       case 'node.started':
         if (nodeType === 'start') return '\u6b63\u5728\u68c0\u67e5\u5f00\u59cb\u8282\u70b9\u53d8\u91cf'
         if (nodeType === 'llm') return '\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u751f\u6210\u56de\u590d'
+        if (nodeType === 'api') return '\u6b63\u5728\u51c6\u5907\u8c03\u7528 API'
         if (nodeType === 'tool') return '\u6b63\u5728\u51c6\u5907\u8c03\u7528\u5de5\u5177'
         return '\u6b63\u5728\u8bc6\u522b\u610f\u56fe'
       case 'tool.called':

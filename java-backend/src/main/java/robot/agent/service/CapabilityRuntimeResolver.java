@@ -60,7 +60,8 @@ public class CapabilityRuntimeResolver {
         Map<String, Object> resolvedNodes = new LinkedHashMap<>(nodes);
         for (Map.Entry<String, Object> entry : nodes.entrySet()) {
             Map<String, Object> node = asMap(entry.getValue());
-            if (!"tool".equals(stringValue(node.get("type")))) {
+            String nodeType = stringValue(node.get("type"));
+            if (!"tool".equals(nodeType) && !"api".equals(nodeType)) {
                 continue;
             }
             Map<String, Object> config = asMap(node.get("config"));

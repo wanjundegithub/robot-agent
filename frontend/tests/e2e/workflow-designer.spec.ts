@@ -845,7 +845,7 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-add-node-coordinator')).toHaveCount(0)
   })
 
-  test('deletes selected nodes and loads capability groups/items from real APIs', async ({ page }) => {
+  test('deletes selected nodes and loads API capability groups/items from real APIs', async ({ page }) => {
     let nextSessionIndex = 1
     let itemsRequestCount = 0
 
@@ -950,11 +950,11 @@ test.describe('workflow designer v2 contract', () => {
     await page.getByTestId('workflow-add-node-sub_agent').click()
     await page.getByPlaceholder('流程名称').fill('能力子流程')
     await page.getByTestId('workflow-open-subgraph').click()
-    await page.getByTestId('workflow-add-node-tool').click()
+    await page.getByTestId('workflow-add-node-api').click()
 
-    await page.getByTestId('workflow-capability-group-select').selectOption('7')
+    await page.getByTestId('workflow-api-group-select').selectOption('7')
     await expect.poll(() => itemsRequestCount).toBe(1)
-    await expect(page.getByTestId('workflow-capability-code-select')).toContainText('Search Flights')
+    await expect(page.getByTestId('workflow-api-capability-select')).toContainText('Search Flights')
     await expect(page.getByTestId('workflow-capability-version-select')).toHaveCount(0)
   })
 
@@ -1135,6 +1135,226 @@ test.describe('workflow designer v2 contract', () => {
     expect(config.main_graph_id).toBe('main')
     expect(config).not.toHaveProperty('graphs')
     expect(config).not.toHaveProperty('model_bindings')
+  })
+
+  test('configures execution as API node from published API capability schemas', async ({ page }) => {
+    let nextSessionIndex = 1
+    let draftPayload: Record<string, unknown> | null = null
+
+    await page.route('**/api/**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const { pathname } = url
+
+      if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/workflows' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/versions') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/validate-draft') && request.method() === 'POST') {
+        await route.fulfill({ json: { valid: true, issues: [] } })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/drafts') && request.method() === 'POST') {
+        draftPayload = request.postDataJSON() as Record<string, unknown>
+        await route.fulfill({
+          json: {
+            id: 501,
+            workflowId: 502,
+            workflowCode: String(draftPayload.workflow_code || `workflow_${Date.now()}`),
+            workflowName: String(draftPayload.workflow_name || 'API Node Workflow'),
+            version: String(draftPayload.version || 'draft'),
+            status: 'DRAFT',
+          },
+        })
+        return
+      }
+      if (pathname === '/api/capabilities/groups' && request.method() === 'GET') {
+        await route.fulfill({
+          json: [
+            {
+              id: 91,
+              groupName: '已上线能力组',
+              status: 'PUBLISHED',
+              latestSnapshotVersion: 'snap_202605300001',
+              capabilityCount: 2,
+            },
+            { id: 92, groupName: '草稿能力组', status: 'DRAFT', capabilityCount: 1 },
+          ],
+        })
+        return
+      }
+      if (pathname === '/api/capabilities/groups/91/items' && request.method() === 'GET') {
+        await route.fulfill({
+          json: [
+            {
+              id: 901,
+              groupId: 91,
+              capabilityCode: 'flight_price_api',
+              capabilityName: '航班价格查询',
+              capabilityType: 'API',
+              status: 'PUBLISHED',
+              publishedVersion: 'v202605300001',
+              inputSchema: JSON.stringify({
+                type: 'object',
+                properties: {
+                  departureCity: { type: 'string', description: '出发城市' },
+                  arrivalCity: { type: 'string', description: '到达城市' },
+                },
+              }),
+              outputSchema: JSON.stringify({
+                type: 'object',
+                properties: {
+                  price: { type: 'number', description: '最低价格' },
+                  currency: { type: 'string', description: '币种' },
+                },
+              }),
+            },
+            {
+              id: 902,
+              groupId: 91,
+              capabilityCode: 'draft_api',
+              capabilityName: '草稿接口',
+              capabilityType: 'API',
+              status: 'DRAFT',
+            },
+            {
+              id: 903,
+              groupId: 91,
+              capabilityCode: 'skill_helper',
+              capabilityName: '技能助手',
+              capabilityType: 'SKILL',
+              status: 'PUBLISHED',
+            },
+          ],
+        })
+        return
+      }
+      if (pathname === '/api/capabilities/groups/91/items/flight_price_api/versions' && request.method() === 'GET') {
+        await route.fulfill({
+          json: [
+            {
+              id: 901,
+              groupId: 91,
+              capabilityCode: 'flight_price_api',
+              capabilityName: '航班价格查询',
+              capabilityType: 'API',
+              version: 'v202605300001',
+              status: 'PUBLISHED',
+              inputSchema: JSON.stringify({
+                type: 'object',
+                properties: {
+                  departureCity: { type: 'string', description: '出发城市' },
+                  arrivalCity: { type: 'string', description: '到达城市' },
+                },
+              }),
+              outputSchema: JSON.stringify({
+                type: 'object',
+                properties: {
+                  price: { type: 'number', description: '最低价格' },
+                  currency: { type: 'string', description: '币种' },
+                },
+              }),
+            },
+          ],
+        })
+        return
+      }
+      if (pathname.startsWith('/api/capabilities/groups/') && pathname.endsWith('/items') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'POST') {
+        const createdId = `session-e2e-${nextSessionIndex}`
+        nextSessionIndex += 1
+        await route.fulfill({
+          json: {
+            id: createdId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+        const sessionId = pathname.split('/').pop() || 'session-e2e-1'
+        await route.fulfill({
+          json: {
+            id: sessionId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/executions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+
+      await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+    })
+
+    await openNewWorkflowEditor(page)
+    await page.getByTestId('workflow-current-graph-name-input').fill('API Node Workflow')
+    await page.getByTestId('workflow-current-graph-description-input').fill('API 节点流程描述')
+    await page.getByTestId('workflow-add-node-sub_agent').click()
+    await page.getByPlaceholder('流程名称').fill('API 子流程')
+    await page.getByTestId('workflow-node-description-input').fill('API 子流程描述')
+    await page.getByTestId('workflow-open-subgraph').click()
+    await page.getByTestId('workflow-add-node-api').click()
+    await page.locator('.react-flow__node').filter({ hasText: 'API节点' }).click()
+
+    await expect(page.getByText('节点类型：API节点')).toBeVisible()
+    await expect(page.getByTestId('workflow-api-group-select').locator('option')).toHaveText([
+      '选择已上线能力组',
+      '已上线能力组',
+    ])
+    await page.getByTestId('workflow-api-group-select').selectOption('91')
+    await expect(page.getByTestId('workflow-api-capability-select').locator('option')).toHaveText([
+      '选择 API 能力',
+      '航班价格查询',
+    ])
+    await page.getByTestId('workflow-api-capability-select').selectOption('flight_price_api')
+
+    await expect(page.getByTestId('workflow-api-input-parameters')).toContainText('departureCity')
+    await expect(page.getByTestId('workflow-api-input-parameters')).toContainText('出发城市')
+    await expect(page.getByTestId('workflow-api-output-parameters')).toContainText('price')
+    await expect(page.getByTestId('workflow-api-output-parameters')).toContainText('最低价格')
+
+    await page.getByTestId('workflow-publish').click()
+    await expect.poll(() => draftPayload).not.toBeNull()
+    const definition = JSON.parse(String((draftPayload || {}).definition || '{}')) as Record<string, unknown>
+    const graphs = definition.graphs as Record<string, Record<string, unknown>>
+    const subgraphId = Object.keys(graphs).find((graphId) => graphId !== 'main') as string
+    const subgraphNodes = graphs[subgraphId].nodes as Record<string, Record<string, unknown>>
+    const apiNode = Object.values(subgraphNodes).find((node) => node.type === 'api')
+    const apiConfig = apiNode?.config as Record<string, unknown>
+    expect(apiNode?.name).toBe('API节点')
+    expect(apiConfig.group_id).toBe(91)
+    expect(apiConfig.capability_code).toBe('flight_price_api')
+    expect(apiConfig.capability_version).toBe('v202605300001')
+    expect(apiConfig.input_schema).toContain('departureCity')
+    expect(apiConfig.output_schema).toContain('price')
   })
 
   test('publishes from editor without exposing chat debug entry', async ({ page }) => {

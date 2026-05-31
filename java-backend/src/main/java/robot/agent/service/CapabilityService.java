@@ -472,6 +472,8 @@ public class CapabilityService {
         result.put("status", item.getStatus());
         result.put("draftVersion", item.getDraftVersion());
         result.put("publishedVersion", item.getPublishedVersion());
+        result.put("inputSchema", item.getInputSchema());
+        result.put("outputSchema", item.getOutputSchema());
         result.put("lastTestStatus", item.getLastTestStatus());
         result.put("lastTestTime", item.getLastTestTime());
         result.put("description", item.getDescription());

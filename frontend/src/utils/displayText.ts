@@ -141,6 +141,8 @@ export function displayNodeRuntimeStatus(value?: string | null): string {
 
 export function displayNodeKind(value?: string | null): string {
   switch ((value || '').toLowerCase()) {
+    case 'api':
+      return 'API'
     case 'tool':
       return '工具'
     case 'message':
