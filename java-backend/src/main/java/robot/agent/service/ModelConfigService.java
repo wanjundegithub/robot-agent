@@ -20,15 +20,11 @@ import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.dto.request.ValidateModelProviderRequest;
-import robot.agent.model.CapabilityAuthConfig;
-import robot.agent.model.CapabilityGroupSnapshot;
-import robot.agent.model.CapabilityItem;
+import robot.agent.apicenter.model.ApiItem;
+import robot.agent.apicenter.repository.ApiItemRepository;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
 import robot.agent.model.WorkflowVersion;
-import robot.agent.repository.CapabilityAuthConfigRepository;
-import robot.agent.repository.CapabilityGroupSnapshotRepository;
-import robot.agent.repository.CapabilityItemRepository;
 import robot.agent.repository.LlmModelRecordRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
 import robot.agent.repository.WorkflowVersionRepository;
@@ -55,9 +51,7 @@ public class ModelConfigService {
     private final LlmProviderConfigRepository providerRepository;
     private final LlmModelRecordRepository modelRecordRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
-    private final CapabilityItemRepository capabilityItemRepository;
-    private final CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository;
-    private final CapabilityAuthConfigRepository capabilityAuthConfigRepository;
+    private final ApiItemRepository apiItemRepository;
     private final ObjectMapper objectMapper;
     private final AccessControlService accessControlService;
     private final AuditService auditService;
@@ -69,9 +63,7 @@ public class ModelConfigService {
             LlmProviderConfigRepository providerRepository,
             LlmModelRecordRepository modelRecordRepository,
             WorkflowVersionRepository workflowVersionRepository,
-            CapabilityItemRepository capabilityItemRepository,
-            CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository,
-            CapabilityAuthConfigRepository capabilityAuthConfigRepository,
+            ApiItemRepository apiItemRepository,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             AuditService auditService,
@@ -81,9 +73,7 @@ public class ModelConfigService {
         this.providerRepository = providerRepository;
         this.modelRecordRepository = modelRecordRepository;
         this.workflowVersionRepository = workflowVersionRepository;
-        this.capabilityItemRepository = capabilityItemRepository;
-        this.capabilityGroupSnapshotRepository = capabilityGroupSnapshotRepository;
-        this.capabilityAuthConfigRepository = capabilityAuthConfigRepository;
+        this.apiItemRepository = apiItemRepository;
         this.objectMapper = objectMapper;
         this.accessControlService = accessControlService;
         this.auditService = auditService;
@@ -95,9 +85,7 @@ public class ModelConfigService {
             LlmProviderConfigRepository providerRepository,
             LlmModelRecordRepository modelRecordRepository,
             WorkflowVersionRepository workflowVersionRepository,
-            CapabilityItemRepository capabilityItemRepository,
-            CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository,
-            CapabilityAuthConfigRepository capabilityAuthConfigRepository,
+            ApiItemRepository apiItemRepository,
             ObjectMapper objectMapper,
             AccessControlService accessControlService,
             AuditService auditService
@@ -106,9 +94,7 @@ public class ModelConfigService {
                 providerRepository,
                 modelRecordRepository,
                 workflowVersionRepository,
-                capabilityItemRepository,
-                capabilityGroupSnapshotRepository,
-                capabilityAuthConfigRepository,
+                apiItemRepository,
                 objectMapper,
                 accessControlService,
                 auditService,
@@ -800,19 +786,9 @@ public class ModelConfigService {
                 references.add("workflow_config:" + workflowVersion.getWorkflowCode() + "@" + workflowVersion.getVersion());
             }
         }
-        for (CapabilityItem capabilityItem : capabilityItemRepository.findAll()) {
-            if (jsonContainsModelReference(capabilityItem.getDefinitionJson(), modelCode)) {
-                references.add("capability_definition:" + capabilityItem.getGroupCode() + "/" + capabilityItem.getCapabilityCode());
-            }
-        }
-        for (CapabilityGroupSnapshot snapshot : capabilityGroupSnapshotRepository.findAll()) {
-            if (jsonContainsModelReference(snapshot.getSnapshotPayload(), modelCode)) {
-                references.add("capability_snapshot:" + snapshot.getGroupCode() + "@" + snapshot.getSnapshotVersion());
-            }
-        }
-        for (CapabilityAuthConfig authConfig : capabilityAuthConfigRepository.findAll()) {
-            if (jsonContainsModelReference(authConfig.getConfigJson(), modelCode)) {
-                references.add("capability_auth_config:" + authConfig.getGroupCode());
+        for (ApiItem apiItem : apiItemRepository.findAll()) {
+            if (jsonContainsModelReference(apiItem.getInputSchema(), modelCode) || jsonContainsModelReference(apiItem.getOutputSchema(), modelCode)) {
+                references.add("api_item:" + apiItem.getId());
             }
         }
         return new ArrayList<>(references);

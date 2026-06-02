@@ -56,8 +56,7 @@ public class ExecutionService {
     private final AccessControlService accessControlService;
     private final ConfirmationService confirmationService;
     private final EntryProtectionService entryProtectionService;
-    private final CapabilityRuntimeResolver capabilityRuntimeResolver;
-    private final CapabilityAuditService capabilityAuditService;
+    private final robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver;
     private final ChatFallbackProperties chatFallbackProperties;
     private final WorkflowPromptProperties workflowPromptProperties;
 
@@ -74,8 +73,7 @@ public class ExecutionService {
             AccessControlService accessControlService,
             ConfirmationService confirmationService,
             EntryProtectionService entryProtectionService,
-            CapabilityRuntimeResolver capabilityRuntimeResolver,
-            CapabilityAuditService capabilityAuditService,
+            robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver,
             ChatFallbackProperties chatFallbackProperties,
             WorkflowPromptProperties workflowPromptProperties
     ) {
@@ -90,8 +88,7 @@ public class ExecutionService {
         this.accessControlService = accessControlService;
         this.confirmationService = confirmationService;
         this.entryProtectionService = entryProtectionService;
-        this.capabilityRuntimeResolver = capabilityRuntimeResolver;
-        this.capabilityAuditService = capabilityAuditService;
+        this.apiRuntimeResolver = apiRuntimeResolver;
         this.chatFallbackProperties = chatFallbackProperties;
         this.workflowPromptProperties = workflowPromptProperties;
     }
@@ -108,8 +105,7 @@ public class ExecutionService {
             AccessControlService accessControlService,
             ConfirmationService confirmationService,
             EntryProtectionService entryProtectionService,
-            CapabilityRuntimeResolver capabilityRuntimeResolver,
-            CapabilityAuditService capabilityAuditService,
+            robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver,
             ChatFallbackProperties chatFallbackProperties
     ) {
         this(
@@ -124,8 +120,7 @@ public class ExecutionService {
                 accessControlService,
                 confirmationService,
                 entryProtectionService,
-                capabilityRuntimeResolver,
-                capabilityAuditService,
+                apiRuntimeResolver,
                 chatFallbackProperties,
                 new WorkflowPromptProperties()
         );
@@ -143,8 +138,7 @@ public class ExecutionService {
             AccessControlService accessControlService,
             ConfirmationService confirmationService,
             EntryProtectionService entryProtectionService,
-            CapabilityRuntimeResolver capabilityRuntimeResolver,
-            CapabilityAuditService capabilityAuditService
+            robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver
     ) {
         this(
                 sessionService,
@@ -158,8 +152,7 @@ public class ExecutionService {
                 accessControlService,
                 confirmationService,
                 entryProtectionService,
-                capabilityRuntimeResolver,
-                capabilityAuditService,
+                apiRuntimeResolver,
                 new ChatFallbackProperties(),
                 new WorkflowPromptProperties()
         );
@@ -491,7 +484,7 @@ public class ExecutionService {
                 confirmationEvaluation.toolCode() == null ? List.of() : List.of(confirmationEvaluation.toolCode())
         );
         executeRequest.setWorkflowDefinition(
-                capabilityRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition())
+                apiRuntimeResolver.resolveWorkflowDefinition(runtimeBundle.workflowDefinition())
         );
         executeRequest.setEntryRule(runtimeBundle.entryRule());
         executeRequest.setWorkflowConfig(withConfiguredSystemPrompts(runtimeBundle.workflowConfig()));
@@ -823,8 +816,6 @@ public class ExecutionService {
             case "tool.called":
                 sendEventFrame(eventType, executionId, sessionId, payload);
                 break;
-            case "tool.returned":
-                capabilityAuditService.recordToolReturn(payload);
             case "form.requested":
             case "security.prompt_sanitized":
             case "security.output_rejected":

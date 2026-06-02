@@ -54,10 +54,7 @@ class ExecutionServiceFallbackTest {
     private EntryProtectionService entryProtectionService;
 
     @Mock
-    private CapabilityRuntimeResolver capabilityRuntimeResolver;
-
-    @Mock
-    private CapabilityAuditService capabilityAuditService;
+    private robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver;
 
     private ChatFallbackProperties chatFallbackProperties;
 
@@ -78,8 +75,7 @@ class ExecutionServiceFallbackTest {
                 accessControlService,
                 confirmationService,
                 entryProtectionService,
-                capabilityRuntimeResolver,
-                capabilityAuditService,
+                apiRuntimeResolver,
                 chatFallbackProperties
         );
     }

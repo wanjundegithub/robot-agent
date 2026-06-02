@@ -2473,11 +2473,11 @@ public class WorkflowService {
                 }
             }
             case "api" -> {
-                if (stringValue(nodeConfig.get("url")) == null) {
-                    issues.add(issue(nodeId, "config.url", "API 调用缺少 url"));
+                if (stringValue(nodeConfig.get("group_id")) == null) {
+                    issues.add(issue(nodeId, "config.group_id", "API 调用缺少 group_id"));
                 }
-                if (stringValue(nodeConfig.get("method")) == null) {
-                    issues.add(issue(nodeId, "config.method", "API 调用缺少 method"));
+                if (stringValue(nodeConfig.get("api_id")) == null) {
+                    issues.add(issue(nodeId, "config.api_id", "API 调用缺少 api_id"));
                 }
             }
             case "mcp" -> {
@@ -2494,14 +2494,6 @@ public class WorkflowService {
                 }
                 if (stringValue(nodeConfig.get("skill_name")) == null) {
                     issues.add(issue(nodeId, "config.skill_name", "Skill 调用缺少 skill_name"));
-                }
-            }
-            case "capability" -> {
-                if (stringValue(nodeConfig.get("group_id")) == null && stringValue(nodeConfig.get("group_code")) == null) {
-                    issues.add(issue(nodeId, "config.group_id", "Capability 调用缺少 group_id"));
-                }
-                if (stringValue(nodeConfig.get("capability_code")) == null) {
-                    issues.add(issue(nodeId, "config.capability_code", "Capability 调用缺少 capability_code"));
                 }
             }
             default -> issues.add(issue(nodeId, "config.invoke_type", "工具节点调用形式不受支持"));

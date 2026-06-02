@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ChatInput from './components/ChatInput'
-import CapabilityCenterPanel from './components/CapabilityCenterPanel'
+import ApiCenterPanel from './components/ApiCenterPanel'
 import ExecutionPanel from './components/ExecutionPanel'
 import FormDialog from './components/FormDialog'
 import MessageList from './components/MessageList'
@@ -42,7 +42,7 @@ import type {
 } from './types'
 import type { WorkflowVersionMutation } from './components/Orchestrator'
 
-type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'capability-center'
+type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'api-center'
 type WorkflowPageMode = 'list' | 'editor'
 
 const WORKFLOW_LIST_PAGE_SIZE = 10
@@ -457,7 +457,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const syncPageFromHash = () => {
       const value = window.location.hash.replace('#', '')
-      if (value === 'workflow' || value === 'execution' || value === 'models' || value === 'chat' || value === 'capability-center') {
+      if (value === 'workflow' || value === 'execution' || value === 'models' || value === 'chat' || value === 'api-center') {
         setActivePage(value)
         return
       }
@@ -2024,10 +2024,10 @@ const App: React.FC = () => {
       )
     }
 
-    if (activePage === 'capability-center') {
+    if (activePage === 'api-center') {
       return (
-        <section className="page-capability-center">
-          <CapabilityCenterPanel currentUserId={currentUserId} />
+        <section className="page-api-center">
+          <ApiCenterPanel currentUserId={currentUserId} />
         </section>
       )
     }
@@ -2137,8 +2137,8 @@ const App: React.FC = () => {
             <button className={`nav-tab ${activePage === 'models' ? 'active' : ''}`} onClick={() => navigateToPage('models')}>
               模型
             </button>
-            <button className={`nav-tab ${activePage === 'capability-center' ? 'active' : ''}`} onClick={() => navigateToPage('capability-center')}>
-              能力中心
+            <button className={`nav-tab ${activePage === 'api-center' ? 'active' : ''}`} onClick={() => navigateToPage('api-center')}>
+              API中心
             </button>
           </nav>
           <label className="flex items-center gap-2">

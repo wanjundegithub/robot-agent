@@ -6,12 +6,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import robot.agent.apicenter.repository.ApiItemRepository;
 import robot.agent.config.DefaultModelProperties;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
-import robot.agent.repository.CapabilityAuthConfigRepository;
-import robot.agent.repository.CapabilityGroupSnapshotRepository;
-import robot.agent.repository.CapabilityItemRepository;
 import robot.agent.repository.LlmModelRecordRepository;
 import robot.agent.repository.LlmProviderConfigRepository;
 import robot.agent.repository.WorkflowVersionRepository;
@@ -37,13 +35,7 @@ class ModelConfigServiceTest {
     private WorkflowVersionRepository workflowVersionRepository;
 
     @Mock
-    private CapabilityItemRepository capabilityItemRepository;
-
-    @Mock
-    private CapabilityGroupSnapshotRepository capabilityGroupSnapshotRepository;
-
-    @Mock
-    private CapabilityAuthConfigRepository capabilityAuthConfigRepository;
+    private ApiItemRepository apiItemRepository;
 
     @Mock
     private AccessControlService accessControlService;
@@ -64,9 +56,7 @@ class ModelConfigServiceTest {
                 providerRepository,
                 modelRecordRepository,
                 workflowVersionRepository,
-                capabilityItemRepository,
-                capabilityGroupSnapshotRepository,
-                capabilityAuthConfigRepository,
+                apiItemRepository,
                 new ObjectMapper(),
                 accessControlService,
                 auditService,

@@ -1,12 +1,9 @@
 import type {
   AnalyticsDashboard,
-  AuthConfigSummary,
-  CapabilityGroupSnapshot,
-  CapabilityGroupSummary,
-  CapabilityItemSummary,
-  CapabilityTestResult,
-  CapabilityValidationResult,
-  CapabilityVersionSummary,
+  ApiGroupSummary,
+  ApiItemSummary,
+  ApiTestResult,
+  ApiValidationResult,
   CostAlert,
   ExecutionDetail,
   Message,
@@ -27,6 +24,20 @@ import { loggedFetch } from './callLogger'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 const ADMIN_USER_ID = 'demo-admin'
+
+export type ApiItemPayload = {
+  id?: number
+  apiName: string
+  description?: string
+  enabled?: boolean
+  requestUrl: string
+  requestMethod: string
+  headers?: string
+  inputSchema: string
+  outputSchema: string
+  urlVariables?: Record<string, string>
+  body?: Record<string, unknown>
+}
 
 async function parseApiError(response: Response): Promise<never> {
   const fallback = `HTTP error! status: ${response.status}`
@@ -510,27 +521,22 @@ export async function rollbackWorkflow(workflowCode: string, version: string, cu
   return await response.json()
 }
 
-export async function getCapabilityGroups(): Promise<CapabilityGroupSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups`)
+export async function getApiGroups(): Promise<ApiGroupSummary[]> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups`)
   if (!response.ok) {
     await parseApiError(response)
   }
   return await response.json()
 }
 
-export async function saveCapabilityGroup(
-  payload: {
-    groupName: string
-    description?: string
-  },
+export async function saveApiGroup(
+  payload: { groupName: string; description?: string; enabled?: boolean },
   currentUserId: string,
   existingGroupId?: number
-): Promise<CapabilityGroupSummary> {
+): Promise<ApiGroupSummary> {
   const isUpdate = typeof existingGroupId === 'number'
   const response = await loggedFetch(
-    isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${existingGroupId}`
-      : `${API_BASE_URL}/capabilities/groups`,
+    isUpdate ? `${API_BASE_URL}/api-center/groups/${existingGroupId}` : `${API_BASE_URL}/api-center/groups`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -546,59 +552,41 @@ export async function saveCapabilityGroup(
   return await response.json()
 }
 
-export async function deleteCapabilityGroup(groupId: number, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}`, {
+export async function deleteApiGroup(groupId: number, currentUserId: string): Promise<void> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}`, {
     method: 'DELETE',
-    headers: {
-      'X-User-Id': currentUserId || ADMIN_USER_ID,
-    },
+    headers: { 'X-User-Id': currentUserId || ADMIN_USER_ID },
   })
   if (!response.ok) {
     await parseApiError(response)
   }
 }
 
-export async function getCapabilitiesByGroup(groupId: number): Promise<CapabilityItemSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}/items`)
+export async function getApisByGroup(groupId: number): Promise<ApiItemSummary[]> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items`)
   if (!response.ok) {
     await parseApiError(response)
   }
   return await response.json()
 }
 
-export async function getCapabilityVersions(
-  groupId: number,
-  capabilityCode: string
-): Promise<CapabilityVersionSummary[]> {
-  const response = await loggedFetch(
-    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/versions`
-  )
+export async function getApiItem(groupId: number, apiId: number): Promise<ApiItemSummary> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`)
   if (!response.ok) {
     await parseApiError(response)
   }
   return await response.json()
 }
 
-export async function saveCapabilityDraft(
+export async function saveApiItem(
   groupId: number,
-  capabilityCode: string | undefined,
-  payload: {
-    capabilityCode?: string
-    capabilityName: string
-    capabilityType: string
-    description?: string
-    inputSchema?: string
-    outputSchema?: string
-    definitionJson?: string
-    authConfigId?: number | null
-  },
+  apiId: number | undefined,
+  payload: ApiItemPayload,
   currentUserId: string
-): Promise<CapabilityVersionSummary> {
-  const isUpdate = Boolean(capabilityCode)
+): Promise<ApiItemSummary> {
+  const isUpdate = typeof apiId === 'number'
   const response = await loggedFetch(
-    isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode || '')}/draft`
-      : `${API_BASE_URL}/capabilities/groups/${groupId}/items`,
+    isUpdate ? `${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}` : `${API_BASE_URL}/api-center/groups/${groupId}/items`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -614,59 +602,22 @@ export async function saveCapabilityDraft(
   return await response.json()
 }
 
-export async function publishCapability(
-  groupId: number,
-  capabilityCode: string,
-  currentUserId: string
-): Promise<CapabilityVersionSummary> {
-  const response = await loggedFetch(
-    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/publish`,
-    {
-      method: 'POST',
-      headers: {
-        'X-User-Id': currentUserId || ADMIN_USER_ID,
-      },
-    }
-  )
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function deleteCapability(
-  groupId: number,
-  capabilityCode: string,
-  currentUserId: string
-): Promise<void> {
-  const response = await loggedFetch(
-    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}`,
-    {
-      method: 'DELETE',
-      headers: {
-        'X-User-Id': currentUserId || ADMIN_USER_ID,
-      },
-    }
-  )
+export async function deleteApiItem(groupId: number, apiId: number, currentUserId: string): Promise<void> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`, {
+    method: 'DELETE',
+    headers: { 'X-User-Id': currentUserId || ADMIN_USER_ID },
+  })
   if (!response.ok) {
     await parseApiError(response)
   }
 }
 
-export async function getCapabilityGroupSnapshots(groupId: number): Promise<CapabilityGroupSnapshot[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}/snapshots`)
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function publishCapabilityGroupSnapshot(
+export async function validateApiItem(
   groupId: number,
-  payload: { description?: string },
+  payload: ApiItemPayload,
   currentUserId: string
-): Promise<CapabilityGroupSnapshot> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}/snapshots/publish`, {
+): Promise<ApiValidationResult> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/validate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -680,52 +631,12 @@ export async function publishCapabilityGroupSnapshot(
   return await response.json()
 }
 
-export async function getCapabilityAuthConfigs(groupId: number): Promise<AuthConfigSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs`)
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function saveCapabilityAuthConfig(
+export async function testApiItem(
   groupId: number,
-  payload: {
-    id?: number
-    authName: string
-    authType: string
-    scope?: 'GROUP' | 'CAPABILITY'
-    maskedPreview?: string
-    config?: Record<string, unknown>
-  },
+  payload: ApiItemPayload,
   currentUserId: string
-): Promise<AuthConfigSummary> {
-  const isUpdate = Boolean(payload.id)
-  const response = await loggedFetch(
-    isUpdate
-      ? `${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs/${payload.id}`
-      : `${API_BASE_URL}/capabilities/groups/${groupId}/auth-configs`,
-    {
-      method: isUpdate ? 'PUT' : 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': currentUserId || ADMIN_USER_ID,
-      },
-      body: JSON.stringify(payload),
-    }
-  )
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function validateCapabilityDraft(
-  groupId: number,
-  payload: Record<string, unknown>,
-  currentUserId: string
-): Promise<CapabilityValidationResult> {
-  const response = await loggedFetch(`${API_BASE_URL}/capabilities/groups/${groupId}/validate-draft`, {
+): Promise<ApiTestResult> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/test`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -733,29 +644,6 @@ export async function validateCapabilityDraft(
     },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) {
-    await parseApiError(response)
-  }
-  return await response.json()
-}
-
-export async function testCapability(
-  groupId: number,
-  capabilityCode: string,
-  payload: Record<string, unknown>,
-  currentUserId: string
-): Promise<CapabilityTestResult> {
-  const response = await loggedFetch(
-    `${API_BASE_URL}/capabilities/groups/${groupId}/items/${encodeURIComponent(capabilityCode)}/test`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': currentUserId || ADMIN_USER_ID,
-      },
-      body: JSON.stringify(payload),
-    }
-  )
   if (!response.ok) {
     await parseApiError(response)
   }

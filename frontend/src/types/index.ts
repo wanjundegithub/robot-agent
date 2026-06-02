@@ -444,134 +444,48 @@ export interface WorkflowValidationIssue {
   message: string
 }
 
-export type CapabilityType = 'API' | 'SKILL' | 'MCP'
-
-export type CapabilityVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | string
-
-export type CapabilityAuthType =
-  | 'NONE'
-  | 'OAUTH2'
-  | 'JWT'
-  | 'API_KEY'
-  | 'BASIC'
-  | 'PASSWORD'
-  | 'CUSTOM'
-  | string
-
-export interface CapabilityGroupSummary {
+export interface ApiGroupSummary {
   id: number
   groupName: string
-  description?: string
+  description?: string | null
+  enabled?: boolean
   status: string
-  latestSnapshotVersion?: string | null
-  latestPublishedAt?: string | null
-  capabilityCount?: number
-  updatedAt?: string
+  apiCount?: number
+  updatedAt?: string | null
 }
 
-export interface CapabilityItemSummary {
+export interface ApiItemSummary {
   id: number
   groupId?: number
-  capabilityCode: string
-  capabilityName: string
-  capabilityType: CapabilityType
+  apiName: string
+  description?: string | null
+  enabled?: boolean
   status: string
-  draftVersion?: string | null
-  publishedVersion?: string | null
+  requestUrl: string
+  requestMethod: string
+  headers?: string | null
   inputSchema?: string | null
   outputSchema?: string | null
   lastTestStatus?: string | null
   lastTestTime?: string | null
-  description?: string
-  authConfigId?: number | null
-}
-
-export interface CapabilityVersionSummary {
-  id: number
-  groupId?: number
-  capabilityCode: string
-  capabilityName: string
-  capabilityType: CapabilityType
-  version: string
-  status: CapabilityVersionStatus
-  description?: string
-  definitionJson?: string | null
-  inputSchema?: string | null
-  outputSchema?: string | null
-  authConfigId?: number | null
-  authBinding?: string | null
-  environmentBinding?: string | null
-  publishedAt?: string | null
+  lastTestErrorMessage?: string | null
+  lastTestToken?: string | null
+  urlVariables?: string[]
   updatedAt?: string | null
 }
 
-export interface CapabilityGroupSnapshot {
-  id: number
-  groupId?: number
-  snapshotVersion: string
-  status: string
-  description?: string
-  publishedAt?: string | null
-}
-
-export interface AuthConfigSummary {
-  id: number
-  authName: string
-  authType: CapabilityAuthType
-  maskedPreview?: string | null
-  scope?: 'GROUP' | 'CAPABILITY' | string
-  status: string
-  updatedAt?: string | null
-}
-
-export interface CapabilityValidationResult {
+export interface ApiValidationResult {
   valid: boolean
   message: string
-  issues?: WorkflowValidationIssue[]
-  details?: Record<string, unknown>
+  issues?: Array<{ field?: string; message?: string }>
 }
 
-export interface CapabilityTestResult {
+export interface ApiTestResult {
   success: boolean
   testType: string
-  requestPayload?: string | null
   responsePayload?: string | null
   errorMessage?: string | null
   durationMs?: number | null
   testedAt?: string | null
-}
-
-export interface CapabilityTestRecord {
-  id: number
-  groupId?: number
-  capabilityCode: string
-  capabilityName?: string | null
-  capabilityType?: string | null
-  capabilityVersion?: string | null
-  testType: string
-  requestPayload?: string | null
-  responsePayload?: string | null
-  success: boolean
-  errorMessage?: string | null
-  durationMs?: number | null
-  createdBy?: string | null
-  testedAt?: string | null
-}
-
-export interface CapabilityAuditRecord {
-  id: number
-  groupId?: number
-  groupSnapshotVersion?: string | null
-  capabilityCode: string
-  capabilityVersion?: string | null
-  capabilityType?: string | null
-  executionId?: string | null
-  nodeId?: string | null
-  toolCode?: string | null
-  status: string
-  requestPayload?: string | null
-  responsePayload?: string | null
-  errorMessage?: string | null
-  durationMs?: number | null
-  createdAt?: string | null
+  lastTestToken?: string | null
 }
