@@ -32,7 +32,7 @@ export type ApiItemPayload = {
   enabled?: boolean
   requestUrl: string
   requestMethod: string
-  headers?: string
+  headers?: Array<{ key: string; value: string; enabled: boolean }>
   inputSchema: string
   outputSchema: string
   urlVariables?: Record<string, string>

@@ -463,7 +463,7 @@ export interface ApiItemSummary {
   status: string
   requestUrl: string
   requestMethod: string
-  headers?: string | null
+  headers?: string | Array<{ key?: string; value?: string; enabled?: boolean; checked?: boolean; selected?: boolean }> | null
   inputSchema?: string | null
   outputSchema?: string | null
   lastTestStatus?: string | null
