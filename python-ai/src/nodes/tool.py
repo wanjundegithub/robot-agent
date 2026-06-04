@@ -55,7 +55,7 @@ class ToolNode(BaseNode):
                 result = await tool_registry.execute(resolved_tool_code, params, self.tool_config)
                 runtime_protection_manager.record_dependency_success(dependency_key)
                 output = self._build_tool_output(result)
-                context.add_execution_variables(output)
+                self._apply_tool_output(output, context)
                 logger.info(
                     "tool.node.completed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s nodeId=%s toolCode=%s outputKeys=%s cached=%s durationMs=%.2f",
                     context.session_id,
@@ -263,14 +263,37 @@ class ToolNode(BaseNode):
             }
         payload_mapping = self.tool_config.get("payload_mapping", {})
         if isinstance(payload_mapping, dict) and payload_mapping:
-            payload: Dict[str, Any] = {}
-            for key, value in payload_mapping.items():
-                if isinstance(value, str) and value.startswith("execution."):
-                    payload[key] = context.get_variable(value[len("execution."):])
-                else:
-                    payload[key] = value
-            return payload
+            return self._resolve_tool_payload_mapping(payload_mapping, context)
         return dict(context.execution_variables)
+
+    def _resolve_tool_payload_mapping(self, payload_mapping: Dict[str, Any], context) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        for key, value in payload_mapping.items():
+            if isinstance(value, str):
+                reference = value if value.startswith("$") else f"${value}"
+                resolved = self._resolve_value(reference, {}, context)
+                payload[key] = resolved if resolved is not None else value
+            else:
+                payload[key] = value
+        return payload
+
+    def _apply_tool_output(self, output: Dict[str, Any], context) -> None:
+        output_mapping = self.tool_config.get("output_mapping", {})
+        if isinstance(output_mapping, dict) and output_mapping:
+            mapping = {self._normalize_output_target(target): f"$node.output.{source}" for source, target in output_mapping.items()}
+            self.apply_output_mapping(mapping, output, context)
+            return
+        context.add_execution_variables(output)
+
+    def _normalize_output_target(self, target: Any) -> str:
+        target_value = str(target or "").strip()
+        if target_value.startswith("$global."):
+            return "$session." + target_value[len("$global."):]
+        if target_value.startswith("$temp."):
+            return "$execution." + target_value[len("$temp."):]
+        if target_value.startswith("$"):
+            return target_value
+        return f"$execution.{target_value}"
 
     def _build_tool_output(self, result: Dict[str, Any]) -> Dict[str, Any]:
         if self.tool_code == "flight_search_api":

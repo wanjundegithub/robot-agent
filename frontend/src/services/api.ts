@@ -32,11 +32,31 @@ export type ApiItemPayload = {
   enabled?: boolean
   requestUrl: string
   requestMethod: string
+  authMode?: ApiAuthMode
+  authConfig?: ApiAuthConfigPayload
   headers?: Array<{ key: string; value: string; enabled: boolean }>
   inputSchema: string
   outputSchema: string
   urlVariables?: Record<string, string>
   body?: Record<string, unknown>
+}
+
+export type ApiAuthType = 'NO_AUTH' | 'API_KEY' | 'BEARER' | 'BASIC' | 'DIGEST'
+export type ApiAuthMode = 'INHERIT' | 'NONE' | 'CUSTOM'
+export type ApiKeyAddTo = 'HEADER' | 'QUERY'
+
+export type ApiAuthConfigPayload = {
+  authType: ApiAuthType
+  key?: string
+  value?: string
+  addTo?: ApiKeyAddTo
+  token?: string
+  username?: string
+  password?: string
+  realm?: string
+  nonce?: string
+  algorithm?: string
+  qop?: string
 }
 
 async function parseApiError(response: Response): Promise<never> {
@@ -562,6 +582,29 @@ export async function deleteApiGroup(groupId: number, currentUserId: string): Pr
   }
 }
 
+export async function getApiGroupAuthConfig(groupId: number): Promise<Record<string, unknown>> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveApiGroupAuthConfig(groupId: number, payload: ApiAuthConfigPayload, currentUserId: string): Promise<Record<string, unknown>> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
 export async function getApisByGroup(groupId: number): Promise<ApiItemSummary[]> {
   const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items`)
   if (!response.ok) {
@@ -610,6 +653,34 @@ export async function deleteApiItem(groupId: number, apiId: number, currentUserI
   if (!response.ok) {
     await parseApiError(response)
   }
+}
+
+export async function getApiItemAuthConfig(groupId: number, apiId: number): Promise<Record<string, unknown>> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveApiItemAuthConfig(
+  groupId: number,
+  apiId: number,
+  payload: { authMode: ApiAuthMode; authConfig?: ApiAuthConfigPayload },
+  currentUserId: string
+): Promise<Record<string, unknown>> {
+  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
 }
 
 export async function validateApiItem(

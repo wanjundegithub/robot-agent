@@ -451,6 +451,8 @@ export interface ApiGroupSummary {
   enabled?: boolean
   status: string
   apiCount?: number
+  authType?: string | null
+  authPreview?: string | null
   updatedAt?: string | null
 }
 
@@ -463,6 +465,10 @@ export interface ApiItemSummary {
   status: string
   requestUrl: string
   requestMethod: string
+  authMode?: string | null
+  authType?: string | null
+  authPreview?: string | null
+  authConfig?: Record<string, unknown> | null
   headers?: string | Array<{ key?: string; value?: string; enabled?: boolean; checked?: boolean; selected?: boolean }> | null
   inputSchema?: string | null
   outputSchema?: string | null

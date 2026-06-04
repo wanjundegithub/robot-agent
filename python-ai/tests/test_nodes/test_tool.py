@@ -170,6 +170,40 @@ async def test_tool_node_function_invoke_type_returns_variables():
 
 
 @pytest.mark.asyncio
+async def test_tool_node_applies_output_mapping_to_variables():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_output_mapping",
+        session_id="sess_output_mapping",
+        workflow_code="agent_workflow",
+        workflow_version="1.0.0"
+    )
+
+    node = ToolNode("mapped_tool", {
+        "config": {
+            "invoke_type": "function",
+            "function_name": "extract_slots_summary",
+            "payload_mapping": {
+                "price": 1280,
+                "currency": "CNY",
+            },
+            "output_mapping": {
+                "price": "$execution.best_price",
+                "currency": "$session.currency",
+            },
+            "idempotent": False,
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["output"] == {"price": 1280, "currency": "CNY"}
+    assert context.execution_variables["best_price"] == 1280
+    assert context.session_variables["currency"] == "CNY"
+    assert "price" not in context.execution_variables
+
+
+@pytest.mark.asyncio
 async def test_tool_node_blocks_unconfirmed_high_risk_tool():
     runtime_protection_manager.reset()
     context = ExecutionContext(

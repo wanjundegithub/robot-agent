@@ -32,6 +32,7 @@ import type {
 
 type DesignerNodeType = 'start' | 'coordinator' | 'sub_agent' | 'api' | 'message' | 'function' | 'end'
 type VariableScope = 'global' | 'temp'
+type ApiSchemaMappingField = 'payload_mapping' | 'output_mapping'
 type WorkflowEditorColumnKey = 'graph' | 'canvas' | 'properties' | 'variables'
 type VariableType =
   | 'String'
@@ -280,6 +281,7 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
       input_schema: '',
       output_schema: '',
       payload_mapping: {},
+      output_mapping: {},
     },
   },
   {
@@ -794,7 +796,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const basics = ensureWorkflowBasics()
     if (!basics) return
 
-    const localIssues = collectGraphMetadataValidationIssues(graphs)
+    const localIssues = collectLocalWorkflowValidationIssues(graphs)
     if (localIssues.length > 0) {
       setValidationIssues(localIssues)
       setSaveStatus(`发现 ${localIssues.length} 个校验问题。`)
@@ -823,7 +825,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const basics = ensureWorkflowBasics()
     if (!basics) return
 
-    const localIssues = collectGraphMetadataValidationIssues(graphs)
+    const localIssues = collectLocalWorkflowValidationIssues(graphs)
     if (localIssues.length > 0) {
       setValidationIssues(localIssues)
       setSaveStatus(`发布被阻止，仍有 ${localIssues.length} 个校验问题待处理。`)
@@ -966,6 +968,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       input_schema: '',
       output_schema: '',
       payload_mapping: {},
+      output_mapping: {},
     })
     setSelectedApiItem(null)
   }
@@ -979,6 +982,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       input_schema: selectedApi?.inputSchema || '',
       output_schema: selectedApi?.outputSchema || '',
       payload_mapping: {},
+      output_mapping: {},
     })
     setSelectedApiItem(selectedApi ?? null)
   }
@@ -1402,6 +1406,67 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     )
   }
 
+  const updateApiSchemaVariableMapping = (field: ApiSchemaMappingField, parameterName: string, variableId: string) => {
+    if (!selectedNodeData) return
+    const selectedVariable = variableNameMap.get(variableId)
+    const nextMapping = { ...ensureObject(selectedNodeData.config[field]) }
+    if (selectedVariable) {
+      nextMapping[parameterName] = formatVariableReference(selectedVariable)
+    } else {
+      delete nextMapping[parameterName]
+    }
+    updateSelectedConfigField(field, nextMapping)
+  }
+
+  const renderApiSchemaVariableMapping = (
+    rawSchema: string,
+    field: ApiSchemaMappingField,
+    emptyText: string,
+    testPrefix: string
+  ) => {
+    const parameters = extractSchemaParameters(rawSchema)
+    if (parameters.length === 0) {
+      return <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-400">{emptyText}</div>
+    }
+
+    const currentMapping = ensureObject(selectedNodeData?.config[field])
+
+    return (
+      <div className="space-y-2">
+        {parameters.map((parameter) => {
+          const selectedVariable = resolveMappedVariable(currentMapping[parameter.name], allVariables)
+          const missingRequired = parameter.required && !selectedVariable
+          return (
+            <div key={parameter.name} className={`grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] items-center gap-2 rounded-xl border px-3 py-2 text-xs ${missingRequired ? 'border-rose-300 bg-rose-50/70 text-rose-700' : 'border-slate-200 bg-white text-slate-600'}`}>
+              <div className="min-w-0">
+                <div className={`truncate font-semibold ${missingRequired ? 'text-rose-700' : 'text-slate-700'}`} title={parameter.name}>
+                  {parameter.name}
+                </div>
+                {missingRequired && <div className="mt-1 text-[11px] text-rose-500">必填，请选择变量</div>}
+              </div>
+              <select
+                value={selectedVariable?.id || ''}
+                onChange={(event) => updateApiSchemaVariableMapping(field, parameter.name, event.target.value)}
+                className={`min-w-0 rounded-lg border px-2 py-2 text-sm text-slate-700 ${missingRequired ? 'border-rose-400 bg-white ring-1 ring-rose-200' : 'border-slate-200'}`}
+                data-testid={`${testPrefix}-${parameter.name}-variable-select`}
+                aria-label={`${parameter.name}变量`}
+                aria-invalid={missingRequired}
+              >
+                <option value="">选择全局/临时变量</option>
+                {allVariables.map((variable) => (
+                  <option key={variable.id} value={variable.id}>
+                    {variable.name}（{displayVariableScope(variable.scope)}）
+                  </option>
+                ))}
+              </select>
+            </div>
+          )
+        })}
+        {allVariables.length === 0 && <div className="text-xs text-slate-500">请先在右侧变量面板创建全局变量或临时变量。</div>}
+      </div>
+    )
+  }
+
   const renderNodeEditor = () => {
     if (!selectedNodeData) {
       return (
@@ -1564,19 +1629,22 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
             <div data-testid="workflow-api-input-parameters">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输入参数</div>
-              {renderSchemaParameterList(selectedApiItem?.inputSchema ?? String(config.input_schema || ''), '暂无输入参数')}
+              {renderApiSchemaVariableMapping(
+                selectedApiItem?.inputSchema ?? String(config.input_schema || ''),
+                'payload_mapping',
+                '暂无输入参数',
+                'workflow-api-input-parameter'
+              )}
             </div>
             <div data-testid="workflow-api-output-parameters">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输出参数</div>
-              {renderSchemaParameterList(selectedApiItem?.outputSchema ?? String(config.output_schema || ''), '暂无输出参数')}
+              {renderApiSchemaVariableMapping(
+                selectedApiItem?.outputSchema ?? String(config.output_schema || ''),
+                'output_mapping',
+                '暂无输出参数',
+                'workflow-api-output-parameter'
+              )}
             </div>
-
-            <textarea
-              value={formatObject(config.payload_mapping)}
-              onChange={(event) => updateJsonConfigField('payload_mapping', event.target.value, config, replaceSelectedConfig)}
-              className="min-h-[120px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
-              placeholder="请填写入参映射对象"
-            />
           </>
         )}
 
@@ -1728,7 +1796,12 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           <div>保存状态：{saveStatus || '尚未保存'}</div>
           {validationIssues.length > 0 && (
             <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
-              当前还有 {validationIssues.length} 项待处理问题
+              <div>当前还有 {validationIssues.length} 项待处理问题</div>
+              <div className="mt-1 space-y-1" data-testid="workflow-validation-issues">
+                {validationIssues.slice(0, 3).map((issue, index) => (
+                  <div key={`${issue.field}_${index}`}>{issue.message || issue.field}</div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -2156,6 +2229,7 @@ function normalizeNodeConfig(
         input_schema: String(config.input_schema || ''),
         output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
+        output_mapping: ensureObject(config.output_mapping),
       }
     case 'end':
       return {
@@ -2203,34 +2277,42 @@ function formatObject(value: unknown) {
   return JSON.stringify(ensureObject(value), null, 2)
 }
 
-function renderSchemaParameterList(rawSchema: string, emptyText: string) {
-  const parameters = extractSchemaParameters(rawSchema)
-  if (parameters.length === 0) {
-    return <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-400">{emptyText}</div>
-  }
+function formatVariableReference(variable: VariableDefinition) {
+  return `$${variable.scope === 'global' ? 'session' : 'execution'}.${variable.name}`
+}
 
+function resolveMappedVariable(value: unknown, variables: VariableDefinition[]) {
+  const mappedValue = String(value || '').trim()
+  if (!mappedValue) return null
+
+  const scope = mappedValue.startsWith('$global.') || mappedValue.startsWith('$session.')
+    ? 'global'
+    : mappedValue.startsWith('$temp.') || mappedValue.startsWith('$execution.')
+      ? 'temp'
+      : null
+  const referencedName = mappedValue.startsWith('$') ? mappedValue.slice(1).split('.').pop() : mappedValue
   return (
-    <div className="space-y-2">
-      {parameters.map((parameter) => (
-        <div key={parameter.name} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-          <div className="font-semibold text-slate-700">{parameter.name}</div>
-          <div className="mt-1 text-slate-500">{parameter.type}</div>
-          {parameter.description && <div className="mt-1 text-slate-500">{parameter.description}</div>}
-        </div>
-      ))}
-    </div>
+    variables.find((variable) =>
+      (scope ? variable.scope === scope : true) && (variable.name === referencedName || variable.id === mappedValue)
+    ) ?? variables.find((variable) => variable.id === mappedValue) ?? null
   )
 }
 
 function extractSchemaParameters(rawSchema: string) {
   const schema = parseJsonObject(rawSchema)
   const properties = asRecord(schema.properties)
+  const requiredNames = new Set(
+    (Array.isArray(schema.required) ? schema.required : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  )
   return Object.entries(properties).map(([name, value]) => {
     const field = asRecord(value)
     return {
       name,
       type: String(field.type || 'object'),
       description: String(field.description || ''),
+      required: requiredNames.has(name),
     }
   })
 }
@@ -2285,6 +2367,55 @@ function displayVariableType(type: VariableType) {
 
 function defaultGraphName(graphId: string) {
   return graphId === MAIN_GRAPH_ID ? '主流程' : '未命名子流程'
+}
+
+function collectLocalWorkflowValidationIssues(graphs: Record<string, WorkflowGraphState>): WorkflowValidationIssue[] {
+  return [
+    ...collectGraphMetadataValidationIssues(graphs),
+    ...collectRequiredApiSchemaMappingValidationIssues(graphs),
+  ]
+}
+
+function collectRequiredApiSchemaMappingValidationIssues(graphs: Record<string, WorkflowGraphState>): WorkflowValidationIssue[] {
+  return Object.values(graphs).flatMap((graph) =>
+    graph.nodes.flatMap((node) => {
+      const data = node.data as CanvasNodeData
+      if (data.nodeType !== 'api') return []
+
+      const config = data.config || {}
+      const inputIssues = collectRequiredSchemaMappingIssues(
+        String(config.input_schema || ''),
+        ensureObject(config.payload_mapping),
+        node.id,
+        'config.payload_mapping',
+        '输入参数'
+      )
+      const outputIssues = collectRequiredSchemaMappingIssues(
+        String(config.output_schema || ''),
+        ensureObject(config.output_mapping),
+        node.id,
+        'config.output_mapping',
+        '输出参数'
+      )
+      return [...inputIssues, ...outputIssues]
+    })
+  )
+}
+
+function collectRequiredSchemaMappingIssues(
+  rawSchema: string,
+  mapping: Record<string, unknown>,
+  nodeId: string,
+  fieldPrefix: string,
+  label: string
+): WorkflowValidationIssue[] {
+  return extractSchemaParameters(rawSchema)
+    .filter((parameter) => parameter.required && !String(mapping[parameter.name] || '').trim())
+    .map((parameter) => ({
+      node_id: nodeId,
+      field: `${fieldPrefix}.${parameter.name}`,
+      message: `API节点${label} ${parameter.name} 为必填，请选择变量`,
+    }))
 }
 
 function collectGraphMetadataValidationIssues(graphs: Record<string, WorkflowGraphState>): WorkflowValidationIssue[] {
@@ -2658,6 +2789,7 @@ function denormalizeNodeConfig(
         input_schema: String(config.input_schema || ''),
         output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
+        output_mapping: ensureObject(config.output_mapping),
       }
     case 'end':
       return {
