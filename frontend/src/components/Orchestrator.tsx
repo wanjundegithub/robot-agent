@@ -36,17 +36,10 @@ type ApiSchemaMappingField = 'payload_mapping' | 'output_mapping'
 type WorkflowEditorColumnKey = 'graph' | 'canvas' | 'properties' | 'variables'
 type VariableType =
   | 'String'
-  | 'Integer'
-  | 'Long'
-  | 'Double'
-  | 'BigDecimal'
+  | 'Number'
   | 'Boolean'
-  | 'LocalDate'
-  | 'LocalDateTime'
-  | 'LocalTime'
-  | 'List'
-  | 'Map'
   | 'Object'
+  | 'Array'
 
 interface VariableDefinition {
   id: string
@@ -173,17 +166,10 @@ const variablePageSize = 6
 
 const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
   { value: 'String', label: 'String' },
-  { value: 'Integer', label: 'Integer' },
-  { value: 'Long', label: 'Long' },
-  { value: 'Double', label: 'Double' },
-  { value: 'BigDecimal', label: 'BigDecimal' },
+  { value: 'Number', label: 'Number' },
   { value: 'Boolean', label: 'Boolean' },
-  { value: 'LocalDate', label: 'LocalDate' },
-  { value: 'LocalDateTime', label: 'LocalDateTime' },
-  { value: 'LocalTime', label: 'LocalTime' },
-  { value: 'List', label: 'List' },
-  { value: 'Map', label: 'Map' },
   { value: 'Object', label: 'Object' },
+  { value: 'Array', label: 'Array' },
 ]
 
 const mainInitialNodes: Node<CanvasNodeData>[] = [
@@ -278,6 +264,7 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
       invoke_type: 'api',
       group_id: '',
       api_id: '',
+      request_url: '',
       input_schema: '',
       output_schema: '',
       payload_mapping: {},
@@ -965,6 +952,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       ...structuredClone(selectedNodeData.config || {}),
       group_id: groupId,
       api_id: '',
+      request_url: '',
       input_schema: '',
       output_schema: '',
       payload_mapping: {},
@@ -979,6 +967,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     replaceSelectedConfig({
       ...structuredClone(selectedNodeData.config || {}),
       api_id: apiIdValue,
+      request_url: selectedApi?.requestUrl || '',
       input_schema: selectedApi?.inputSchema || '',
       output_schema: selectedApi?.outputSchema || '',
       payload_mapping: {},
@@ -1420,11 +1409,14 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
 
   const renderApiSchemaVariableMapping = (
     rawSchema: string,
+    requestUrl: string,
     field: ApiSchemaMappingField,
     emptyText: string,
     testPrefix: string
   ) => {
-    const parameters = extractSchemaParameters(rawSchema)
+    const parameters = field === 'payload_mapping'
+      ? extractApiInputParameters(rawSchema, requestUrl)
+      : extractSchemaParameters(rawSchema)
     if (parameters.length === 0) {
       return <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-400">{emptyText}</div>
     }
@@ -1631,6 +1623,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输入参数</div>
               {renderApiSchemaVariableMapping(
                 selectedApiItem?.inputSchema ?? String(config.input_schema || ''),
+                selectedApiItem?.requestUrl ?? String(config.request_url || ''),
                 'payload_mapping',
                 '暂无输入参数',
                 'workflow-api-input-parameter'
@@ -1640,6 +1633,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">输出参数</div>
               {renderApiSchemaVariableMapping(
                 selectedApiItem?.outputSchema ?? String(config.output_schema || ''),
+                '',
                 'output_mapping',
                 '暂无输出参数',
                 'workflow-api-output-parameter'
@@ -2226,6 +2220,7 @@ function normalizeNodeConfig(
         group_id: Number(config.group_id || 0) || '',
         api_id: Number(config.api_id || 0) || '',
         tool_code: String(config.api_id || ''),
+        request_url: String(config.request_url || ''),
         input_schema: String(config.input_schema || ''),
         output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
@@ -2317,6 +2312,34 @@ function extractSchemaParameters(rawSchema: string) {
   })
 }
 
+function extractApiInputParameters(rawSchema: string, requestUrl: string) {
+  const schemaParameters = extractSchemaParameters(rawSchema)
+  const parametersByName = new Map(schemaParameters.map((parameter) => [parameter.name, parameter]))
+  extractUrlTemplateParameters(requestUrl).forEach((name) => {
+    const current = parametersByName.get(name)
+    parametersByName.set(name, current ? { ...current, required: true } : {
+      name,
+      type: 'string',
+      description: '',
+      required: true,
+    })
+  })
+  return Array.from(parametersByName.values())
+}
+
+function extractUrlTemplateParameters(rawUrl: string) {
+  const url = rawUrl || ''
+  const names = new Set<string>()
+  for (const match of url.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+    names.add(match[1])
+  }
+  const pathPart = url.split(/[?#]/)[0] || ''
+  for (const match of pathPart.matchAll(/(?:^|\/):([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
+    names.add(match[1])
+  }
+  return Array.from(names)
+}
+
 function updateJsonConfigField(
   field: string,
   rawValue: string,
@@ -2385,6 +2408,7 @@ function collectRequiredApiSchemaMappingValidationIssues(graphs: Record<string, 
       const config = data.config || {}
       const inputIssues = collectRequiredSchemaMappingIssues(
         String(config.input_schema || ''),
+        String(config.request_url || ''),
         ensureObject(config.payload_mapping),
         node.id,
         'config.payload_mapping',
@@ -2392,6 +2416,7 @@ function collectRequiredApiSchemaMappingValidationIssues(graphs: Record<string, 
       )
       const outputIssues = collectRequiredSchemaMappingIssues(
         String(config.output_schema || ''),
+        '',
         ensureObject(config.output_mapping),
         node.id,
         'config.output_mapping',
@@ -2404,12 +2429,13 @@ function collectRequiredApiSchemaMappingValidationIssues(graphs: Record<string, 
 
 function collectRequiredSchemaMappingIssues(
   rawSchema: string,
+  requestUrl: string,
   mapping: Record<string, unknown>,
   nodeId: string,
   fieldPrefix: string,
   label: string
 ): WorkflowValidationIssue[] {
-  return extractSchemaParameters(rawSchema)
+  return (requestUrl ? extractApiInputParameters(rawSchema, requestUrl) : extractSchemaParameters(rawSchema))
     .filter((parameter) => parameter.required && !String(mapping[parameter.name] || '').trim())
     .map((parameter) => ({
       node_id: nodeId,
@@ -2786,6 +2812,7 @@ function denormalizeNodeConfig(
         invoke_type: 'api',
         group_id: String(config.group_id || ''),
         api_id: String(config.api_id || ''),
+        request_url: String(config.request_url || ''),
         input_schema: String(config.input_schema || ''),
         output_schema: String(config.output_schema || ''),
         payload_mapping: ensureObject(config.payload_mapping),
@@ -2830,36 +2857,14 @@ function normalizeVariableType(value: string | null): VariableType {
   const matchedType = variableTypeOptions.find((option) => option.value === rawValue)
   if (matchedType) return matchedType.value
 
-  const legacyTypeMap: Record<string, VariableType> = {
+  const normalizedTypeMap: Record<string, VariableType> = {
     string: 'String',
-    text: 'String',
-    enum: 'String',
-    markdown: 'String',
-    file: 'String',
-    image: 'String',
-    integer: 'Integer',
-    int: 'Integer',
-    long: 'Long',
-    number: 'Double',
-    double: 'Double',
-    decimal: 'BigDecimal',
-    bigdecimal: 'BigDecimal',
+    number: 'Number',
     boolean: 'Boolean',
-    bool: 'Boolean',
-    date: 'LocalDate',
-    localdate: 'LocalDate',
-    datetime: 'LocalDateTime',
-    localdatetime: 'LocalDateTime',
-    time: 'LocalTime',
-    localtime: 'LocalTime',
-    array: 'List',
-    list: 'List',
-    json: 'Map',
-    map: 'Map',
     object: 'Object',
-    any: 'Object',
+    array: 'Array',
   }
-  return legacyTypeMap[rawValue.toLowerCase()] || 'String'
+  return normalizedTypeMap[rawValue.toLowerCase()] || 'String'
 }
 
 function normalizeDesignerNodeType(value: string | null): DesignerNodeType {

@@ -69,15 +69,21 @@ class ApiCenterServiceSaveGateTest {
         Map<String, Object> payload = validPayload();
         payload.put("inputSchema", "");
         payload.put("outputSchema", "");
+        ApiItem[] savedItem = new ApiItem[1];
         when(itemRepository.save(any(ApiItem.class))).thenAnswer(invocation -> {
             ApiItem item = invocation.getArgument(0);
             item.setId(12L);
+            savedItem[0] = item;
             return item;
         });
 
-        service.saveItem(1L, null, payload);
+        Map<String, Object> result = service.saveItem(1L, null, payload);
 
         verify(itemRepository).save(any(ApiItem.class));
+        org.assertj.core.api.Assertions.assertThat(savedItem[0].getInputSchema()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(savedItem[0].getOutputSchema()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(result.get("inputSchema")).isEqualTo("");
+        org.assertj.core.api.Assertions.assertThat(result.get("outputSchema")).isEqualTo("");
     }
 
     @Test

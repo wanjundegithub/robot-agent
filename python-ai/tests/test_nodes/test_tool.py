@@ -170,6 +170,55 @@ async def test_tool_node_function_invoke_type_returns_variables():
 
 
 @pytest.mark.asyncio
+async def test_tool_node_resolves_url_template_from_payload_mapping():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_url_template",
+        session_id="sess_url_template",
+        workflow_code="agent_workflow",
+        workflow_version="1.0.0"
+    )
+    context.add_session_variable("order_id", "A 123")
+    context.add_execution_variable("status", "paid")
+
+    node = ToolNode("api_tool", {
+        "config": {
+            "tool_code": "api-1",
+            "invoke_type": "api",
+            "method": "POST",
+            "url": "https://api.example.com/orders/{orderId}/status",
+            "headers": {},
+            "payload_mapping": {
+                "orderId": "$session.order_id",
+                "status": "$execution.status",
+            },
+            "idempotent": False,
+        }
+    })
+
+    with patch('src.core.tool_registry.httpx.AsyncClient') as mock_client:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {"ok": True}
+        mock_response.text = '{"ok": true}'
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.request.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        result = await node.execute(context)
+
+    assert result["output"] == {"ok": True}
+    mock_instance.request.assert_awaited_once()
+    request_kwargs = mock_instance.request.await_args.kwargs
+    assert request_kwargs["url"] == "https://api.example.com/orders/A%20123/status"
+    assert request_kwargs["json"] == {"status": "paid"}
+
+
+@pytest.mark.asyncio
 async def test_tool_node_applies_output_mapping_to_variables():
     runtime_protection_manager.reset()
     context = ExecutionContext(

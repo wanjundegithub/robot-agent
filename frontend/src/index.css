@@ -274,6 +274,61 @@ body {
   gap: 16px;
 }
 
+.api-group-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.api-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  align-self: center;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.api-item-action-button {
+  min-width: 96px;
+  min-height: 38px;
+  border-radius: 10px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.api-item-action-button-primary {
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #1d4ed8;
+}
+
+.api-item-action-button-primary:hover {
+  border-color: rgba(37, 99, 235, 0.58);
+  background: #eff6ff;
+}
+
+.api-item-action-button-neutral {
+  border: 1px solid rgba(100, 116, 139, 0.28);
+  color: #475569;
+}
+
+.api-item-action-button-neutral:hover {
+  border-color: rgba(71, 85, 105, 0.5);
+  background: #f8fafc;
+}
+
+.api-item-action-button-danger {
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  color: #dc2626;
+}
+
+.api-item-action-button-danger:hover {
+  border-color: rgba(220, 38, 38, 0.55);
+  background: #fef2f2;
+}
+
 .api-group-form,
 .api-form-grid {
   display: grid;
@@ -302,7 +357,7 @@ body {
 .api-center-modal {
   display: flex;
   width: min(760px, 92vw);
-  max-height: min(860px, 90vh);
+  max-height: min(980px, 94vh);
   flex-direction: column;
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 24px;
@@ -319,6 +374,67 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.api-test-response-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 16px;
+}
+
+.api-test-response-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.api-test-response-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.api-test-response-code {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.api-test-response-code-success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.api-test-response-code-error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.api-test-response-duration {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.api-test-response-payload {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 16px;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .api-validation-toast {

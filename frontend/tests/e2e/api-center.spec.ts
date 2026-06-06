@@ -5,6 +5,9 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
   let savedHeaders: unknown = []
   let savedAuthMode: unknown = 'INHERIT'
   let savedAuthConfig: unknown = null
+  let savedInputSchema: unknown = null
+  let savedOutputSchema: unknown = null
+  let savedApiCreated = false
   let savedGroupAuthConfig: unknown = null
   let lastTestStatus = 'SUCCESS'
   let lastTestTime = '2026-05-31T10:00:00'
@@ -53,6 +56,9 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
       savedHeaders = payload.headers
       savedAuthMode = payload.authMode
       savedAuthConfig = payload.authConfig
+      savedInputSchema = payload.inputSchema
+      savedOutputSchema = payload.outputSchema
+      savedApiCreated = true
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -77,30 +83,53 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
       return
     }
 
+    const items = [
+      {
+        id: 11,
+        groupId: 1,
+        apiName: '查询用户',
+        description: '按用户ID查询',
+        status: 'ENABLED',
+        enabled: true,
+        requestUrl: 'https://example.com/users?userId={userId}',
+        requestMethod: 'GET',
+        authMode: 'INHERIT',
+        authType: 'BEARER',
+        authPreview: 'Bearer ••••demo',
+        inputSchema: '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false}',
+        outputSchema: '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":true}',
+        lastTestStatus,
+        lastTestTime,
+        lastTestErrorMessage,
+        lastTestToken: 'token-1',
+      },
+    ]
+    if (savedApiCreated) {
+      items.unshift({
+        id: 12,
+        groupId: 1,
+        apiName: savedApiName,
+        description: '',
+        status: 'ENABLED',
+        enabled: true,
+        requestUrl: 'https://example.com/users?userId={userId}',
+        requestMethod: 'GET',
+        authMode: String(savedAuthMode ?? 'INHERIT'),
+        authType: 'BEARER',
+        authPreview: 'Bearer ••••demo',
+        inputSchema: String(savedInputSchema ?? ''),
+        outputSchema: String(savedOutputSchema ?? ''),
+        lastTestStatus: null,
+        lastTestTime: null,
+        lastTestErrorMessage: null,
+        lastTestToken: null,
+      })
+    }
+
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([
-        {
-          id: 11,
-          groupId: 1,
-          apiName: '查询用户',
-          description: '按用户ID查询',
-          status: 'ENABLED',
-          enabled: true,
-          requestUrl: 'https://example.com/users?userId={userId}',
-          requestMethod: 'GET',
-          authMode: 'INHERIT',
-          authType: 'BEARER',
-          authPreview: 'Bearer ••••demo',
-          inputSchema: '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false}',
-          outputSchema: '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":true}',
-          lastTestStatus,
-          lastTestTime,
-          lastTestErrorMessage,
-          lastTestToken: 'token-1',
-        },
-      ]),
+      body: JSON.stringify(items),
     })
   })
 
@@ -131,6 +160,34 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
         lastTestStatus: 'SUCCESS',
         lastTestTime: '2026-05-31T10:00:00',
         lastTestToken: 'token-1',
+        urlVariables: ['userId'],
+      }),
+    })
+  })
+
+
+  await page.route('**/api/api-center/groups/1/items/12', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 12,
+        groupId: 1,
+        apiName: savedApiName,
+        description: '',
+        status: 'ENABLED',
+        enabled: true,
+        requestUrl: 'https://example.com/users?userId={userId}',
+        requestMethod: 'GET',
+        authMode: savedAuthMode ?? 'INHERIT',
+        authType: 'BEARER',
+        authPreview: 'Bearer ••••demo',
+        authConfig: { authType: 'NO_AUTH', preview: 'No Auth' },
+        headers: savedHeaders,
+        inputSchema: savedInputSchema,
+        outputSchema: savedOutputSchema,
+        lastTestStatus: null,
+        lastTestTime: null,
         urlVariables: ['userId'],
       }),
     })
@@ -192,6 +249,7 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
       } : {
         success: true,
         testType: 'request',
+        statusCode: 200,
         responsePayload: JSON.stringify({ ok: true, userId: payload.urlVariables?.userId ?? null }),
         errorMessage: null,
         durationMs: 12,
@@ -214,6 +272,8 @@ async function mockApiCenterApis(page: import('@playwright/test').Page) {
     savedHeaders: () => savedHeaders,
     savedAuthMode: () => savedAuthMode,
     savedAuthConfig: () => savedAuthConfig,
+    savedInputSchema: () => savedInputSchema,
+    savedOutputSchema: () => savedOutputSchema,
     savedGroupAuthConfig: () => savedGroupAuthConfig,
   }
 }
@@ -264,6 +324,13 @@ test('api center and dialogs fill available space with readable inputs', async (
   const viewport = page.viewportSize()
   expect(panelBox?.width).toBeGreaterThan((viewport?.width ?? 0) * 0.9)
   expect(panelBox?.height).toBeGreaterThan((viewport?.height ?? 0) * 0.75)
+  const editGroupButtonBox = await page.getByRole('button', { name: '编辑API组' }).boundingBox()
+  const deleteGroupButtonBox = await page.getByRole('button', { name: '删除API组' }).boundingBox()
+  const createApiButtonBox = await page.getByRole('button', { name: '新增API', exact: true }).boundingBox()
+  expect(Math.abs((createApiButtonBox?.y ?? 0) - (editGroupButtonBox?.y ?? 0))).toBeLessThan(2)
+  expect(Math.abs((createApiButtonBox?.y ?? 0) - (deleteGroupButtonBox?.y ?? 0))).toBeLessThan(2)
+  expect(createApiButtonBox?.height).toBe(editGroupButtonBox?.height)
+  expect(createApiButtonBox?.height).toBe(deleteGroupButtonBox?.height)
 
   await page.getByRole('button', { name: '新增API组' }).click()
   const groupDialog = page.locator('.form-overlay').last()
@@ -285,8 +352,8 @@ test('api center and dialogs fill available space with readable inputs', async (
   await expect(apiDialog.getByText('URL变量映射')).toBeVisible()
   await expect(apiDialog.locator('#url-var-userId')).toBeVisible()
   await expect(apiDialog.locator('#url-var-orderId')).toBeVisible()
-  await expect(apiDialog.locator('#url-var-userId')).toHaveValue('userId')
-  await expect(apiDialog.locator('#url-var-orderId')).toHaveValue('orderId')
+  await expect(apiDialog.locator('#url-var-userId')).toHaveValue('')
+  await expect(apiDialog.locator('#url-var-orderId')).toHaveValue('')
   const urlBox = await apiDialog.locator('#api-url').boundingBox()
   const variableBox = await apiDialog.getByText('URL变量映射').boundingBox()
   const userIdBox = await apiDialog.locator('#url-var-userId').boundingBox()
@@ -295,6 +362,19 @@ test('api center and dialogs fill available space with readable inputs', async (
   expect(variableBox?.y).toBeGreaterThan(urlBox?.y ?? 0)
   expect(orderIdBox?.y).toBeGreaterThan(userIdBox?.y ?? 0)
   expect(headersBox?.y).toBeGreaterThan(variableBox?.y ?? 0)
+  await apiDialog.getByRole('button', { name: '取消' }).click()
+
+  const item = page.getByTestId('api-item-11')
+  const itemBox = await item.boundingBox()
+  const editButtonBox = await item.getByRole('button', { name: '编辑' }).boundingBox()
+  const testButtonBox = await item.getByRole('button', { name: '请求测试' }).boundingBox()
+  const deleteButtonBox = await item.getByRole('button', { name: '删除' }).boundingBox()
+  const itemCenterY = (itemBox?.y ?? 0) + (itemBox?.height ?? 0) / 2
+  const actionsCenterY = (testButtonBox?.y ?? 0) + (testButtonBox?.height ?? 0) / 2
+  expect(Math.abs(actionsCenterY - itemCenterY)).toBeLessThan(8)
+  expect(editButtonBox?.width).toBeGreaterThanOrEqual(96)
+  expect(testButtonBox?.width).toBeGreaterThanOrEqual(96)
+  expect(deleteButtonBox?.width).toBeGreaterThanOrEqual(96)
 })
 
 test('api editor validates required fields only when saving', async ({ page }) => {
@@ -310,6 +390,8 @@ test('api editor validates required fields only when saving', async ({ page }) =
   await expect(dialog.getByRole('button', { name: '请求测试' })).toHaveCount(0)
   await expect(dialog.getByText('Schema 校验通过')).toHaveCount(0)
   await expect(dialog.getByText('保存前需要等待')).toHaveCount(0)
+  await expect(dialog.locator('#input-schema')).toHaveValue('')
+  await expect(dialog.locator('#output-schema')).toHaveValue('')
 
   const apiNameBox = await dialog.locator('#api-name').boundingBox()
   const methodBox = await dialog.locator('#api-method').boundingBox()
@@ -339,6 +421,14 @@ test('api editor validates required fields only when saving', async ({ page }) =
   await expect(dialog).toHaveCount(0)
   expect(apiCenter.savedApiName()).toBe('创建用户')
   expect(apiCenter.savedHeaders()).toEqual([{ key: 'Authorization', value: 'Bearer demo', enabled: true }])
+  expect(apiCenter.savedInputSchema()).toBe('')
+  expect(apiCenter.savedOutputSchema()).toBe('')
+
+  await page.getByTestId('api-item-12').getByRole('button', { name: '编辑' }).click()
+  const savedEditor = page.locator('.form-overlay').last()
+  await expect(savedEditor.locator('#input-schema')).toHaveValue('')
+  await expect(savedEditor.locator('#output-schema')).toHaveValue('')
+  await savedEditor.getByRole('button', { name: '取消' }).click()
 })
 
 test('api editor keeps validation quiet while typing and clears errors after successful save validation', async ({ page }) => {
@@ -382,11 +472,27 @@ test('saved api item supports right-click edit delete and item-level request tes
   await item.getByRole('button', { name: '请求测试' }).click()
   const testDialog = page.locator('.form-overlay').last()
   await expect(testDialog.getByText('请求测试', { exact: true })).toBeVisible()
-  await expect(testDialog.locator('#test-url-var-userId')).toBeVisible()
+  const userIdInput = testDialog.locator('#test-url-var-userId')
+  await expect(userIdInput).toBeVisible()
   await expect(testDialog.locator('#test-body-json')).toBeVisible()
-  await testDialog.locator('#test-url-var-userId').fill('u-1')
+  await expect(userIdInput).toHaveValue('')
+  await userIdInput.fill('u-1')
+  await expect(userIdInput).toHaveValue('u-1')
+  await userIdInput.fill('')
+  await expect(userIdInput).toHaveValue('')
+  await userIdInput.fill('u-1')
   await testDialog.getByRole('button', { name: '开始测试' }).click()
-  await expect(page.getByText('请求测试通过')).toBeVisible()
+  await expect(page.getByText('请求测试通过')).toHaveCount(0)
+  await expect(testDialog.getByText('响应码')).toBeVisible()
+  await expect(testDialog.locator('[data-testid="api-test-response-code"]')).toHaveText('200')
+  await expect(testDialog.getByText('响应值')).toBeVisible()
+  const responsePayload = testDialog.locator('[data-testid="api-test-response-payload"]')
+  await expect(responsePayload).toContainText('"ok": true')
+  await expect(responsePayload).toContainText('"userId": "u-1"')
+  const requestBodyBackground = await testDialog.locator('#test-body-json').evaluate((element) => getComputedStyle(element).backgroundColor)
+  const responsePayloadBackground = await responsePayload.evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(responsePayloadBackground).toBe(requestBodyBackground)
+  await testDialog.getByRole('button', { name: '取消' }).click()
 
   await item.getByRole('button', { name: '请求测试' }).click()
   const failedTestDialog = page.locator('.form-overlay').last()

@@ -38,6 +38,10 @@ class BaseNode(ABC):
     def _resolve_value(self, value: Any, source: Dict[str, Any], context) -> Any:
         if isinstance(value, str) and value.startswith("$"):
             return self._resolve_reference(value, source, context)
+        if isinstance(value, dict):
+            return {key: self._resolve_value(item, source, context) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._resolve_value(item, source, context) for item in value]
         return value
 
     def _resolve_reference(self, reference: str, source: Dict[str, Any], context, root_name: str = "node") -> Any:

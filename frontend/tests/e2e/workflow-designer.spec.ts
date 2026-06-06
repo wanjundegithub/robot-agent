@@ -703,22 +703,15 @@ test.describe('workflow designer v2 contract', () => {
     const panel = page.getByTestId('workflow-variable-panel')
     await expect(panel.getByTestId('workflow-variable-type-select').locator('option')).toHaveText([
       'String',
-      'Integer',
-      'Long',
-      'Double',
-      'BigDecimal',
+      'Number',
       'Boolean',
-      'LocalDate',
-      'LocalDateTime',
-      'LocalTime',
-      'List',
-      'Map',
       'Object',
+      'Array',
     ])
 
     for (let index = 1; index <= 8; index += 1) {
       await panel.getByTestId('workflow-variable-name-input').fill(`globalVar${index}`)
-      await panel.getByTestId('workflow-variable-type-select').selectOption(index === 1 ? 'Long' : 'String')
+      await panel.getByTestId('workflow-variable-type-select').selectOption(index === 1 ? 'Number' : 'String')
       await panel.getByTestId('workflow-variable-description-input').fill(`变量 ${index}`)
       await panel.getByTestId('workflow-variable-add').click()
     }
@@ -732,7 +725,7 @@ test.describe('workflow designer v2 contract', () => {
       'globalVar5',
       'globalVar6',
     ])
-    await expect(globalList).not.toContainText('Long')
+    await expect(globalList).not.toContainText('Number')
     await expect(globalList).not.toContainText('变量 1')
 
     await globalList.getByRole('button', { name: 'globalVar1' }).click()
@@ -1198,7 +1191,7 @@ test.describe('workflow designer v2 contract', () => {
               id: 901,
               groupId: 91,
               apiName: '航班价格查询',
-              requestUrl: 'https://tools.example.com/flights/price',
+              requestUrl: 'https://tools.example.com/flights/{flightId}/price',
               requestMethod: 'POST',
               status: 'PUBLISHED',
               publishedVersion: 'v202605300001',
@@ -1246,7 +1239,7 @@ test.describe('workflow designer v2 contract', () => {
               id: 901,
               groupId: 91,
               apiName: '航班价格查询',
-              requestUrl: 'https://tools.example.com/flights/price',
+              requestUrl: 'https://tools.example.com/flights/{flightId}/price',
               requestMethod: 'POST',
               version: 'v202605300001',
               status: 'PUBLISHED',
@@ -1318,6 +1311,8 @@ test.describe('workflow designer v2 contract', () => {
 
     await openNewWorkflowEditor(page)
     const variablePanel = page.getByTestId('workflow-variable-panel')
+    await variablePanel.getByTestId('workflow-variable-name-input').fill('flightIdVar')
+    await variablePanel.getByTestId('workflow-variable-add').click()
     await variablePanel.getByTestId('workflow-variable-name-input').fill('departureCityVar')
     await variablePanel.getByTestId('workflow-variable-add').click()
     await variablePanel.getByTestId('workflow-variable-name-input').fill('bestPrice')
@@ -1346,9 +1341,11 @@ test.describe('workflow designer v2 contract', () => {
     await page.getByTestId('workflow-api-item-select').selectOption('901')
 
     await expect(page.getByTestId('workflow-api-input-parameters')).toContainText('departureCity')
+    await expect(page.getByTestId('workflow-api-input-parameters')).toContainText('flightId')
     await expect(page.getByTestId('workflow-api-input-parameters')).not.toContainText('出发城市')
     await expect(page.getByTestId('workflow-api-output-parameters')).toContainText('price')
     await expect(page.getByTestId('workflow-api-output-parameters')).not.toContainText('最低价格')
+    await expect(page.getByTestId('workflow-api-input-parameter-flightId-variable-select')).toHaveValue('')
     await expect(page.getByTestId('workflow-api-input-parameter-departureCity-variable-select')).toHaveValue('')
     await expect(page.getByTestId('workflow-api-output-parameter-price-variable-select')).toHaveValue('')
     await expect(page.getByTestId('workflow-api-input-parameters')).toContainText('必填，请选择变量')
@@ -1356,8 +1353,9 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-validation-issues')).toContainText('API节点输入参数 departureCity 为必填，请选择变量')
     expect(draftPayload).toBeNull()
 
-    await page.getByTestId('workflow-api-input-parameter-departureCity-variable-select').selectOption({ index: 1 })
-    await page.getByTestId('workflow-api-output-parameter-price-variable-select').selectOption({ index: 2 })
+    await page.getByTestId('workflow-api-input-parameter-flightId-variable-select').selectOption({ index: 1 })
+    await page.getByTestId('workflow-api-input-parameter-departureCity-variable-select').selectOption({ index: 2 })
+    await page.getByTestId('workflow-api-output-parameter-price-variable-select').selectOption({ index: 3 })
 
     await page.getByTestId('workflow-publish').click()
     await expect.poll(() => draftPayload).not.toBeNull()
@@ -1371,9 +1369,13 @@ test.describe('workflow designer v2 contract', () => {
     expect(apiConfig.group_id).toBe(91)
     expect(apiConfig.api_id).toBe(901)
     expect(apiConfig.tool_code).toBe('901')
+    expect(apiConfig.request_url).toBe('https://tools.example.com/flights/{flightId}/price')
     expect(apiConfig.input_schema).toContain('departureCity')
     expect(apiConfig.output_schema).toContain('price')
-    expect(apiConfig.payload_mapping).toEqual({ departureCity: '$session.departureCityVar' })
+    expect(apiConfig.payload_mapping).toEqual({
+      flightId: '$session.flightIdVar',
+      departureCity: '$session.departureCityVar',
+    })
     expect(apiConfig.output_mapping).toEqual({ price: '$execution.bestPrice' })
   })
 

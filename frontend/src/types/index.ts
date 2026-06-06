@@ -489,6 +489,7 @@ export interface ApiValidationResult {
 export interface ApiTestResult {
   success: boolean
   testType: string
+  statusCode?: number | null
   responsePayload?: string | null
   errorMessage?: string | null
   durationMs?: number | null

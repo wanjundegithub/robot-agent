@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Dict
+from urllib.parse import quote
 
 import httpx
 from src.core.logging_utils import duration_ms, safe_url, sanitize_dict, summarize_payload
@@ -61,22 +63,23 @@ class ToolExecutorRegistry:
         method = str(config.get("method", "POST")).upper()
         timeout = float(config.get("timeout", 15))
         headers = {str(key): str(value) for key, value in dict(config.get("headers", {})).items()}
+        url, request_params = self._resolve_url_template(str(url), params)
         logger.info(
             "Tool request toolCode=%s invokeType=%s method=%s url=%s headers=%s payload=%s",
             tool_code,
             invoke_type or "http",
             method,
-            safe_url(str(url)),
+            safe_url(url),
             sanitize_dict(headers),
-            summarize_payload(params),
+            summarize_payload(request_params),
         )
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(
                 method=method,
-                url=str(url),
-                json=params if method in {"POST", "PUT", "PATCH"} else None,
-                params=params if method == "GET" else None,
+                url=url,
+                json=request_params if method in {"POST", "PUT", "PATCH"} else None,
+                params=request_params if method == "GET" else None,
                 headers=headers,
             )
         logger.info(
@@ -96,6 +99,25 @@ class ToolExecutorRegistry:
         if "application/json" in content_type:
             return response.json()
         return {"raw_response": response.text}
+
+    def _resolve_url_template(self, url: str, params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+        if not isinstance(params, dict) or not params:
+            return url, params
+
+        consumed: set[str] = set()
+
+        def replace(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in params:
+                raise RetryableExecutionError("validation_error", f"Tool URL variable missing: {name}")
+            consumed.add(name)
+            return quote(str(params[name]), safe="")
+
+        resolved_url = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, url)
+        if not consumed:
+            return resolved_url, params
+
+        return resolved_url, {key: value for key, value in params.items() if key not in consumed}
 
     async def _execute_json_endpoint(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
         start_time = time.perf_counter()

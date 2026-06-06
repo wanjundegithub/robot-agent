@@ -364,7 +364,7 @@ class WorkflowServiceTest {
     }
 
     @Test
-    void saveWorkflowDraft_appliesBackendDefaultModelBindingsWhenFrontendOmitsThem() throws Exception {
+    void saveWorkflowDraft_doesNotInjectBackendDefaultModelBindingsWhenFrontendOmitsThem() throws Exception {
         Workflow workflow = publishedWorkflow("flight_booking", null, "机票预订", "预订航班和机票");
         workflow.setWorkspaceId(1L);
 
@@ -399,9 +399,6 @@ class WorkflowServiceTest {
         when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "draft"))
                 .thenReturn(Optional.empty());
         when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(modelConfigService.resolveConfiguredPurposeModelCode("routing")).thenReturn("doubao-chat");
-        when(modelConfigService.resolveConfiguredPurposeModelCode("default")).thenReturn("doubao-chat");
-        when(modelConfigService.isModelCodeAvailable("doubao-chat")).thenReturn(true);
 
         workflowService.saveWorkflowDraft("demo-admin", "flight_booking", request);
 
@@ -410,17 +407,72 @@ class WorkflowServiceTest {
         WorkflowVersion saved = versionCaptor.getValue();
 
         JsonNode definition = objectMapper.readTree(saved.getDefinition());
-        assertThat(definition.at("/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
-        assertThat(definition.at("/model_bindings/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(definition.at("/model_bindings").isObject()).isTrue();
+        assertThat(definition.at("/model_bindings").isEmpty()).isTrue();
 
         JsonNode config = objectMapper.readTree(saved.getConfig());
-        assertThat(config.at("/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
-        assertThat(config.at("/model_bindings/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
-        assertThat(config.at("/llm_defaults/model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(config.has("model_bindings")).isFalse();
+        assertThat(config.has("llm_defaults")).isFalse();
 
         JsonNode snapshot = objectMapper.readTree(saved.getWorkflowSnapshot());
-        assertThat(snapshot.at("/designer/definition/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
-        assertThat(snapshot.at("/designer/workflow_config/model_bindings/routing_model_code").asText()).isEqualTo("doubao-chat");
+        assertThat(snapshot.at("/designer/definition/model_bindings").isObject()).isTrue();
+        assertThat(snapshot.at("/designer/definition/model_bindings").isEmpty()).isTrue();
+        assertThat(snapshot.at("/designer/workflow_config").has("model_bindings")).isFalse();
+        verify(modelConfigService, never()).resolveConfiguredPurposeModelCode(any());
+        verify(modelConfigService, never()).isModelCodeAvailable(any());
+    }
+
+    @Test
+    void saveWorkflowDraft_persistsWithoutCheckingModelAvailability() throws Exception {
+        Workflow workflow = publishedWorkflow("flight_booking", null, "Flight Booking", "Book flights");
+        workflow.setWorkspaceId(1L);
+
+        CreateWorkflowVersionRequest request = new CreateWorkflowVersionRequest();
+        request.setWorkflowName("Flight Booking");
+        request.setWorkflowDescription("Book flights");
+        request.setVersion("draft");
+        request.setDefinition(objectMapper.writeValueAsString(Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "graphs", Map.of(
+                        "main", Map.of(
+                                "graph_id", "main",
+                                "graph_type", "main",
+                                "graph_name", "Flight Booking",
+                                "graph_description", "Book flights",
+                                "entry_node_id", "start",
+                                "nodes", Map.of(
+                                        "start", Map.of("id", "start", "type", "start", "config", Map.of())
+                                ),
+                                "edges", List.of()
+                        )
+                )
+        )));
+        request.setConfig("{}");
+
+        when(workflowRepository.findByWorkflowCode("flight_booking")).thenReturn(Optional.of(workflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "draft"))
+                .thenReturn(Optional.empty());
+        when(workflowVersionRepository.save(any(WorkflowVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        workflowService.saveWorkflowDraft("demo-admin", "flight_booking", request);
+
+        ArgumentCaptor<WorkflowVersion> versionCaptor = ArgumentCaptor.forClass(WorkflowVersion.class);
+        verify(workflowVersionRepository).save(versionCaptor.capture());
+        WorkflowVersion saved = versionCaptor.getValue();
+
+        JsonNode definition = objectMapper.readTree(saved.getDefinition());
+        assertThat(definition.has("model_bindings")).isTrue();
+        assertThat(definition.at("/model_bindings").isEmpty()).isTrue();
+
+        JsonNode config = objectMapper.readTree(saved.getConfig());
+        assertThat(config.has("model_bindings")).isFalse();
+
+        JsonNode snapshot = objectMapper.readTree(saved.getWorkflowSnapshot());
+        assertThat(snapshot.at("/designer/definition/model_bindings").isEmpty()).isTrue();
+        assertThat(snapshot.at("/designer/workflow_config").isEmpty()).isTrue();
+        verify(modelConfigService, never()).resolveConfiguredPurposeModelCode(any());
+        verify(modelConfigService, never()).isModelCodeAvailable(any());
     }
 
     @Test

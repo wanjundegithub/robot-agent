@@ -16,7 +16,7 @@ import {
   type ApiAuthType,
   type ApiItemPayload,
 } from '../services/api'
-import type { ApiGroupSummary, ApiItemSummary } from '../types'
+import type { ApiGroupSummary, ApiItemSummary, ApiTestResult } from '../types'
 
 interface ApiCenterPanelProps {
   currentUserId: string
@@ -71,22 +71,6 @@ type AuthConfigState = {
   qop: string
 }
 
-const draft07BodySchema = `{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "title": "请求体参数",
-  "properties": {},
-  "additionalProperties": false
-}`
-
-const draft07OutputSchema = `{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "title": "返回结果",
-  "properties": {},
-  "additionalProperties": true
-}`
-
 const defaultAuthConfig = (): AuthConfigState => ({
   authType: 'NO_AUTH',
   key: '',
@@ -114,8 +98,8 @@ const defaultApiForm = (): ApiFormState => ({
   authConfig: defaultAuthConfig(),
   inheritedAuthPreview: 'No Auth',
   headers: [],
-  inputSchema: draft07BodySchema,
-  outputSchema: draft07OutputSchema,
+  inputSchema: '',
+  outputSchema: '',
   urlVariables: {},
   body: '{}',
 })
@@ -130,6 +114,7 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
   const [groupForm, setGroupForm] = useState<GroupFormState>(defaultGroupForm)
   const [apiForm, setApiForm] = useState<ApiFormState>(defaultApiForm)
   const [apiTestForm, setApiTestForm] = useState<ApiTestFormState>(defaultApiTestForm)
+  const [apiTestResult, setApiTestResult] = useState<ApiTestResult | null>(null)
   const [editingGroupId, setEditingGroupId] = useState<number | null>(null)
   const [editingApiId, setEditingApiId] = useState<number | undefined>()
   const [testingApiId, setTestingApiId] = useState<number | null>(null)
@@ -267,19 +252,18 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
         authConfig: parseAuthConfig(detail.authConfig),
         inheritedAuthPreview: String(detail.authPreview ?? selectedGroup?.authPreview ?? 'No Auth'),
         headers: parseHeaderRows(detail.headers),
-        inputSchema: detail.inputSchema ?? draft07BodySchema,
-        outputSchema: detail.outputSchema ?? draft07OutputSchema,
+        inputSchema: detail.inputSchema ?? '',
+        outputSchema: detail.outputSchema ?? '',
         urlVariables: apiTestForm.urlVariables,
         body: apiTestForm.body,
       }), currentUserId)
-      setStatusMessage(result.success ? '请求测试通过' : null)
+      setApiTestResult(result)
+      setStatusMessage(null)
       setValidationIssues(result.success ? [] : [{ message: formatRequestTestError(result.errorMessage) }])
       setError(null)
-      if (result.success) {
-        setApiTestDialogOpen(false)
-      }
       await loadGroupDetail(selectedGroupId)
     } catch (testError) {
+      setApiTestResult(null)
       setValidationIssues([{ message: formatRequestTestError(testError instanceof Error ? testError.message : undefined) }])
       setError(null)
     }
@@ -325,8 +309,8 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
       authConfig: parseAuthConfig(detail.authConfig),
       inheritedAuthPreview: String(detail.authPreview ?? selectedGroup?.authPreview ?? 'No Auth'),
       headers: parseHeaderRows(detail.headers),
-      inputSchema: detail.inputSchema ?? draft07BodySchema,
-      outputSchema: detail.outputSchema ?? draft07OutputSchema,
+      inputSchema: detail.inputSchema ?? '',
+      outputSchema: detail.outputSchema ?? '',
       urlVariables: {},
       body: '{}',
     })
@@ -337,6 +321,7 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
   const openTestApi = (item: ApiItemSummary) => {
     setTestingApiId(item.id)
     setApiTestForm(defaultApiTestForm())
+    setApiTestResult(null)
     setValidationIssues([])
     setApiTestDialogOpen(true)
   }
@@ -391,12 +376,12 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
           </aside>
           <section className="api-items-panel">
             <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white/80 p-4">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-slate-800">{selectedGroup?.groupName ?? '请选择API组'}</div>
                   <div className="text-xs text-slate-500">Header 可选；输入 Schema 只描述请求体 Body。</div>
                 </div>
-                <div className="flex gap-2">
+                <div className="api-group-toolbar">
                   {selectedGroup && <button className="rounded-lg border border-slate-200 px-3 py-2 text-xs" onClick={() => void openEditGroup(selectedGroup)} type="button">编辑API组</button>}
                   {selectedGroup && <button className="rounded-lg border border-red-200 px-3 py-2 text-xs text-red-600" onClick={async () => {
                     if (window.confirm(`确认删除API组 ${selectedGroup.groupName} 吗？`)) {
@@ -405,7 +390,7 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
                       await loadGroups()
                     }
                   }} type="button">删除API组</button>}
-                  <button className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" disabled={!selectedGroupId} onClick={openCreateApi} type="button">新增API</button>
+                  <button className="rounded-lg border border-slate-200 px-3 py-2 text-xs disabled:opacity-50" disabled={!selectedGroupId} onClick={openCreateApi} type="button">新增API</button>
                 </div>
               </div>
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
@@ -415,16 +400,16 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
                     className="rounded-xl border border-slate-200 bg-slate-50 p-4"
                     data-testid={`api-item-${item.id}`}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div className="min-w-0 flex-1">
                         <div className="font-medium text-slate-800">{item.apiName}</div>
                         <div className="mt-1 text-xs text-slate-500">{item.requestMethod} {item.requestUrl}</div>
                         <div className="mt-1 text-xs text-slate-400">测试状态：{displayTestStatus(item.lastTestStatus)} / {formatDateTime(item.lastTestTime)}</div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button className="rounded-md border border-sky-200 px-2 py-1 text-xs text-sky-700 hover:border-sky-300" onClick={() => void openEditApi(item)} type="button">编辑</button>
-                        <button className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-slate-400" onClick={() => openTestApi(item)} type="button">请求测试</button>
-                        <button className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:border-red-300" onClick={async () => {
+                      <div className="api-item-actions">
+                        <button className="api-item-action-button api-item-action-button-primary" onClick={() => void openEditApi(item)} type="button">编辑</button>
+                        <button className="api-item-action-button api-item-action-button-neutral" onClick={() => openTestApi(item)} type="button">请求测试</button>
+                        <button className="api-item-action-button api-item-action-button-danger" onClick={async () => {
                           if (selectedGroupId && window.confirm(`确认删除API ${item.apiName} 吗？`)) {
                             await deleteApiItem(selectedGroupId, item.id, currentUserId)
                             await loadGroupDetail(selectedGroupId)
@@ -476,7 +461,7 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
                 <div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">URL变量映射</div>
                 <div className="grid gap-3">
                   {urlVariables.map((variable) => (
-                    <Field key={variable} label={variable} inputId={`url-var-${variable}`}><input id={`url-var-${variable}`} className="form-input" value={apiForm.urlVariables[variable] || variable} onChange={(event) => updateApiForm({ urlVariables: { ...apiForm.urlVariables, [variable]: event.target.value } })} /></Field>
+                    <Field key={variable} label={variable} inputId={`url-var-${variable}`}><input id={`url-var-${variable}`} className="form-input" value={apiForm.urlVariables[variable] ?? ''} onChange={(event) => updateApiForm({ urlVariables: { ...apiForm.urlVariables, [variable]: event.target.value } })} /></Field>
                   ))}
                 </div>
               </div>
@@ -547,12 +532,25 @@ const ApiCenterPanel: React.FC<ApiCenterPanelProps> = ({ currentUserId }) => {
                 <div className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">URL路径/查询参数</div>
                 <div className="grid gap-3 md:grid-cols-2">
                   {testingUrlVariables.map((variable) => (
-                    <Field key={variable} label={variable} inputId={`test-url-var-${variable}`}><input id={`test-url-var-${variable}`} className="form-input" value={apiTestForm.urlVariables[variable] || variable} onChange={(event) => setApiTestForm((current) => ({ ...current, urlVariables: { ...current.urlVariables, [variable]: event.target.value } }))} /></Field>
+                    <Field key={variable} label={variable} inputId={`test-url-var-${variable}`}><input id={`test-url-var-${variable}`} className="form-input" value={apiTestForm.urlVariables[variable] ?? ''} onChange={(event) => setApiTestForm((current) => ({ ...current, urlVariables: { ...current.urlVariables, [variable]: event.target.value } }))} /></Field>
                   ))}
                 </div>
               </div>
             )}
             <Field label="请求体测试参数 JSON" inputId="test-body-json" className="md:col-span-2"><textarea id="test-body-json" className="form-textarea font-mono" value={apiTestForm.body} onChange={(event) => setApiTestForm((current) => ({ ...current, body: event.target.value }))} /></Field>
+            {apiTestResult && (
+              <div className="api-test-response-card md:col-span-2">
+                <div className="api-test-response-summary">
+                  <span className="api-test-response-label">响应码</span>
+                  <span className={`api-test-response-code ${apiTestResult.success ? 'api-test-response-code-success' : 'api-test-response-code-error'}`} data-testid="api-test-response-code">
+                    {formatResponseStatusCode(apiTestResult)}
+                  </span>
+                  {getResponseDurationMs(apiTestResult) != null && <span className="api-test-response-duration">{getResponseDurationMs(apiTestResult)} ms</span>}
+                </div>
+                <div className="api-test-response-label">响应值</div>
+                <pre className="api-test-response-payload" data-testid="api-test-response-payload">{formatResponsePayload(getResponsePayload(apiTestResult))}</pre>
+              </div>
+            )}
           </div>
         </ModalShell>
       )}
@@ -723,6 +721,43 @@ function formatValidationIssue(issue: { field?: string; message?: string }) {
 function formatRequestTestError(message?: string | null) {
   const detail = message?.trim()
   return detail ? `请求测试失败：${detail}` : '请求测试失败，请检查请求配置或响应 Schema。'
+}
+
+function formatResponseStatusCode(result: ApiTestResult) {
+  const statusCode = getNumberResultField(result, 'statusCode', 'status_code')
+  return statusCode == null ? '--' : String(statusCode)
+}
+
+function getResponsePayload(result: ApiTestResult) {
+  return getStringResultField(result, 'responsePayload', 'response_payload')
+}
+
+function getResponseDurationMs(result: ApiTestResult) {
+  return getNumberResultField(result, 'durationMs', 'duration_ms')
+}
+
+function getStringResultField(result: ApiTestResult, camelKey: keyof ApiTestResult, snakeKey: string) {
+  const record = result as ApiTestResult & Record<string, unknown>
+  const value = record[camelKey] ?? record[snakeKey]
+  return value == null ? null : String(value)
+}
+
+function getNumberResultField(result: ApiTestResult, camelKey: keyof ApiTestResult, snakeKey: string) {
+  const record = result as ApiTestResult & Record<string, unknown>
+  const value = record[camelKey] ?? record[snakeKey]
+  if (value == null || value === '') return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function formatResponsePayload(payload?: string | null) {
+  const value = payload?.trim()
+  if (!value) return '暂无响应值'
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
 }
 
 function formatDateTime(value?: string | null) {

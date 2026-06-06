@@ -190,27 +190,27 @@ public class ApiCenterService {
         requireGroup(groupId);
         List<ApiSchemaValidationIssue> validationIssues = validatePayload(payload);
         if (!validationIssues.isEmpty()) {
-            return testResult(false, "schema", null, validationIssues.get(0).message(), null, null);
+            return testResult(false, "schema", null, null, validationIssues.get(0).message(), null, null);
         }
         String requestUrl = requiredString(payload, "requestUrl");
         String method = normalizeMethod(requiredString(payload, "requestMethod"));
         Map<String, Object> urlVariables = asObject(payload.get("urlVariables"));
         for (String variable : urlTemplateResolver.extractVariables(requestUrl)) {
             if (blank(stringValue(urlVariables.get(variable)))) {
-                return testResult(false, "request", null, "URL 变量未填写: " + variable, null, null);
+                return testResult(false, "request", null, null, "URL 变量未填写: " + variable, null, null);
             }
         }
         Map<String, Object> body = asObject(payload.get("body"));
         ApiSchemaValidationResult bodyResult = schemaValidator.validatePayload(resolveInputSchema(payload), body, "请求体");
         if (!bodyResult.valid()) {
-            return testResult(false, "request", null, bodyResult.issues().get(0).message(), null, null);
+            return testResult(false, "request", null, null, bodyResult.issues().get(0).message(), null, null);
         }
         String resolvedUrl;
         try {
             resolvedUrl = urlTemplateResolver.resolve(requestUrl, urlVariables);
             requestSafetyValidator.validateRequestUrl(resolvedUrl);
         } catch (IllegalArgumentException exception) {
-            return testResult(false, "request", null, exception.getMessage(), null, null);
+            return testResult(false, "request", null, null, exception.getMessage(), null, null);
         }
         long startedAt = System.currentTimeMillis();
         Map<String, Object> result;
@@ -232,16 +232,16 @@ public class ApiCenterService {
             long durationMs = System.currentTimeMillis() - startedAt;
             boolean httpSuccess = response.statusCode() >= 200 && response.statusCode() < 300;
             if (response.body() != null && response.body().length() > MAX_RESPONSE_CHARS) {
-                result = testResult(false, "request", null, "响应体过大，已超过限制", durationMs, null);
+                result = testResult(false, "request", response.statusCode(), null, "响应体过大，已超过限制", durationMs, null);
             } else if (!httpSuccess) {
-                result = testResult(false, "request", response.body(), "HTTP 状态码不成功: " + response.statusCode(), durationMs, null);
+                result = testResult(false, "request", response.statusCode(), response.body(), "HTTP 状态码不成功: " + response.statusCode(), durationMs, null);
             } else {
                 Object responseBody = parseJsonOrEmpty(response.body());
                 ApiSchemaValidationResult outputResult = schemaValidator.validatePayload(resolveOutputSchema(payload), responseBody, "响应体");
-                result = testResult(outputResult.valid(), "request", response.body(), outputResult.valid() ? null : outputResult.issues().get(0).message(), durationMs, null);
+                result = testResult(outputResult.valid(), "request", response.statusCode(), response.body(), outputResult.valid() ? null : outputResult.issues().get(0).message(), durationMs, null);
             }
         } catch (Exception exception) {
-            result = testResult(false, "request", null, exception.getMessage(), System.currentTimeMillis() - startedAt, null);
+            result = testResult(false, "request", null, null, exception.getMessage(), System.currentTimeMillis() - startedAt, null);
         }
         updateItemLastTestState(groupId, optionalLong(payload.get("id")), result);
         return result;
@@ -264,8 +264,8 @@ public class ApiCenterService {
         }
         item.setAuthMode(authMode.name());
         item.setHeadersCiphertext(headerCryptoService.encrypt(normalizeHeadersForStorage(payload.get("headers"))));
-        item.setInputSchema(resolveInputSchema(payload));
-        item.setOutputSchema(resolveOutputSchema(payload));
+        item.setInputSchema(normalizeSchemaForStorage(payload.get("inputSchema")));
+        item.setOutputSchema(normalizeSchemaForStorage(payload.get("outputSchema")));
         if (item.getCreatedAt() == null) {
             item.setCreatedAt(LocalDateTime.now());
         }
@@ -404,10 +404,11 @@ public class ApiCenterService {
         itemRepository.save(item);
     }
 
-    private Map<String, Object> testResult(boolean success, String testType, String responsePayload, String errorMessage, Long durationMs, String token) {
+    private Map<String, Object> testResult(boolean success, String testType, Integer statusCode, String responsePayload, String errorMessage, Long durationMs, String token) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", success);
         result.put("testType", testType);
+        result.put("statusCode", statusCode);
         result.put("responsePayload", responsePayload);
         result.put("errorMessage", errorMessage);
         result.put("durationMs", durationMs);
@@ -426,6 +427,11 @@ public class ApiCenterService {
             throw new ResponseStatusException(NOT_FOUND, "API不属于当前API组");
         }
         return item;
+    }
+
+    private String normalizeSchemaForStorage(Object value) {
+        String schema = optionalString(value);
+        return schema == null ? "" : schema.trim();
     }
 
     private String resolveInputSchema(Map<String, Object> payload) {
