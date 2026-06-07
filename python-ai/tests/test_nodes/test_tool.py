@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
 from src.core.protection import ConfirmationRequiredError, runtime_protection_manager
+from src.core.idempotency import get_idempotency_store
+from src.core.tool_registry import tool_registry
 from src.nodes.tool import ToolNode
 from src.core.context import ExecutionContext
 
@@ -216,6 +218,96 @@ async def test_tool_node_resolves_url_template_from_payload_mapping():
     request_kwargs = mock_instance.request.await_args.kwargs
     assert request_kwargs["url"] == "https://api.example.com/orders/A%20123/status"
     assert request_kwargs["json"] == {"status": "paid"}
+
+
+@pytest.mark.asyncio
+async def test_tool_node_parses_json_body_when_content_type_is_plain_text():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_plain_text_json",
+        session_id="sess_plain_text_json",
+        workflow_code="agent_workflow",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variable("product_name", "小苏打")
+
+    node = ToolNode("api_tool", {
+        "config": {
+            "tool_code": "api-plain-json",
+            "invoke_type": "api",
+            "method": "POST",
+            "url": "https://api.example.com/search",
+            "headers": {},
+            "payload_mapping": {
+                "product_name": "$execution.product_name",
+            },
+            "output_mapping": {
+                "result": "$execution.product_list",
+            },
+            "idempotent": False,
+        }
+    })
+
+    with patch('src.core.tool_registry.httpx.AsyncClient') as mock_client:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "text/plain; charset=utf-8"}
+        mock_response.text = '{"result":[["小苏打牙膏","100"]]}'
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.request.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        result = await node.execute(context)
+
+    assert result["output"] == {"result": [["小苏打牙膏", "100"]]}
+    assert context.execution_variables["product_list"] == [["小苏打牙膏", "100"]]
+
+
+@pytest.mark.asyncio
+async def test_tool_node_normalizes_cached_raw_response_json_for_output_mapping():
+    runtime_protection_manager.reset()
+    context = ExecutionContext(
+        execution_id="exec_cached_plain_text_json",
+        session_id="sess_cached_plain_text_json",
+        workflow_code="agent_workflow",
+        workflow_version="1.0.0"
+    )
+    context.add_execution_variable("product_name", "小苏打缓存")
+
+    params = {"product_name": "小苏打缓存"}
+    cache_key = tool_registry._tool_key("api-cached-json", params)
+    get_idempotency_store().set_json(
+        cache_key,
+        {"raw_response": '{"result":[["小苏打粉清洁去污","100"]]}'},
+        3600,
+    )
+
+    node = ToolNode("api_tool", {
+        "config": {
+            "tool_code": "api-cached-json",
+            "invoke_type": "api",
+            "method": "POST",
+            "url": "https://api.example.com/search",
+            "headers": {},
+            "payload_mapping": {
+                "product_name": "$execution.product_name",
+            },
+            "output_mapping": {
+                "result": "$execution.product_list",
+            },
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["output"] == {
+        "result": [["小苏打粉清洁去污", "100"]],
+        "cached": True,
+    }
+    assert context.execution_variables["product_list"] == [["小苏打粉清洁去污", "100"]]
 
 
 @pytest.mark.asyncio

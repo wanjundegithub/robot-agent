@@ -508,6 +508,100 @@ async def test_v2_start_api_function_end_nodes_emit_execution_logs_without_react
 
 
 @pytest.mark.asyncio
+async def test_v2_end_node_emits_output_variables_as_natural_language_message():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {"id": "start", "type": "start", "config": {}},
+                    "end": {
+                        "id": "end",
+                        "type": "end",
+                        "config": {
+                            "output_format": {
+                                "product_list": "$execution.product_list",
+                            },
+                        },
+                    },
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-end-output-message",
+        "session_id": "session-v2-end-output-message",
+        "workflow_code": "shopping",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "input_variables": {"product_list": ["卫生纸", "抽纸"]},
+    })
+    await scheduler.run(runtime)
+    events = await _collect_events(runtime)
+
+    message_events = [payload for event, payload in events if event == "message.delta"]
+    assert runtime.context.status == "completed"
+    assert message_events[-1]["content"] == "已为您找到：卫生纸、抽纸。"
+
+
+@pytest.mark.asyncio
+async def test_v2_end_node_emits_message_for_bare_output_variable_name():
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {"id": "start", "type": "start", "config": {}},
+                    "end": {
+                        "id": "end",
+                        "type": "end",
+                        "config": {
+                            "output_format": {
+                                "product_list": "product_list",
+                            },
+                        },
+                    },
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-end-bare-output-message",
+        "session_id": "session-v2-end-bare-output-message",
+        "workflow_code": "shopping",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "input_variables": {"product_list": ["卫生纸", "抽纸"]},
+    })
+    await scheduler.run(runtime)
+    events = await _collect_events(runtime)
+
+    message_events = [payload for event, payload in events if event == "message.delta"]
+    assert runtime.context.status == "completed"
+    assert message_events[-1]["content"] == "已为您找到：卫生纸、抽纸。"
+
+
+@pytest.mark.asyncio
 async def test_v2_react_prompt_includes_all_workflow_node_definitions(monkeypatch):
     calls = []
 

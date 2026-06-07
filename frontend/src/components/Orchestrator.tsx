@@ -197,7 +197,6 @@ const subflowInitialNodes: Node<CanvasNodeData>[] = [
       label: '开始节点',
       nodeType: 'start',
       config: {
-        prompt: '接收用户输入并初始化工作流变量。',
         input_variable_ids: [],
       },
     },
@@ -221,7 +220,6 @@ const subflowInitialNodes: Node<CanvasNodeData>[] = [
       label: '结束节点',
       nodeType: 'end',
       config: {
-        prompt: '返回工作流最终输出。',
         output_variable_ids: [],
       },
     },
@@ -238,7 +236,6 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'start',
     label: '开始节点',
     config: {
-      prompt: '定义工作流启动时可用的输入变量。',
       input_variable_ids: [],
     },
   },
@@ -290,7 +287,6 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'end',
     label: '结束节点',
     config: {
-      prompt: '定义结束节点需要返回哪些输出变量。',
       output_variable_ids: [],
     },
   },
@@ -1516,7 +1512,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
             placeholder={nodeType === 'sub_agent' ? '流程名称' : '节点名称'}
           />
         </label>
-        {nodeType !== 'sub_agent' && (
+        {!['sub_agent', 'start', 'end'].includes(nodeType) && (
           <div className="text-xs text-slate-400">节点类型：{displayNodeType(nodeType)}</div>
         )}
 
@@ -1537,15 +1533,6 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
               placeholder={nodeType === 'sub_agent' ? '流程描述' : '节点描述'}
             />
           </label>
-        )}
-
-        {(nodeType === 'start' || nodeType === 'end') && (
-          <textarea
-            value={String(config.prompt || '')}
-            onChange={(event) => updateSelectedConfigField('prompt', event.target.value)}
-            className="min-h-[100px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            placeholder="请输入提示词"
-          />
         )}
 
         {nodeType === 'start' && (
@@ -2135,7 +2122,7 @@ function toDefinitionGraph(graph: WorkflowGraphState, variableNameMap: Map<strin
           id: node.id,
           type: data.nodeType,
           name: data.label,
-          description: String(data.config.description || data.config.prompt || ''),
+          description: ['start', 'end'].includes(data.nodeType) ? '' : String(data.config.description || data.config.prompt || ''),
           config: normalizeNodeConfig(data.nodeType, data.config, variableNameMap),
         },
       ]
@@ -2183,7 +2170,6 @@ function normalizeNodeConfig(
   switch (nodeType) {
     case 'start':
       return {
-        prompt: String(config.prompt || ''),
         initial_variables: mapVariableIdsToObject(config.input_variable_ids, variableNameMap, '', true),
         input_variables: mapVariableIdsToDefinitions(config.input_variable_ids, variableNameMap),
       }
@@ -2228,12 +2214,20 @@ function normalizeNodeConfig(
       }
     case 'end':
       return {
-        prompt: String(config.prompt || ''),
-        output_format: mapVariableIdsToObject(config.output_variable_ids, variableNameMap, 'execution', false),
+        output_format: mapVariableIdsToReferences(config.output_variable_ids, variableNameMap),
       }
     default:
       return config
   }
+}
+
+function mapVariableIdsToReferences(source: unknown, variableNameMap: Map<string, VariableDefinition>) {
+  const ids = Array.isArray(source) ? (source as string[]) : []
+  const entries = ids
+    .map((id) => variableNameMap.get(id))
+    .filter((item): item is VariableDefinition => Boolean(item))
+    .map((item) => [item.name, formatVariableReference(item)])
+  return Object.fromEntries(entries)
 }
 
 function mapVariableIdsToObject(
@@ -2784,7 +2778,6 @@ function denormalizeNodeConfig(
   switch (nodeType) {
     case 'start':
       return {
-        prompt: String(config.prompt || ''),
         input_variable_ids: mapObjectKeysToVariableIds(config.initial_variables, variableNameToId),
       }
     case 'coordinator':
@@ -2820,7 +2813,6 @@ function denormalizeNodeConfig(
       }
     case 'end':
       return {
-        prompt: String(config.prompt || ''),
         output_variable_ids: mapObjectKeysToVariableIds(config.output_format, variableNameToId),
       }
     default:

@@ -197,6 +197,7 @@ class ExecutionRegistry:
         variable_definitions = self._workflow_variable_definitions(normalized)
         if "graphs" not in workflow or "main_graph_id" not in workflow:
             self._enrich_start_nodes(normalized.get("nodes", {}), variable_definitions)
+            self._normalize_nodes_variable_references(normalized.get("nodes", {}), variable_definitions)
             return normalized
 
         graphs = normalized.get("graphs", {})
@@ -219,6 +220,7 @@ class ExecutionRegistry:
                     node["type"] = "sub_agent"
                 if str(node.get("type", "")).strip().lower() == "start":
                     self._enrich_start_node(node, variable_definitions)
+                self._normalize_node_variable_references(node, variable_definitions)
 
         return normalized
 
@@ -229,18 +231,74 @@ class ExecutionRegistry:
         definitions: Dict[str, Dict[str, Any]] = {}
         for scope_key in ("global", "temporary", "temp"):
             values = variables.get(scope_key)
+            default_scope = "global" if scope_key == "global" else "temp"
             if isinstance(values, list):
                 for item in values:
                     if not isinstance(item, dict):
                         continue
                     name = str(item.get("name") or "").strip()
                     if name:
-                        definitions[name] = dict(item)
+                        definition = dict(item)
+                        definition.setdefault("scope", default_scope)
+                        definitions[name] = definition
             elif isinstance(values, dict):
                 for name, value in values.items():
                     if isinstance(value, dict):
-                        definitions[str(name)] = {"name": str(name), **value}
+                        definition = {"name": str(name), **value}
+                        definition.setdefault("scope", default_scope)
+                        definitions[str(name)] = definition
         return definitions
+
+    def _normalize_nodes_variable_references(self, nodes: Any, variable_definitions: Dict[str, Dict[str, Any]]) -> None:
+        if not isinstance(nodes, dict):
+            return
+        for node in nodes.values():
+            if isinstance(node, dict):
+                self._normalize_node_variable_references(node, variable_definitions)
+
+    def _normalize_node_variable_references(self, node: Dict[str, Any], variable_definitions: Dict[str, Dict[str, Any]]) -> None:
+        config = node.get("config")
+        if isinstance(config, dict):
+            node["config"] = self._normalize_variable_reference_value(config, variable_definitions)
+
+    def _normalize_variable_reference_value(self, value: Any, variable_definitions: Dict[str, Dict[str, Any]]) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: self._normalize_variable_reference_value(item, variable_definitions)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._normalize_variable_reference_value(item, variable_definitions) for item in value]
+        if isinstance(value, str):
+            return self._normalize_variable_reference(value, variable_definitions)
+        return value
+
+    def _normalize_variable_reference(self, value: str, variable_definitions: Dict[str, Dict[str, Any]]) -> str:
+        prefixes = {
+            "$session.": "session",
+            "$global.": "session",
+            "$execution.": "execution",
+            "$temp.": "execution",
+        }
+        for prefix in prefixes:
+            if not value.startswith(prefix):
+                continue
+            path = value[len(prefix):]
+            variable_name = path.split(".", 1)[0].strip()
+            if not variable_name:
+                return value
+            definition = variable_definitions.get(variable_name)
+            if not definition:
+                return value
+            target_prefix = "$session." if self._variable_runtime_scope(definition) == "session" else "$execution."
+            return f"{target_prefix}{path}"
+        return value
+
+    def _variable_runtime_scope(self, definition: Dict[str, Any]) -> str:
+        scope = str(definition.get("scope") or "").strip().lower()
+        if scope in {"global", "session"}:
+            return "session"
+        return "execution"
 
     def _enrich_start_nodes(self, nodes: Any, variable_definitions: Dict[str, Dict[str, Any]]) -> None:
         if not isinstance(nodes, dict):

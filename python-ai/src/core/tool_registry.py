@@ -29,8 +29,7 @@ class ToolExecutorRegistry:
         if idempotency_key is not None:
             cached = get_idempotency_store().get_json(idempotency_key)
             if cached is not None:
-                cached["cached"] = True
-                return cached
+                return self._normalize_cached_result(cached)
 
         async def _run() -> Dict[str, Any]:
             result = await self._execute_once(tool_code, params, config)
@@ -95,10 +94,7 @@ class ToolExecutorRegistry:
         if response.status_code >= 400:
             raise RetryableExecutionError("validation_error", f"Tool call failed {response.status_code}: {response.text}")
 
-        content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            return response.json()
-        return {"raw_response": response.text}
+        return self._parse_response_body(response)
 
     def _resolve_url_template(self, url: str, params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         if not isinstance(params, dict) or not params:
@@ -141,9 +137,30 @@ class ToolExecutorRegistry:
             raise RetryableExecutionError("internal_error", f"Tool server error {response.status_code}: {response.text}")
         if response.status_code >= 400:
             raise RetryableExecutionError("validation_error", f"Tool call failed {response.status_code}: {response.text}")
-        if "application/json" in response.headers.get("content-type", ""):
+        return self._parse_response_body(response)
+
+    def _parse_response_body(self, response: httpx.Response) -> Dict[str, Any]:
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
             return response.json()
+        try:
+            parsed = json.loads(response.text)
+        except (TypeError, json.JSONDecodeError):
+            return {"raw_response": response.text}
+        if isinstance(parsed, dict):
+            return parsed
         return {"raw_response": response.text}
+
+    def _normalize_cached_result(self, cached: Dict[str, Any]) -> Dict[str, Any]:
+        raw_response = cached.get("raw_response")
+        if isinstance(raw_response, str):
+            try:
+                parsed = json.loads(raw_response)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return {**parsed, "cached": True}
+        return {**cached, "cached": True}
 
     async def _execute_function(self, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if function_name == "merge_variables":

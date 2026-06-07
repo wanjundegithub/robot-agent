@@ -92,6 +92,58 @@ async def test_registry_rejects_missing_top_level_workflow_definition_by_default
 
 
 @pytest.mark.asyncio
+async def test_registry_normalizes_node_references_to_variable_registry_scope():
+    runtime_protection_manager.reset()
+    registry = ExecutionRegistry()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "variables": {
+            "global": [],
+            "temporary": [
+                {"name": "product_name", "scope": "temp", "type": "String"},
+                {"name": "product_list", "scope": "temp", "type": "Array"},
+            ],
+        },
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "api",
+                "nodes": {
+                    "api": {
+                        "id": "api",
+                        "type": "api",
+                        "config": {
+                            "payload_mapping": {"product_name": "$session.product_name"},
+                            "output_mapping": {"result": "$session.product_list"},
+                        },
+                    },
+                    "end": {
+                        "id": "end",
+                        "type": "end",
+                        "config": {"output_format": {"product_list": "$session.product_list"}},
+                    },
+                },
+                "edges": [{"id": "e1", "source": "api", "target": "end"}],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "session_id": "sess_scope_normalize",
+        "execution_id": "exec_scope_normalize",
+        "workflow_code": "shopping",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+    })
+
+    nodes = runtime.workflow["graphs"]["main"]["nodes"]
+    assert nodes["api"]["config"]["payload_mapping"] == {"product_name": "$execution.product_name"}
+    assert nodes["api"]["config"]["output_mapping"] == {"result": "$execution.product_list"}
+    assert nodes["end"]["config"]["output_format"] == {"product_list": "$execution.product_list"}
+
+
 @pytest.mark.asyncio
 async def test_registry_returns_existing_runtime_for_duplicate_execution_id():
     runtime_protection_manager.reset()

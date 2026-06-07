@@ -476,6 +476,85 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void validateWorkflowDefinition_doesNotRequirePromptForStartAndEndNodes() throws Exception {
+        Map<String, Object> definition = Map.of(
+                "schema_version", "workflow-designer/v2",
+                "main_graph_id", "main",
+                "graphs", Map.of(
+                        "main", Map.of(
+                                "graph_id", "main",
+                                "graph_type", "MAIN",
+                                "graph_name", "商品推荐",
+                                "graph_description", "根据用户输入推荐商品",
+                                "entry_node_id", "coordinator_main",
+                                "nodes", Map.of(
+                                        "coordinator_main", Map.of(
+                                                "id", "coordinator_main",
+                                                "type", "coordinator",
+                                                "config", Map.of("prompt", "选择商品推荐子流程")
+                                        ),
+                                        "product_sub_agent", Map.of(
+                                                "id", "product_sub_agent",
+                                                "type", "sub_agent",
+                                                "config", Map.of(
+                                                        "prompt", "处理商品推荐",
+                                                        "subgraph_id", "product_graph"
+                                                )
+                                        )
+                                ),
+                                "edges", List.of(Map.of(
+                                        "id", "e_main_product",
+                                        "source", "coordinator_main",
+                                        "target", "product_sub_agent"
+                                ))
+                        ),
+                        "product_graph", Map.of(
+                                "graph_id", "product_graph",
+                                "graph_type", "SUBGRAPH",
+                                "graph_name", "商品推荐子流程",
+                                "graph_description", "提取商品并输出推荐结果",
+                                "entry_node_id", "start",
+                                "nodes", Map.of(
+                                        "start", Map.of(
+                                                "id", "start",
+                                                "type", "start",
+                                                "config", Map.of(
+                                                        "input_variables", List.of(Map.of(
+                                                                "name", "product_list",
+                                                                "type", "String",
+                                                                "description", "用户想查询的商品"
+                                                        ))
+                                                )
+                                        ),
+                                        "end", Map.of(
+                                                "id", "end",
+                                                "type", "end",
+                                                "config", Map.of("output_format", Map.of(
+                                                        "product_list", "$session.product_list"
+                                                ))
+                                        )
+                                ),
+                                "edges", List.of(Map.of(
+                                        "id", "e_start_end",
+                                        "source", "start",
+                                        "target", "end"
+                                ))
+                        )
+                )
+        );
+
+        List<Map<String, Object>> issues = workflowService.validateWorkflowDefinition(
+                objectMapper.writeValueAsString(definition),
+                "{}"
+        );
+
+        assertThat(issues)
+                .filteredOn(issue -> "config.prompt".equals(issue.get("field")))
+                .isEmpty();
+        assertThat(issues).isEmpty();
+    }
+
+    @Test
     void publishWorkflow_rejectsSubAgentWithoutSubgraphBinding() throws Exception {
         Workflow workflow = publishedWorkflow("flight_booking", null, "机票预订", "预订航班和机票");
         workflow.setWorkspaceId(1L);

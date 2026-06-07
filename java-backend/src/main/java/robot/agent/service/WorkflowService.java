@@ -578,10 +578,10 @@ public class WorkflowService {
                 issues.add(issue(nodeId, "type", "节点类型不受支持"));
                 continue;
             }
-            if (("coordinate".equals(type) || "sub_agent".equals(type) || "start".equals(type) || "end".equals(type))
+            if (("coordinate".equals(type) || "sub_agent".equals(type))
                     && stringValue(nodeConfig.get("prompt")) == null
                     && stringValue(nodeConfig.get("user_prompt")) == null) {
-                issues.add(issue(nodeId, "config.prompt", "提示词节点缺少 prompt"));
+                issues.add(issue(nodeId, "config.prompt", "决策节点缺少 prompt"));
             }
             if ("end".equals(type)) {
                 Object outputFormat = nodeConfig.get("output_format");
@@ -2201,7 +2201,7 @@ public class WorkflowService {
             if (requiresPrompt(type)
                     && stringValue(nodeConfig.get("prompt")) == null
                     && stringValue(nodeConfig.get("user_prompt")) == null) {
-                issues.add(issue(nodeId, "config.prompt", "提示词节点缺少 prompt"));
+                issues.add(issue(nodeId, "config.prompt", "决策节点缺少 prompt"));
             }
             if ("end".equals(type)) {
                 Object outputFormat = nodeConfig.get("output_format");
@@ -2248,7 +2248,7 @@ public class WorkflowService {
     }
 
     private boolean requiresPrompt(String nodeType) {
-        return Set.of("coordinator", "sub_agent", "start", "end").contains(nodeType);
+        return Set.of("coordinator", "sub_agent").contains(nodeType);
     }
 
     private String normalizeNodeType(String rawType) {
