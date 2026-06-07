@@ -20,7 +20,7 @@ import type {
   WorkflowSummary,
   WorkflowVersionSummary,
 } from '../types'
-import { loggedFetch } from './callLogger'
+import { apiFetch } from './callLogger'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 const ADMIN_USER_ID = 'demo-admin'
@@ -82,7 +82,7 @@ async function parseApiError(response: Response): Promise<never> {
 }
 
 export async function getSessionMessages(sessionId: string): Promise<Message[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
+  const response = await apiFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -90,7 +90,7 @@ export async function getSessionMessages(sessionId: string): Promise<Message[]> 
 }
 
 export async function getExecution(executionId: string): Promise<ExecutionDetail> {
-  const response = await loggedFetch(`${API_BASE_URL}/executions/${executionId}`)
+  const response = await apiFetch(`${API_BASE_URL}/executions/${executionId}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -98,7 +98,7 @@ export async function getExecution(executionId: string): Promise<ExecutionDetail
 }
 
 export async function getSessionExecutions(sessionId: string): Promise<ExecutionDetail[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/executions?sessionId=${encodeURIComponent(sessionId)}`)
+  const response = await apiFetch(`${API_BASE_URL}/executions?sessionId=${encodeURIComponent(sessionId)}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -110,7 +110,7 @@ export async function createSession(payload: {
   workspaceId?: number
   variables?: string
 }): Promise<SessionSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions`, {
+  const response = await apiFetch(`${API_BASE_URL}/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -126,7 +126,7 @@ export async function createSession(payload: {
 }
 
 export async function getSession(sessionId: string): Promise<SessionSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
+  const response = await apiFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -134,7 +134,7 @@ export async function getSession(sessionId: string): Promise<SessionSummary> {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
+  const response = await apiFetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
@@ -143,7 +143,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 export async function getSessionsByUserId(userId: string): Promise<SessionSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/sessions?userId=${encodeURIComponent(userId)}`)
+  const response = await apiFetch(`${API_BASE_URL}/sessions?userId=${encodeURIComponent(userId)}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -152,7 +152,7 @@ export async function getSessionsByUserId(userId: string): Promise<SessionSummar
 
 export async function getAnalyticsDashboard(sessionId?: string): Promise<AnalyticsDashboard> {
   const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
-  const response = await loggedFetch(`${API_BASE_URL}/analytics/dashboard${query}`)
+  const response = await apiFetch(`${API_BASE_URL}/analytics/dashboard${query}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -161,7 +161,7 @@ export async function getAnalyticsDashboard(sessionId?: string): Promise<Analyti
 
 export async function getCostAlerts(sessionId?: string): Promise<CostAlert[]> {
   const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
-  const response = await loggedFetch(`${API_BASE_URL}/analytics/cost-alerts${query}`)
+  const response = await apiFetch(`${API_BASE_URL}/analytics/cost-alerts${query}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -169,7 +169,7 @@ export async function getCostAlerts(sessionId?: string): Promise<CostAlert[]> {
 }
 
 export async function getExecutionReplay(executionId: string): Promise<ReplayResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/executions/${executionId}/replay`)
+  const response = await apiFetch(`${API_BASE_URL}/executions/${executionId}/replay`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -180,7 +180,7 @@ export async function getSubflowRecommendations(
   workflowCode: string,
   message: string
 ): Promise<SubflowRecommendationResponse> {
-  const response = await loggedFetch(
+  const response = await apiFetch(
     `${API_BASE_URL}/workflows/${workflowCode}/subflow-recommendations?message=${encodeURIComponent(message)}`
   )
   if (!response.ok) {
@@ -190,7 +190,7 @@ export async function getSubflowRecommendations(
 }
 
 export async function runRagEvaluation(dataset?: Array<Record<string, unknown>>): Promise<RagEvaluationResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/evaluations/rag`, {
+  const response = await apiFetch(`${API_BASE_URL}/evaluations/rag`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dataset: dataset ?? null }),
@@ -202,7 +202,7 @@ export async function runRagEvaluation(dataset?: Array<Record<string, unknown>>)
 }
 
 export async function getWorkflows(): Promise<WorkflowSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows`)
+  const response = await apiFetch(`${API_BASE_URL}/workflows`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -210,7 +210,7 @@ export async function getWorkflows(): Promise<WorkflowSummary[]> {
 }
 
 export async function getPublishedWorkflows(): Promise<WorkflowSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/published`)
+  const response = await apiFetch(`${API_BASE_URL}/workflows/published`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -218,7 +218,7 @@ export async function getPublishedWorkflows(): Promise<WorkflowSummary[]> {
 }
 
 export async function deleteWorkflow(workflowCode: string, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${encodeURIComponent(workflowCode)}`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${encodeURIComponent(workflowCode)}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId || ADMIN_USER_ID,
@@ -230,7 +230,7 @@ export async function deleteWorkflow(workflowCode: string, currentUserId: string
 }
 
 export async function getWorkflowVersions(workflowCode: string): Promise<WorkflowVersionSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions`)
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -238,7 +238,7 @@ export async function getWorkflowVersions(workflowCode: string): Promise<Workflo
 }
 
 export async function archiveWorkflowVersion(workflowCode: string, version: string, currentUserId: string): Promise<WorkflowVersionSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions/${encodeURIComponent(version)}/archive`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions/${encodeURIComponent(version)}/archive`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -252,7 +252,7 @@ export async function archiveWorkflowVersion(workflowCode: string, version: stri
 }
 
 export async function deleteWorkflowVersion(workflowCode: string, version: string, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions/${encodeURIComponent(version)}`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/versions/${encodeURIComponent(version)}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId,
@@ -264,7 +264,7 @@ export async function deleteWorkflowVersion(workflowCode: string, version: strin
 }
 
 export async function getModelProviders(): Promise<ModelProviderConfig[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/providers`)
+  const response = await apiFetch(`${API_BASE_URL}/model-config/providers`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -284,7 +284,7 @@ export async function saveModelProvider(
   existingProviderCode?: string
 ): Promise<ModelProviderConfig> {
   const isUpdate = Boolean(existingProviderCode)
-  const response = await loggedFetch(
+  const response = await apiFetch(
     isUpdate ? `${API_BASE_URL}/model-config/providers/${existingProviderCode}` : `${API_BASE_URL}/model-config/providers`,
     {
       method: isUpdate ? 'PUT' : 'POST',
@@ -302,7 +302,7 @@ export async function saveModelProvider(
 }
 
 export async function deleteModelProvider(providerCode: string, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/providers/${encodeURIComponent(providerCode)}`, {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/providers/${encodeURIComponent(providerCode)}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId,
@@ -322,7 +322,7 @@ export async function validateModelProviderDraft(
   },
   currentUserId: string
 ): Promise<ProviderValidationResult> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/providers/validate-draft`, {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/providers/validate-draft`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -348,7 +348,7 @@ export async function getModelRecords(params: {
   if (params.keyword && params.keyword.trim()) {
     query.set('keyword', params.keyword.trim())
   }
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/models?${query.toString()}`)
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models?${query.toString()}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -356,7 +356,7 @@ export async function getModelRecords(params: {
 }
 
 export async function getModelRecord(id: number): Promise<ModelRecordConfig> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/models/${id}`)
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${id}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -375,7 +375,7 @@ export async function saveModelRecord(
   existingId?: number
 ): Promise<ModelRecordConfig> {
   const isUpdate = typeof existingId === 'number'
-  const response = await loggedFetch(
+  const response = await apiFetch(
     isUpdate ? `${API_BASE_URL}/model-config/models/${existingId}` : `${API_BASE_URL}/model-config/models`,
     {
       method: isUpdate ? 'PUT' : 'POST',
@@ -393,7 +393,7 @@ export async function saveModelRecord(
 }
 
 export async function deleteModelRecord(id: number, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/models/${id}`, {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${id}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId,
@@ -414,7 +414,7 @@ export async function testModelRecordConnection(
   },
   currentUserId: string
 ): Promise<Record<string, unknown>> {
-  const response = await loggedFetch(`${API_BASE_URL}/model-config/models/test`, {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models/test`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -447,7 +447,7 @@ export async function saveWorkflowDraft(
       ? (payload.definition.editor_meta as Record<string, unknown>)
       : null
 
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/drafts`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/drafts`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -484,7 +484,7 @@ export async function validateWorkflowDraft(
     workflowConfig: Record<string, unknown>
   }
 ): Promise<WorkflowDraftValidationResponse> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/validate-draft`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/validate-draft`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -500,7 +500,7 @@ export async function validateWorkflowDraft(
 
 export async function getOperationalReadiness(sessionId?: string): Promise<OperationalReadiness> {
   const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
-  const response = await loggedFetch(`${API_BASE_URL}/operations/readiness${query}`)
+  const response = await apiFetch(`${API_BASE_URL}/operations/readiness${query}`)
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)
   }
@@ -512,7 +512,7 @@ export async function publishWorkflow(
   version: string,
   currentUserId: string
 ): Promise<WorkflowSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/publish`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/publish`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -527,7 +527,7 @@ export async function publishWorkflow(
 }
 
 export async function rollbackWorkflow(workflowCode: string, version: string, currentUserId: string): Promise<WorkflowSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/workflows/${workflowCode}/rollback`, {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/${workflowCode}/rollback`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -542,7 +542,7 @@ export async function rollbackWorkflow(workflowCode: string, version: string, cu
 }
 
 export async function getApiGroups(): Promise<ApiGroupSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups`)
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -555,7 +555,7 @@ export async function saveApiGroup(
   existingGroupId?: number
 ): Promise<ApiGroupSummary> {
   const isUpdate = typeof existingGroupId === 'number'
-  const response = await loggedFetch(
+  const response = await apiFetch(
     isUpdate ? `${API_BASE_URL}/api-center/groups/${existingGroupId}` : `${API_BASE_URL}/api-center/groups`,
     {
       method: isUpdate ? 'PUT' : 'POST',
@@ -573,7 +573,7 @@ export async function saveApiGroup(
 }
 
 export async function deleteApiGroup(groupId: number, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}`, {
     method: 'DELETE',
     headers: { 'X-User-Id': currentUserId || ADMIN_USER_ID },
   })
@@ -583,7 +583,7 @@ export async function deleteApiGroup(groupId: number, currentUserId: string): Pr
 }
 
 export async function getApiGroupAuthConfig(groupId: number): Promise<Record<string, unknown>> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`)
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -591,7 +591,7 @@ export async function getApiGroupAuthConfig(groupId: number): Promise<Record<str
 }
 
 export async function saveApiGroupAuthConfig(groupId: number, payload: ApiAuthConfigPayload, currentUserId: string): Promise<Record<string, unknown>> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/auth-config`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -606,7 +606,7 @@ export async function saveApiGroupAuthConfig(groupId: number, payload: ApiAuthCo
 }
 
 export async function getApisByGroup(groupId: number): Promise<ApiItemSummary[]> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items`)
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -614,7 +614,7 @@ export async function getApisByGroup(groupId: number): Promise<ApiItemSummary[]>
 }
 
 export async function getApiItem(groupId: number, apiId: number): Promise<ApiItemSummary> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`)
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -628,7 +628,7 @@ export async function saveApiItem(
   currentUserId: string
 ): Promise<ApiItemSummary> {
   const isUpdate = typeof apiId === 'number'
-  const response = await loggedFetch(
+  const response = await apiFetch(
     isUpdate ? `${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}` : `${API_BASE_URL}/api-center/groups/${groupId}/items`,
     {
       method: isUpdate ? 'PUT' : 'POST',
@@ -646,7 +646,7 @@ export async function saveApiItem(
 }
 
 export async function deleteApiItem(groupId: number, apiId: number, currentUserId: string): Promise<void> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}`, {
     method: 'DELETE',
     headers: { 'X-User-Id': currentUserId || ADMIN_USER_ID },
   })
@@ -656,7 +656,7 @@ export async function deleteApiItem(groupId: number, apiId: number, currentUserI
 }
 
 export async function getApiItemAuthConfig(groupId: number, apiId: number): Promise<Record<string, unknown>> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`)
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -669,7 +669,7 @@ export async function saveApiItemAuthConfig(
   payload: { authMode: ApiAuthMode; authConfig?: ApiAuthConfigPayload },
   currentUserId: string
 ): Promise<Record<string, unknown>> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/items/${apiId}/auth-config`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -688,7 +688,7 @@ export async function validateApiItem(
   payload: ApiItemPayload,
   currentUserId: string
 ): Promise<ApiValidationResult> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/validate`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/validate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -707,7 +707,7 @@ export async function testApiItem(
   payload: ApiItemPayload,
   currentUserId: string
 ): Promise<ApiTestResult> {
-  const response = await loggedFetch(`${API_BASE_URL}/api-center/groups/${groupId}/test`, {
+  const response = await apiFetch(`${API_BASE_URL}/api-center/groups/${groupId}/test`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -107,6 +107,9 @@ class StartNode(BaseNode):
                 "若能从 user_message 提取缺失变量，则写入 variables；无法提取则放入 missing_fields。"
                 "已有非空 current_value 的变量只作为上下文传递，不要覆盖，也不要追问。"
                 "不要生成流程外变量、办理步骤、成功承诺或用户可见话术。"
+                "Return exactly one valid JSON object only. "
+                "The root object must be {\"variables\": {...}, \"missing_fields\": [...]}. "
+                "Do not output Markdown, comments, duplicate JSON objects, trailing commas, or any text outside JSON. "
             ),
             user_prompt=user_prompt,
             response_format={"type": "json_object"},
@@ -147,6 +150,13 @@ class StartNode(BaseNode):
                 "current_value 非空的变量不要覆盖、不要追问，只作为后续变量传递。",
                 "current_value 为空且无法从 user_message 提取时，将变量名放入 missing_fields。",
             ],
+            "output_contract": {
+                "json_only": True,
+                "root_object": {"variables": {}, "missing_fields": []},
+                "no_markdown": True,
+                "no_explanations": True,
+                "no_duplicate_root_objects": True,
+            },
             "required_output": {
                 "variables": "对象，只包含已提取到的新变量值",
                 "missing_fields": "数组，只包含仍缺失的声明变量名",
@@ -154,16 +164,57 @@ class StartNode(BaseNode):
         }
 
     def _parse_extraction_output(self, completion: str) -> Dict[str, Any]:
-        try:
-            parsed = json.loads(completion or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Start node slot extraction output is not valid JSON: {completion}") from exc
+        parsed = self._load_json_object(completion)
         if not isinstance(parsed, dict):
             return {}
+        declared_names = set(self._declared_variable_names())
         variables = parsed.get("variables")
         if isinstance(variables, dict):
-            return variables
-        return {key: value for key, value in parsed.items() if key in self._declared_variable_names()}
+            return {key: value for key, value in variables.items() if key in declared_names}
+        return {key: value for key, value in parsed.items() if key in declared_names}
+
+    def _load_json_object(self, completion: str) -> Dict[str, Any]:
+        text = (completion or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            candidates = self._json_object_candidates(text)
+            if not candidates:
+                return {}
+            declared_names = set(self._declared_variable_names())
+            ranked = [
+                (self._json_candidate_score(candidate, declared_names), index, candidate)
+                for index, candidate in enumerate(candidates)
+            ]
+            score, _index, candidate = max(ranked, key=lambda item: (item[0], item[1]))
+            return candidate if score > 0 else {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _json_object_candidates(self, text: str) -> List[Dict[str, Any]]:
+        decoder = json.JSONDecoder()
+        candidates: List[Dict[str, Any]] = []
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                candidates.append(parsed)
+        return candidates
+
+    def _json_candidate_score(self, candidate: Dict[str, Any], declared_names: set) -> int:
+        variables = candidate.get("variables")
+        if isinstance(variables, dict):
+            if any(key in declared_names for key in variables):
+                return 3
+            if "missing_fields" in candidate:
+                return 1
+            return 1
+        return 0
 
     def _build_slot_request(self, missing_fields: List[str]) -> Dict[str, Any]:
         missing_variables = [variable for variable in self.input_variables if variable["name"] in missing_fields]

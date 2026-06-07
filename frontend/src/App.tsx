@@ -56,6 +56,13 @@ const buildSocketBindingKey = (activeSessionId: string, workflow: WorkflowSummar
   return `${activeSessionId}|${workflow.workflowCode}|${workflow.currentVersion}`
 }
 
+const formatSendFailureMessage = (error: unknown) => {
+  const fallback = '消息发送失败，请稍后再试。'
+  const detail = error instanceof Error ? error.message : String(error ?? '')
+  if (!detail.trim()) return fallback
+  return `消息发送失败：${detail}`
+}
+
 const isDisplayableWorkflow = (workflow: WorkflowSummary) => {
   if (workflow.createdBy === 'system') return false
   const workflowCode = workflow.workflowCode || ''
@@ -1492,7 +1499,7 @@ const App: React.FC = () => {
         {
           id: createId('err'),
           type: 'error',
-          content: '消息发送失败，请稍后再试。',
+          content: formatSendFailureMessage(error),
           timestamp: new Date().toISOString(),
         },
       ])

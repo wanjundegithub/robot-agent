@@ -1,8 +1,7 @@
 import asyncio
 import logging
-import time
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -27,13 +26,7 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
-from src.core.logging_utils import (
-    configure_logging,
-    duration_ms,
-    new_request_id,
-    reset_request_id,
-    set_request_id,
-)
+from src.core.logging_utils import configure_logging
 from src.core.model_runtime import classify_intent_with_model_code
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
 from src.core.protection import ProtectionError, runtime_protection_manager
@@ -58,38 +51,6 @@ app.mount("/metrics", metrics_app)
 
 registry = ExecutionRegistry()
 scheduler = WorkflowScheduler()
-
-
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
-    request_id = new_request_id(request.headers.get("x-request-id"))
-    token = set_request_id(request_id)
-    start = time.perf_counter()
-    logger.info("Inbound request method=%s path=%s", request.method, request.url.path)
-    try:
-        response = await call_next(request)
-    except Exception:
-        elapsed = duration_ms(start)
-        logger.exception(
-            "Request failed method=%s path=%s status=%s durationMs=%.2f",
-            request.method,
-            request.url.path,
-            500,
-            elapsed,
-        )
-        reset_request_id(token)
-        raise
-    elapsed = duration_ms(start)
-    response.headers["X-Request-Id"] = request_id
-    logger.info(
-        "Request completed method=%s path=%s status=%s durationMs=%.2f",
-        request.method,
-        request.url.path,
-        response.status_code,
-        elapsed,
-    )
-    reset_request_id(token)
-    return response
 
 
 @app.on_event("startup")

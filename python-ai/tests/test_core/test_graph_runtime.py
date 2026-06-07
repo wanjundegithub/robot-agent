@@ -1,7 +1,9 @@
 import asyncio
 import json
+import logging
 
 import pytest
+import src.core.react_decision as react_decision_module
 
 from src.core.costing import BudgetAlert
 from src.core.protection import runtime_protection_manager
@@ -404,6 +406,228 @@ async def test_v2_sub_agent_enters_subgraph_and_returns_to_parent():
     assert [event for event, _ in events].count("graph.entered") == 2
     assert [event for event, _ in events].count("graph.exited") == 2
     assert any(event == "function.executed" for event, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_v2_start_api_function_end_nodes_emit_execution_logs_without_react(monkeypatch, caplog):
+    async def fail_react(*_args, **_kwargs):
+        raise AssertionError("ReAct should not run for deterministic single-edge workflow paths")
+
+    monkeypatch.setattr("src.core.scheduler.ReactDecisionService.decide_next_node", fail_react)
+    caplog.set_level(logging.INFO, logger="src.core.scheduler")
+
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {
+                            "initial_variables": {"item": "paper"},
+                            "description": "Collect the requested item.",
+                        },
+                    },
+                    "lookup_api": {
+                        "id": "lookup_api",
+                        "type": "api",
+                        "config": {
+                            "description": "Lookup inventory for the requested item.",
+                            "tool_code": "inventory_lookup",
+                            "invoke_type": "function",
+                            "function_name": "merge_variables",
+                            "payload_mapping": {"item": "$execution.item"},
+                        },
+                    },
+                    "mark_done": {
+                        "id": "mark_done",
+                        "type": "function",
+                        "config": {
+                            "description": "Mark the workflow as handled.",
+                            "operation_type": "assign",
+                            "assignments": {"handled": True},
+                        },
+                    },
+                    "end": {
+                        "id": "end",
+                        "type": "end",
+                        "config": {
+                            "description": "Finish the deterministic workflow.",
+                            "output_format": {"handled": "execution.handled"},
+                        },
+                    },
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "lookup_api"},
+                    {"id": "e2", "source": "lookup_api", "target": "mark_done"},
+                    {"id": "e3", "source": "mark_done", "target": "end"},
+                ],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-node-execution-logs",
+        "session_id": "session-v2-node-execution-logs",
+        "workflow_code": "inventory_lookup",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+    })
+    await scheduler.run(runtime)
+
+    messages = [record.getMessage() for record in caplog.records if record.name == "src.core.scheduler"]
+    for node_id, node_type in [
+        ("start", "start"),
+        ("lookup_api", "api"),
+        ("mark_done", "function"),
+        ("end", "end"),
+    ]:
+        assert any(
+            "node.execute.start" in message
+            and f"nodeId={node_id}" in message
+            and f"nodeType={node_type}" in message
+            for message in messages
+        )
+        assert any(
+            "node.execute.completed" in message
+            and f"nodeId={node_id}" in message
+            and f"nodeType={node_type}" in message
+            and "status=completed" in message
+            for message in messages
+        )
+
+    assert runtime.context.status == "completed"
+    assert runtime.context.execution_variables["handled"] is True
+
+
+@pytest.mark.asyncio
+async def test_v2_react_prompt_includes_all_workflow_node_definitions(monkeypatch):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return (
+            '{"targetNodeId":"lookup_api","action":"call_tool","missingFields":[],'
+            '"confidence":0.9,"reasonSummary":"Choose API lookup."}'
+        )
+
+    monkeypatch.setattr(react_decision_module, "execute_model_completion", fake_completion)
+
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {"description": "Start node definition visible to the model."},
+                    },
+                    "router": {
+                        "id": "router",
+                        "type": "message",
+                        "config": {
+                            "description": "Router node definition visible to the model.",
+                            "message_text": "route",
+                        },
+                    },
+                    "lookup_api": {
+                        "id": "lookup_api",
+                        "type": "api",
+                        "config": {
+                            "description": "API node definition visible to the model.",
+                            "tool_code": "inventory_lookup",
+                            "invoke_type": "function",
+                            "function_name": "merge_variables",
+                            "payload_mapping": {"item": "$execution.item"},
+                        },
+                    },
+                    "finish": {
+                        "id": "finish",
+                        "type": "end",
+                        "config": {"description": "End node definition visible to the model."},
+                    },
+                    "audit": {
+                        "id": "audit",
+                        "type": "function",
+                        "config": {
+                            "description": "Non-candidate function definition visible to the model.",
+                            "operation_type": "assign",
+                            "assignments": {"audited": True},
+                        },
+                    },
+                },
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "router"},
+                    {"id": "e2", "source": "router", "target": "lookup_api", "label": "lookup"},
+                    {"id": "e3", "source": "router", "target": "finish", "label": "finish"},
+                    {"id": "e4", "source": "lookup_api", "target": "finish"},
+                ],
+            }
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-react-node-context",
+        "session_id": "session-v2-react-node-context",
+        "workflow_code": "inventory_lookup",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "workflow_config": {"decision_policy": {"model_code": "react-router"}},
+        "provider_configs": [
+            {
+                "provider_code": "test-provider",
+                "provider_type": "openai_compatible",
+                "base_url": "https://llm.example.com/v1",
+            }
+        ],
+        "model_records": [
+            {
+                "model_code": "react-router",
+                "provider_code": "test-provider",
+                "upstream_model_code": "gpt-test",
+            }
+        ],
+        "input_variables": {"item": "paper"},
+    })
+    await scheduler.run(runtime)
+
+    assert calls
+    prompt_payload = json.loads(calls[0]["user_prompt"])
+    workflow_nodes = prompt_payload["workflow_node_definitions"]
+
+    assert {node["id"] for node in workflow_nodes} == {
+        "start",
+        "router",
+        "lookup_api",
+        "finish",
+        "audit",
+    }
+    assert any(
+        node["id"] == "audit"
+        and node["description"] == "Non-candidate function definition visible to the model."
+        for node in workflow_nodes
+    )
+    assert any(
+        node["id"] == "lookup_api"
+        and node["description"] == "API node definition visible to the model."
+        and node["tool_code"] == "inventory_lookup"
+        for node in workflow_nodes
+    )
+    assert prompt_payload["current_node"]["description"] == "Router node definition visible to the model."
 
 
 @pytest.mark.asyncio

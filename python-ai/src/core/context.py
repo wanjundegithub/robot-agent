@@ -57,6 +57,7 @@ class ExecutionContext:
     available_targets: List[str] = field(default_factory=list)
     node_input_snapshot: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     node_output_snapshot: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    workflow_node_context: List[Dict[str, Any]] = field(default_factory=list)
 
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)

@@ -120,11 +120,12 @@ class ReactDecisionService:
                         "task": "internal_react_transition_decision",
                         "current_node": self._summarize_node(current_node),
                         "observation": {
-                            "node_output": result.get("output", {}),
-                            "execution_variables": dict(context.execution_variables),
-                            "session_variables": dict(context.session_variables),
+                            "node_output": self._json_safe_value(result.get("output", {})),
+                            "execution_variables": self._public_variables(context.execution_variables),
+                            "session_variables": self._public_variables(context.session_variables),
                         },
                         "candidate_nodes": [self._summarize_candidate(candidate) for candidate in candidates],
+                        "workflow_node_definitions": self._workflow_node_definitions(context, current_node, candidates),
                         "allowed_target_node_ids": candidate_ids,
                         "required_output": {
                             "targetNodeId": "必须是 allowed_target_node_ids 中的一个值",
@@ -187,11 +188,26 @@ class ReactDecisionService:
         return None
 
     def _summarize_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        return {
+        config = node.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
+        summary: Dict[str, Any] = {
             "id": node.get("id"),
             "type": node.get("type"),
-            "config_keys": sorted((node.get("config") or {}).keys()),
+            "description": self._first_text(node, config, "description"),
+            "config_keys": sorted(config.keys()),
         }
+        for key in ("name", "label", "title", "prompt", "message_text", "tool_code", "invoke_type", "function_name"):
+            value = self._first_text(node, config, key)
+            if value:
+                summary[key] = value
+        tool_config = config.get("tool")
+        if isinstance(tool_config, dict):
+            for key in ("description", "tool_code", "invoke_type"):
+                value = tool_config.get(key)
+                if value not in (None, "") and key not in summary:
+                    summary[key] = self._truncate_text(value)
+        return summary
 
     def _summarize_candidate(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         node = candidate.get("node", {})
@@ -203,6 +219,72 @@ class ReactDecisionService:
             "required_fields": self._required_form_fields(node) if node.get("type") == "form" else [],
             "tool_code": (node.get("config") or {}).get("tool_code"),
         }
+
+    def _workflow_node_definitions(
+        self,
+        context,
+        current_node: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        node_context = getattr(context, "workflow_node_context", [])
+        if isinstance(node_context, list) and node_context:
+            return [
+                self._json_safe_value(item)
+                for item in node_context
+                if isinstance(item, dict)
+            ]
+
+        definitions: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for node in [current_node, *[candidate.get("node", {}) for candidate in candidates]]:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id", ""))
+            if not node_id or node_id in seen:
+                continue
+            seen.add(node_id)
+            definitions.append(self._summarize_node(node))
+        return definitions
+
+    def _public_variables(self, variables: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(variables, dict):
+            return {}
+        return {
+            str(key): self._json_safe_value(value)
+            for key, value in variables.items()
+            if not str(key).startswith("_") and not callable(value)
+        }
+
+    def _json_safe_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if callable(value):
+            return None
+        if isinstance(value, dict):
+            return {
+                str(key): self._json_safe_value(item)
+                for key, item in value.items()
+                if not str(key).startswith("_") and not callable(item)
+            }
+        if isinstance(value, list):
+            return [self._json_safe_value(item) for item in value if not callable(item)]
+        if isinstance(value, tuple):
+            return [self._json_safe_value(item) for item in value if not callable(item)]
+        return str(value)
+
+    def _first_text(self, node: Dict[str, Any], config: Dict[str, Any], key: str) -> str:
+        value = node.get(key)
+        if value in (None, ""):
+            value = config.get(key)
+        if value in (None, ""):
+            return ""
+        return self._truncate_text(value)
+
+    def _truncate_text(self, value: Any, max_length: int = 500) -> str:
+        text = str(value)
+        if len(text) <= max_length:
+            return text
+        return f"{text[:max_length]}...(truncated)"
 
     def _required_form_fields(self, node: Dict[str, Any]) -> List[str]:
         fields = node.get("config", {}).get("fields", [])
@@ -243,14 +325,14 @@ class ReactDecisionService:
             return None
         for candidate in candidates:
             node = candidate.get("node", {})
-            if node.get("type") in {"tool", "subflow", "message", "end"}:
+            if node.get("type") in {"api", "tool", "subflow", "message", "end"}:
                 return candidate["target_node_id"]
         return None
 
     def _select_preferred_candidate(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not candidates:
             raise ValueError("No transition candidates available for internal decision")
-        for node_type in ("form", "tool", "subflow", "message", "end"):
+        for node_type in ("form", "api", "tool", "subflow", "message", "end"):
             for candidate in candidates:
                 if candidate.get("node", {}).get("type") == node_type:
                     return candidate
@@ -283,7 +365,7 @@ class ReactDecisionService:
         node_type = candidate.get("node", {}).get("type")
         if node_type == "form":
             return "ask_user"
-        if node_type in {"tool", "subflow"}:
+        if node_type in {"api", "tool", "subflow"}:
             return "call_tool"
         if node_type == "end":
             return "final_answer"

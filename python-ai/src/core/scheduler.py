@@ -35,6 +35,29 @@ class WorkflowScheduler:
     """Workflow scheduler with planning, path resolution and node readiness checks."""
 
     MESSAGE_DELTA_CHUNK_SIZE = 240
+    NODE_EXECUTION_LOG_TYPES = {"start", "end", "api", "function"}
+    NODE_CONTEXT_TEXT_KEYS = (
+        "name",
+        "label",
+        "title",
+        "description",
+        "prompt",
+        "system_prompt",
+        "user_prompt",
+        "message_text",
+    )
+    NODE_CONTEXT_CONFIG_KEYS = (
+        "operation_type",
+        "tool_code",
+        "invoke_type",
+        "function_name",
+        "capability_code",
+        "capability_type",
+        "subgraph_id",
+        "subflow_code",
+    )
+    NODE_CONTEXT_TEXT_MAX_LENGTH = 500
+    NODE_CONTEXT_LIST_MAX_ITEMS = 20
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -49,6 +72,7 @@ class WorkflowScheduler:
     async def run(self, runtime: ExecutionRuntime) -> None:
         context = runtime.context
         workflow = runtime.workflow
+        context.workflow_node_context = self._build_workflow_node_context(workflow)
         state_machine = ExecutionStateMachine()
         state_machine.set_context(context)
         self.logger.info(
@@ -235,14 +259,21 @@ class WorkflowScheduler:
                 })
 
                 started_at = time.perf_counter()
-                with workflow_telemetry.span("execute_node", {
-                    "node.id": node_def["id"],
-                    "node.type": node_def["type"],
-                    "execution.id": context.execution_id,
-                    "workflow.code": context.workflow_code,
-                }):
-                    result = await node.execute(context)
+                self._log_node_execute_start(context, node_def)
+                try:
+                    with workflow_telemetry.span("execute_node", {
+                        "node.id": node_def["id"],
+                        "node.type": node_def["type"],
+                        "execution.id": context.execution_id,
+                        "workflow.code": context.workflow_code,
+                    }):
+                        result = await node.execute(context)
+                except Exception as exc:
+                    failed_duration_ms = int((time.perf_counter() - started_at) * 1000)
+                    self._log_node_execute_failed(context, node_def, failed_duration_ms, None, exc)
+                    raise
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
+                self._log_node_execute_completed(context, node_def, duration_ms, result)
                 self.logger.info(
                     "scheduler.node.result sessionId=%s executionId=%s nodeId=%s nodeType=%s durationMs=%s resultKeys=%s outputKeys=%s",
                     context.session_id,
@@ -610,6 +641,77 @@ class WorkflowScheduler:
             if not str(key).startswith("_") and not callable(value)
         }
 
+    def _should_log_node_execution(self, node_def: Dict[str, Any]) -> bool:
+        node_type = str(node_def.get("type", "")).strip().lower()
+        return node_type in self.NODE_EXECUTION_LOG_TYPES
+
+    def _log_node_execute_start(
+        self,
+        context,
+        node_def: Dict[str, Any],
+        graph_id: Optional[str] = None,
+    ) -> None:
+        if not self._should_log_node_execution(node_def):
+            return
+        self.logger.info(
+            "node.execute.start sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s graphId=%s nodeId=%s nodeType=%s",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            graph_id or "",
+            node_def.get("id"),
+            node_def.get("type"),
+        )
+
+    def _log_node_execute_completed(
+        self,
+        context,
+        node_def: Dict[str, Any],
+        duration_ms: int,
+        result: Dict[str, Any],
+        graph_id: Optional[str] = None,
+    ) -> None:
+        if not self._should_log_node_execution(node_def):
+            return
+        output = result.get("output", {}) if isinstance(result, dict) else {}
+        self.logger.info(
+            "node.execute.completed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s graphId=%s nodeId=%s nodeType=%s status=%s durationMs=%s outputKeys=%s",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            graph_id or "",
+            node_def.get("id"),
+            node_def.get("type"),
+            result.get("status", "unknown") if isinstance(result, dict) else "unknown",
+            duration_ms,
+            sorted(output.keys()) if isinstance(output, dict) else [],
+        )
+
+    def _log_node_execute_failed(
+        self,
+        context,
+        node_def: Dict[str, Any],
+        duration_ms: int,
+        graph_id: Optional[str],
+        error: Exception,
+    ) -> None:
+        if not self._should_log_node_execution(node_def):
+            return
+        self.logger.warning(
+            "node.execute.failed sessionId=%s executionId=%s workflowCode=%s workflowVersion=%s graphId=%s nodeId=%s nodeType=%s durationMs=%s error=%s",
+            context.session_id,
+            context.execution_id,
+            context.workflow_code,
+            context.workflow_version,
+            graph_id or "",
+            node_def.get("id"),
+            node_def.get("type"),
+            duration_ms,
+            error,
+        )
+
     def _install_message_delta_emitter(self, runtime: ExecutionRuntime) -> None:
         context = runtime.context
 
@@ -830,15 +932,22 @@ class WorkflowScheduler:
 
             context.record_node_input_snapshot(node_def["id"], dict(context.execution_variables))
             started_at = time.perf_counter()
-            with workflow_telemetry.span("execute_node", {
-                "node.id": node_def["id"],
-                "node.type": node_def["type"],
-                "execution.id": context.execution_id,
-                "workflow.code": context.workflow_code,
-                "graph.id": current_graph_id,
-            }):
-                result = await node.execute(context)
+            self._log_node_execute_start(context, node_def, current_graph_id)
+            try:
+                with workflow_telemetry.span("execute_node", {
+                    "node.id": node_def["id"],
+                    "node.type": node_def["type"],
+                    "execution.id": context.execution_id,
+                    "workflow.code": context.workflow_code,
+                    "graph.id": current_graph_id,
+                }):
+                    result = await node.execute(context)
+            except Exception as exc:
+                failed_duration_ms = int((time.perf_counter() - started_at) * 1000)
+                self._log_node_execute_failed(context, node_def, failed_duration_ms, current_graph_id, exc)
+                raise
             duration_ms = int((time.perf_counter() - started_at) * 1000)
+            self._log_node_execute_completed(context, node_def, duration_ms, result, current_graph_id)
             self.logger.info(
                 "scheduler.graph_v2.node.result sessionId=%s executionId=%s graphId=%s nodeId=%s nodeType=%s durationMs=%s resultKeys=%s outputKeys=%s",
                 context.session_id,
@@ -1330,6 +1439,118 @@ class WorkflowScheduler:
             node_type = node.get("type")
             return str(node_type) if node_type else None
         return None
+
+    def _build_workflow_node_context(self, workflow: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(workflow, dict):
+            return []
+        node_context: List[Dict[str, Any]] = []
+        if self._is_graph_definition_v2(workflow):
+            graphs = workflow.get("graphs", {})
+            if not isinstance(graphs, dict):
+                return node_context
+            for graph_id, graph in graphs.items():
+                if not isinstance(graph, dict):
+                    continue
+                nodes = graph.get("nodes", {})
+                if not isinstance(nodes, dict):
+                    continue
+                for node_def in nodes.values():
+                    if isinstance(node_def, dict):
+                        node_context.append(self._summarize_workflow_node(node_def, str(graph_id)))
+            return node_context
+
+        nodes = workflow.get("nodes", {})
+        if isinstance(nodes, dict):
+            for node_def in nodes.values():
+                if isinstance(node_def, dict):
+                    node_context.append(self._summarize_workflow_node(node_def))
+        return node_context
+
+    def _summarize_workflow_node(
+        self,
+        node_def: Dict[str, Any],
+        graph_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        config = node_def.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
+        summary: Dict[str, Any] = {
+            "id": str(node_def.get("id", "")),
+            "type": str(node_def.get("type", "")),
+            "description": self._first_node_text(node_def, config, "description"),
+        }
+        if graph_id:
+            summary["graph_id"] = graph_id
+
+        for key in self.NODE_CONTEXT_TEXT_KEYS:
+            text = self._first_node_text(node_def, config, key)
+            if text:
+                summary[key] = text
+
+        for key in self.NODE_CONTEXT_CONFIG_KEYS:
+            value = self._first_node_value(node_def, config, key)
+            if value not in (None, ""):
+                summary[key] = self._truncate_node_context_text(value)
+
+        tool_config = config.get("tool")
+        if isinstance(tool_config, dict):
+            for key in ("name", "title", "description", "tool_code", "invoke_type", "method", "url"):
+                value = tool_config.get(key)
+                if value not in (None, "") and key not in summary:
+                    summary[key] = self._truncate_node_context_text(value)
+
+        for key in ("input_variables", "input_variable_definitions", "fields"):
+            fields = config.get(key)
+            if isinstance(fields, list) and fields:
+                summary[key] = self._summarize_node_fields(fields)
+
+        output_format = config.get("output_format")
+        if isinstance(output_format, dict):
+            summary["output_keys"] = sorted(str(key) for key in output_format.keys())
+
+        return summary
+
+    def _first_node_text(
+        self,
+        node_def: Dict[str, Any],
+        config: Dict[str, Any],
+        key: str,
+    ) -> str:
+        value = self._first_node_value(node_def, config, key)
+        if value in (None, ""):
+            return ""
+        return self._truncate_node_context_text(value)
+
+    def _first_node_value(
+        self,
+        node_def: Dict[str, Any],
+        config: Dict[str, Any],
+        key: str,
+    ) -> Any:
+        value = node_def.get(key)
+        if value in (None, ""):
+            value = config.get(key)
+        return value
+
+    def _truncate_node_context_text(self, value: Any) -> str:
+        text = str(value)
+        if len(text) <= self.NODE_CONTEXT_TEXT_MAX_LENGTH:
+            return text
+        return f"{text[:self.NODE_CONTEXT_TEXT_MAX_LENGTH]}...(truncated)"
+
+    def _summarize_node_fields(self, fields: List[Any]) -> List[Dict[str, Any]]:
+        summarized: List[Dict[str, Any]] = []
+        for field in fields[:self.NODE_CONTEXT_LIST_MAX_ITEMS]:
+            if not isinstance(field, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in ("name", "type", "description", "label", "required"):
+                value = field.get(key)
+                if value not in (None, ""):
+                    item[key] = value if isinstance(value, bool) else self._truncate_node_context_text(value)
+            if item:
+                summarized.append(item)
+        return summarized
 
     def _build_node(self, node_def: Dict[str, Any]):
         node_type = node_def["type"]

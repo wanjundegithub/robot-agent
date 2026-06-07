@@ -6,7 +6,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -30,19 +29,15 @@ public class PythonClient {
 
     public Flux<ServerSentEvent<String>> execute(ExecuteRequest request) {
         long startedAt = System.currentTimeMillis();
-        String requestId = MDC.get("requestId");
-        String correlationId = MDC.get("correlationId");
         log.info(
-                "python.execute.request sessionId={} executionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} modelRecordCount={} requestId={} correlationId={}",
+                "python.execute.request sessionId={} executionId={} workflowId={} workflowCode={} workflowVersion={} providerCount={} modelRecordCount={}",
                 request.getSessionId(),
                 request.getExecutionId(),
                 request.getWorkflowId(),
                 request.getWorkflowCode(),
                 request.getWorkflowVersion(),
                 request.getProviderConfigs() == null ? 0 : request.getProviderConfigs().size(),
-                request.getModelRecords() == null ? 0 : request.getModelRecords().size(),
-                requestId,
-                correlationId
+                request.getModelRecords() == null ? 0 : request.getModelRecords().size()
         );
         return webClient.post()
                 .uri("/api/execute")
@@ -52,11 +47,9 @@ public class PythonClient {
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
                 .doOnComplete(() -> log.info(
-                        "python.execute.stream.completed executionId={} durationMs={} requestId={} correlationId={}",
+                        "python.execute.stream.completed executionId={} durationMs={}",
                         request.getExecutionId(),
-                        System.currentTimeMillis() - startedAt,
-                        requestId,
-                        correlationId
+                        System.currentTimeMillis() - startedAt
                 ))
                 .doOnError(error -> log.error("python.execute.failed executionId={} message={}", request.getExecutionId(), error.getMessage(), error));
     }

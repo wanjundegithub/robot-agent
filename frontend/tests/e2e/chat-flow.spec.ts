@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test'
 const currentSessionIds = ['session-current-1', 'session-current-2', 'session-current-3'] as const
 const failedSendContent = 'This message should fail to send'
 const disconnectAfterReplyContent = 'This message gets a reply before the socket disconnects'
+const isChatSendFrame = (payload: Record<string, unknown>) =>
+  payload.action === 'chat.send' || payload.event_type === 'message.text'
 
 const baseSessionDetails = {
   'session-current-1': {
@@ -179,7 +181,9 @@ test.beforeEach(async ({ page }) => {
 
       send(data: string) {
         const payload = JSON.parse(data) as {
+          frame?: number
           action?: string
+          event_type?: string
           request_id?: string
           session_id?: string
           payload?: {
@@ -190,7 +194,8 @@ test.beforeEach(async ({ page }) => {
         ;(window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }).__mockWsPayloads ??= []
         ;(window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }).__mockWsPayloads?.push(payload)
 
-        if (payload.action !== 'chat.send' || !payload.session_id || !payload.payload?.content) {
+        const isChatSend = payload.action === 'chat.send' || payload.event_type === 'message.text'
+        if (!isChatSend || !payload.session_id || !payload.payload?.content) {
           return
         }
 
@@ -222,10 +227,14 @@ test.beforeEach(async ({ page }) => {
             this.onmessage?.(
               new MessageEvent('message', {
                 data: JSON.stringify({
-                  type: 'error',
+                  frame: payload.frame ?? 9,
                   request_id: payload.request_id,
-                  error_code: 'SEND_FAILED',
-                  message: 'Mock send failure',
+                  session_id: payload.session_id,
+                  event_type: 'error.handler_failed',
+                  payload: {
+                    code: 'handler_failed',
+                    message: 'Mock send failure',
+                  },
                 }),
               })
             )
@@ -538,7 +547,9 @@ test.describe('session history panel', () => {
     await expect(page.getByText('Auto route message', { exact: true }).first()).toBeVisible()
     await page.waitForFunction(() => {
       const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
-      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+      return (win.__mockWsPayloads ?? []).some(
+        (payload) => payload.action === 'chat.send' || payload.event_type === 'message.text'
+      )
     })
 
     const wsPayloads = await page.evaluate(() => {
@@ -548,7 +559,7 @@ test.describe('session history panel', () => {
         urls: win.__mockWsUrls ?? [],
       }
     })
-    const chatSend = wsPayloads.payloads.find((payload) => payload.action === 'chat.send') as
+    const chatSend = wsPayloads.payloads.find(isChatSendFrame) as
       | Record<string, unknown>
       | undefined
 
@@ -572,7 +583,9 @@ test.describe('session history panel', () => {
     await expect(page.getByText('Auto route with recognized intent', { exact: true }).first()).toBeVisible()
     await page.waitForFunction(() => {
       const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
-      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+      return (win.__mockWsPayloads ?? []).some(
+        (payload) => payload.action === 'chat.send' || payload.event_type === 'message.text'
+      )
     })
 
     await expect(page.getByText('候选意图确认')).toHaveCount(0)
@@ -611,7 +624,9 @@ test.describe('session history panel', () => {
     await expect(page.getByText('Fixed workflow message', { exact: true }).first()).toBeVisible()
     await page.waitForFunction(() => {
       const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
-      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+      return (win.__mockWsPayloads ?? []).some(
+        (payload) => payload.action === 'chat.send' || payload.event_type === 'message.text'
+      )
     })
 
     const wsPayloads = await page.evaluate(() => {
@@ -621,7 +636,7 @@ test.describe('session history panel', () => {
         urls: win.__mockWsUrls ?? [],
       }
     })
-    const chatSend = wsPayloads.payloads.find((payload) => payload.action === 'chat.send') as
+    const chatSend = wsPayloads.payloads.find(isChatSendFrame) as
       | Record<string, unknown>
       | undefined
     const chatSendPayload = (chatSend?.payload as Record<string, unknown>) ?? {}
@@ -681,7 +696,9 @@ test.describe('session history panel', () => {
 
     await page.waitForFunction(() => {
       const win = window as Window & { __mockWsPayloads?: Array<Record<string, unknown>> }
-      return (win.__mockWsPayloads ?? []).some((payload) => payload.action === 'chat.send')
+      return (win.__mockWsPayloads ?? []).some(
+        (payload) => payload.action === 'chat.send' || payload.event_type === 'message.text'
+      )
     }, undefined, { timeout: 10_000 })
     await expect(page.getByText('消息发送失败，请稍后再试。')).toHaveCount(0)
   })
@@ -732,8 +749,8 @@ test.describe('session history panel', () => {
     await page.getByTestId('chat-input').fill(failedSendContent)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByText('Mock send failure')).toHaveCount(0)
-    await expect(panel).toContainText('消息发送失败')
+    await expect(page.getByTestId('message-error').getByText('消息发送失败：Mock send failure', { exact: true })).toBeVisible()
+    await expect(page.getByText('消息发送失败，请稍后再试。', { exact: true })).toHaveCount(0)
 
     await page.getByTestId('chat-new-session').click()
 

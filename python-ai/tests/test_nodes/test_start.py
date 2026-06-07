@@ -153,3 +153,73 @@ async def test_start_node_extraction_does_not_overwrite_existing_non_empty_value
     assert result["status"] == "completed"
     assert context.get_variable("city") == "北京"
     assert context.get_variable("date") == "2026-06-01"
+
+
+@pytest.mark.asyncio
+async def test_start_node_keeps_slot_suspended_when_model_returns_invalid_json(monkeypatch):
+    async def fake_completion(**_kwargs):
+        return (
+            '{"variables":{"product_name":"bad"},"  : []}\n'
+            '  ,"variables": {"product_name": "paper"}, "  ,"missing_fields": []}'
+        )
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_invalid_json",
+        session_id="session_start_invalid_json",
+        workflow_code="product",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "paper")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect product name.",
+            "initial_variables": {"product_name": ""},
+            "input_variables": [
+                {"name": "product_name", "type": "String", "description": "Product name", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "suspended"
+    assert result["missing_fields"] == ["product_name"]
+    assert context.get_variable("product_name") == ""
+
+
+@pytest.mark.asyncio
+async def test_start_node_recovers_embedded_valid_json_object(monkeypatch):
+    async def fake_completion(**_kwargs):
+        return 'prefix {"variables": {"product_name": "paper"}, "missing_fields": []} suffix'
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_embedded_json",
+        session_id="session_start_embedded_json",
+        workflow_code="product",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "paper")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect product name.",
+            "initial_variables": {"product_name": ""},
+            "input_variables": [
+                {"name": "product_name", "type": "String", "description": "Product name", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "completed"
+    assert context.get_variable("product_name") == "paper"

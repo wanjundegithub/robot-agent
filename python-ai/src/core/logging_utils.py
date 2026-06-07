@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import contextvars
 import logging
 import os
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -43,25 +41,6 @@ SENSITIVE_TEXT_MARKERS = (
     "x-api-key",
     "cookie",
 )
-_request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
-
-
-class RequestIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = _request_id_ctx.get("-")
-        return True
-
-
-def set_request_id(request_id: str) -> contextvars.Token[str]:
-    return _request_id_ctx.set(request_id)
-
-
-def reset_request_id(token: contextvars.Token[str]) -> None:
-    _request_id_ctx.reset(token)
-
-
-def get_request_id() -> str:
-    return _request_id_ctx.get("-")
 
 
 def configure_logging() -> None:
@@ -70,14 +49,12 @@ def configure_logging() -> None:
         return
 
     root.setLevel(logging.INFO)
-    request_id_filter = RequestIdFilter()
     formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s [%(name)s] [requestId=%(request_id)s] %(message)s",
+        fmt="%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s %(thread)d:%(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     for handler in root.handlers:
-        handler.addFilter(request_id_filter)
         handler.setFormatter(formatter)
 
     if not any(getattr(handler, "_python_ai_console_handler", False) for handler in root.handlers):
@@ -85,7 +62,6 @@ def configure_logging() -> None:
         console_handler._python_ai_console_handler = True
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
-        console_handler.addFilter(request_id_filter)
         root.addHandler(console_handler)
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -96,7 +72,6 @@ def configure_logging() -> None:
     file_handler._python_ai_file_handler = True
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
-    file_handler.addFilter(request_id_filter)
     root.addHandler(file_handler)
 
 
@@ -166,13 +141,6 @@ def summarize_payload(payload: Any) -> str:
         return f"list(len={len(payload)})"
     text = str(payload)
     return _sanitize_text(text)
-
-
-def new_request_id(header_value: str | None = None) -> str:
-    raw = (header_value or "").strip()
-    if raw:
-        return raw[:64]
-    return uuid.uuid4().hex
 
 
 def duration_ms(start_time: float) -> float:

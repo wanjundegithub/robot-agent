@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml" />
+    <conversionRule conversionWord="threadId" converterClass="robot.agent.config.ThreadIdConverter" />
 
     <springProperty scope="context" name="LOG_FILE" source="logging.file.name" defaultValue="logs/java-backend.log" />
-    <springProperty scope="context" name="LOG_PATTERN_LEVEL" source="logging.pattern.level" defaultValue="%5p" />
-    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} ${LOG_PATTERN_LEVEL} [corr:%X{correlationId:-}] [req:%X{requestId:-}] [%thread] %logger{40} - %msg%n" />
+    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{40} %threadId:%msg%n" />
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>

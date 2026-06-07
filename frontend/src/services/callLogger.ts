@@ -62,31 +62,6 @@ function sanitizeData(value: unknown): unknown {
   return String(value)
 }
 
-function safeJsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return truncateText(text)
-  }
-}
-
-function sanitizeUrl(url: string): string {
-  try {
-    const parsed = new URL(url, typeof window === 'undefined' ? 'http://localhost' : window.location.origin)
-    parsed.searchParams.forEach((_value, key) => {
-      if (SENSITIVE_KEY_PATTERN.test(key)) {
-        parsed.searchParams.set(key, '***')
-      }
-    })
-    if (/^https?:\/\/localhost(?:[:/]|$)/.test(url) || url.startsWith('/')) {
-      return `${parsed.pathname}${parsed.search}${parsed.hash}`
-    }
-    return parsed.toString()
-  } catch {
-    return truncateText(url)
-  }
-}
-
 function readLogsFromStorage(): CallLogEntry[] {
   if (typeof window === 'undefined') return []
   try {
@@ -125,62 +100,8 @@ export function appendCallLog(entry: Omit<CallLogEntry, 'id' | 'timestamp'>): vo
   console.info('[call-log]', fullEntry)
 }
 
-async function extractResponsePreview(response: Response): Promise<unknown> {
-  try {
-    const cloned = response.clone()
-    const text = await cloned.text()
-    if (!text.trim()) return ''
-    return sanitizeData(safeJsonParse(text))
-  } catch {
-    return undefined
-  }
-}
-
-export async function loggedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const startedAt = performance.now()
-  const method = init?.method || 'GET'
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-  const logUrl = sanitizeUrl(url)
-  const requestPayload =
-    typeof init?.body === 'string' ? safeJsonParse(init.body) : init?.body ? '[non-text body]' : undefined
-
-  appendCallLog({
-    kind: 'http',
-    stage: 'request',
-    name: `${method} ${logUrl}`,
-    request: {
-      method,
-      url: logUrl,
-      headers: init?.headers ?? undefined,
-      body: requestPayload,
-    },
-  })
-
-  try {
-    const response = await fetch(input, init)
-    const durationMs = Math.round(performance.now() - startedAt)
-    const responsePreview = await extractResponsePreview(response)
-    appendCallLog({
-      kind: 'http',
-      stage: 'response',
-      name: `${method} ${logUrl}`,
-      durationMs,
-      status: response.status,
-      response: responsePreview,
-      meta: { ok: response.ok },
-    })
-    return response
-  } catch (error) {
-    const durationMs = Math.round(performance.now() - startedAt)
-    appendCallLog({
-      kind: 'http',
-      stage: 'error',
-      name: `${method} ${logUrl}`,
-      durationMs,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    throw error
-  }
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return await fetch(input, init)
 }
 
 export function logGatewayEvent(
