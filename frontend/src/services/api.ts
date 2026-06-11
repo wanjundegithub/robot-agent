@@ -6,6 +6,8 @@ import type {
   ApiValidationResult,
   CostAlert,
   ExecutionDetail,
+  FunctionFragmentTestRunResult,
+  FunctionFragmentValidationResult,
   Message,
   RagEvaluationResponse,
   ReplayResponse,
@@ -494,6 +496,44 @@ export async function validateWorkflowDraft(
   })
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return await response.json()
+}
+
+export async function validateFunctionFragment(payload: {
+  language: string
+  function_name?: string
+  code: string
+  timeout_ms?: number
+}): Promise<FunctionFragmentValidationResult> {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/function-fragments/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function testRunFunctionFragment(payload: {
+  language: string
+  function_name?: string
+  code: string
+  timeout_ms?: number
+  variables: {
+    global: Record<string, unknown>
+    local: Record<string, unknown>
+  }
+}): Promise<FunctionFragmentTestRunResult> {
+  const response = await apiFetch(`${API_BASE_URL}/workflows/function-fragments/test-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
   }
   return await response.json()
 }

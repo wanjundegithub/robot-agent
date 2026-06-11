@@ -372,8 +372,8 @@ async def test_v2_sub_agent_enters_subgraph_and_returns_to_parent():
                         "id": "function_1",
                         "type": "function",
                         "config": {
-                            "operation_type": "assign",
-                            "assignments": {"done": True},
+                            "language": "python",
+                            "code": "ctx['local']['done'] = True",
                         },
                     },
                     "end_sub": {
@@ -451,8 +451,8 @@ async def test_v2_start_api_function_end_nodes_emit_execution_logs_without_react
                         "type": "function",
                         "config": {
                             "description": "Mark the workflow as handled.",
-                            "operation_type": "assign",
-                            "assignments": {"handled": True},
+                            "language": "python",
+                            "code": "ctx['local']['handled'] = True",
                         },
                     },
                     "end": {
@@ -659,8 +659,8 @@ async def test_v2_react_prompt_includes_all_workflow_node_definitions(monkeypatc
                         "type": "function",
                         "config": {
                             "description": "Non-candidate function definition visible to the model.",
-                            "operation_type": "assign",
-                            "assignments": {"audited": True},
+                            "language": "python",
+                            "code": "ctx['local']['audited'] = True",
                         },
                     },
                 },
@@ -761,8 +761,8 @@ async def test_v2_main_graph_can_finish_from_sub_agent_without_main_end_node():
                         "id": "function_1",
                         "type": "function",
                         "config": {
-                            "operation_type": "assign",
-                            "assignments": {"done": True},
+                            "language": "python",
+                            "code": "ctx['local']['done'] = True",
                         },
                     },
                     "end_sub": {
@@ -1003,8 +1003,8 @@ async def test_v2_sub_agent_multi_branch_uses_internal_react_decision_when_targe
                         "id": "function_1",
                         "type": "function",
                         "config": {
-                            "operation_type": "assign",
-                            "assignments": {"done": True},
+                            "language": "python",
+                            "code": "ctx['local']['done'] = True",
                         },
                     },
                     "end_sub": {

@@ -369,6 +369,26 @@ export interface WorkflowDraftValidationResponse {
   issues: WorkflowValidationIssue[]
 }
 
+export interface FunctionFragmentValidationResult {
+  valid: boolean
+  error_message?: string | null
+  line?: number | null
+  column?: number | null
+}
+
+export interface FunctionFragmentTestRunResult {
+  success: boolean
+  variables: {
+    global: Record<string, unknown>
+    local: Record<string, unknown>
+  }
+  stdout: string
+  error_message?: string | null
+  line?: number | null
+  column?: number | null
+  duration_ms: number
+}
+
 export interface ModelProviderConfig {
   provider_code: string
   provider_name?: string | null

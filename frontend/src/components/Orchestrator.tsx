@@ -19,11 +19,14 @@ import {
   getApisByGroup,
   publishWorkflow,
   saveWorkflowDraft,
+  testRunFunctionFragment,
+  validateFunctionFragment,
   validateWorkflowDraft,
 } from '../services/api'
 import type {
   ApiGroupSummary,
   ApiItemSummary,
+  FunctionFragmentTestRunResult,
   WorkflowDesignerDefinitionV2,
   WorkflowEditorSelection,
   WorkflowSnapshotV1,
@@ -144,6 +147,21 @@ interface OrchestratorProps {
   onWorkflowVersionMutation?: (mutation: WorkflowVersionMutation) => void
 }
 
+type FunctionFragmentValidationStatus = 'idle' | 'checking' | 'valid' | 'invalid' | 'error'
+type FunctionTestVariableScope = 'global' | 'local'
+
+interface FunctionFragmentValidationState {
+  status: FunctionFragmentValidationStatus
+  message: string
+  line?: number | null
+  column?: number | null
+}
+
+interface FunctionTestVariableReference {
+  scope: FunctionTestVariableScope
+  name: string
+}
+
 const DRAFT_VERSION = 'draft'
 const WORKFLOW_SCHEMA_VERSION = 'workflow-designer/v2'
 const MAIN_GRAPH_ID = 'main'
@@ -163,6 +181,18 @@ const workflowEditorMinColumnRatios: Record<WorkflowEditorColumnKey, number> = {
 }
 const workflowResizeHandleWidth = 16
 const variablePageSize = 6
+const defaultFunctionTestVariablesText = JSON.stringify(
+  {
+    global: {
+      user_name: '张三',
+    },
+    local: {
+      order_id: 'A001',
+    },
+  },
+  null,
+  2
+)
 
 const variableTypeOptions: Array<{ value: VariableType; label: string }> = [
   { value: 'String', label: 'String' },
@@ -279,8 +309,10 @@ const nodeTemplates: Array<{ nodeType: DesignerNodeType; label: string; config: 
     nodeType: 'function',
     label: '函数节点',
     config: {
-      operation_type: 'assign',
-      assignments: {},
+      language: 'python',
+      function_name: '',
+      code: '',
+      timeout_ms: 3000,
     },
   },
   {
@@ -364,6 +396,15 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const [apiGroups, setApiGroups] = useState<ApiGroupSummary[]>([])
   const [apiItems, setApiItems] = useState<ApiItemSummary[]>([])
   const [selectedApiItem, setSelectedApiItem] = useState<ApiItemSummary | null>(null)
+  const [functionValidation, setFunctionValidation] = useState<FunctionFragmentValidationState>({
+    status: 'idle',
+    message: '',
+  })
+  const [functionTestVariablesText, setFunctionTestVariablesText] = useState(defaultFunctionTestVariablesText)
+  const [functionTestResult, setFunctionTestResult] = useState<FunctionFragmentTestRunResult | null>(null)
+  const [functionTestError, setFunctionTestError] = useState('')
+  const [isFunctionTestRunning, setIsFunctionTestRunning] = useState(false)
+  const [functionTestDialogOpen, setFunctionTestDialogOpen] = useState(false)
 
   const currentGraph = graphs[currentGraphId] ?? createInitialGraph(currentGraphId)
   const currentGraphIsMain = currentGraphId === MAIN_GRAPH_ID
@@ -371,6 +412,17 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   const edges = currentGraph.edges
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
   const selectedNodeData = (selectedNode?.data || null) as CanvasNodeData | null
+  const selectedFunctionConfig = selectedNodeData?.nodeType === 'function' ? selectedNodeData.config : null
+  const selectedFunctionCode = selectedFunctionConfig ? String(selectedFunctionConfig.code || '') : ''
+  const selectedFunctionName = selectedFunctionConfig ? String(selectedFunctionConfig.function_name || '') : ''
+  const selectedFunctionTimeoutMs = selectedFunctionConfig
+    ? normalizeFunctionTimeoutMs(selectedFunctionConfig.timeout_ms)
+    : 3000
+  const functionTestVariableReferences = useMemo(
+    () => extractFunctionTestVariableReferences(selectedFunctionCode),
+    [selectedFunctionCode]
+  )
+  const functionTestRequiresVariables = functionTestVariableReferences.length > 0
   const allVariables = useMemo(() => [...globalVariables, ...tempVariables], [globalVariables, tempVariables])
   const variableNameMap = useMemo(() => new Map(allVariables.map((item) => [item.id, item])), [allVariables])
 
@@ -483,6 +535,53 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
       edges: applyEdgeChanges(changes, graph.edges),
     }))
   }
+
+  useEffect(() => {
+    if (!selectedFunctionConfig) {
+      setFunctionValidation({ status: 'idle', message: '' })
+      setFunctionTestResult(null)
+      setFunctionTestError('')
+      setFunctionTestDialogOpen(false)
+      return
+    }
+    if (!selectedFunctionCode.trim()) {
+      setFunctionValidation({ status: 'idle', message: '' })
+      return
+    }
+
+    let cancelled = false
+    setFunctionValidation({ status: 'checking', message: '校验中...' })
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await validateFunctionFragment({
+            language: 'python',
+            function_name: selectedFunctionName,
+            code: selectedFunctionCode,
+            timeout_ms: selectedFunctionTimeoutMs,
+          })
+          if (cancelled) return
+          setFunctionValidation({
+            status: result.valid ? 'valid' : 'invalid',
+            message: result.valid ? '校验通过' : result.error_message || '校验失败',
+            line: result.line,
+            column: result.column,
+          })
+        } catch (error) {
+          if (cancelled) return
+          setFunctionValidation({
+            status: 'error',
+            message: error instanceof Error ? error.message : '校验失败',
+          })
+        }
+      })()
+    }, 500)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [selectedFunctionCode, selectedFunctionConfig, selectedFunctionName, selectedFunctionTimeoutMs])
 
   useEffect(() => {
     if (graphs[currentGraphId]) return
@@ -940,6 +1039,52 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const nextConfig = structuredClone(selectedNodeData.config || {})
     assignPath(nextConfig, field, value)
     replaceSelectedConfig(nextConfig)
+  }
+
+  const openFunctionTestDialog = () => {
+    if (!selectedFunctionConfig || !selectedFunctionCode.trim()) return
+    setFunctionTestError('')
+    setFunctionTestResult(null)
+    if (functionTestRequiresVariables) {
+      setFunctionTestVariablesText((current) =>
+        buildFunctionTestVariablesText(functionTestVariableReferences, current)
+      )
+    }
+    setFunctionTestDialogOpen(true)
+  }
+
+  const handleFunctionTestRun = async () => {
+    if (!selectedFunctionConfig) return
+    setFunctionTestError('')
+    setFunctionTestResult(null)
+
+    let normalizedVariables = normalizeFunctionTestVariables(null)
+    if (functionTestRequiresVariables) {
+      try {
+        normalizedVariables = normalizeFunctionTestVariables(JSON.parse(functionTestVariablesText))
+      } catch {
+        setFunctionTestError('测试变量 JSON 格式错误')
+        return
+      }
+    }
+    setIsFunctionTestRunning(true)
+    try {
+      const result = await testRunFunctionFragment({
+        language: 'python',
+        function_name: selectedFunctionName,
+        code: selectedFunctionCode,
+        timeout_ms: selectedFunctionTimeoutMs,
+        variables: normalizedVariables,
+      })
+      setFunctionTestResult(result)
+      if (!result.success) {
+        setFunctionTestError(result.error_message || '测试运行失败')
+      }
+    } catch (error) {
+      setFunctionTestError(error instanceof Error ? error.message : '测试运行失败')
+    } finally {
+      setIsFunctionTestRunning(false)
+    }
   }
 
   const selectApiGroup = (groupId: string) => {
@@ -1558,23 +1703,70 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
         )}
 
         {nodeType === 'function' && (
-          <>
-            <select
-              value={String(config.operation_type || 'assign')}
-              onChange={(event) => updateSelectedConfigField('operation_type', event.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          <div className="space-y-3">
+            <label className="block space-y-2">
+              <span className="text-xs font-medium text-slate-500">函数名称</span>
+              <input
+                value={String(config.function_name || '')}
+                onChange={(event) => updateSelectedConfigField('function_name', event.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                data-testid="workflow-function-name-input"
+                placeholder="处理订单变量"
+              />
+            </label>
+            <label className="block space-y-2">
+              <span className="text-xs font-medium text-slate-500">函数(Python)</span>
+              <textarea
+                value={String(config.code || '')}
+                onChange={(event) => updateSelectedConfigField('code', event.target.value)}
+                className="min-h-[180px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs leading-5"
+                data-testid="workflow-function-code-input"
+                placeholder={`print('开始处理')\nctx['local']['result'] = 'ok'`}
+                spellCheck={false}
+              />
+            </label>
+            <label className="block space-y-2">
+              <span className="text-xs font-medium text-slate-500">超时时间 ms</span>
+              <input
+                type="number"
+                min={1}
+                max={30000}
+                value={selectedFunctionTimeoutMs}
+                onChange={(event) => updateSelectedConfigField('timeout_ms', normalizeFunctionTimeoutMs(event.target.value))}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                data-testid="workflow-function-timeout-input"
+              />
+            </label>
+            {functionValidation.message && (
+              <div
+                className={`rounded-xl border px-3 py-2 text-xs ${
+                  functionValidation.status === 'valid'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : functionValidation.status === 'invalid' || functionValidation.status === 'error'
+                      ? 'border-rose-200 bg-rose-50 text-rose-700'
+                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                }`}
+                data-testid="workflow-function-validation-status"
+              >
+                <span>{functionValidation.message}</span>
+                {functionValidation.line != null && (
+                  <span className="ml-2">
+                    行 {functionValidation.line}
+                    {functionValidation.column != null ? ` 列 ${functionValidation.column}` : ''}
+                  </span>
+                )}
+              </div>
+            )}
+            <button
+              className="prompt-secondary w-full"
+              type="button"
+              onClick={openFunctionTestDialog}
+              disabled={isFunctionTestRunning || !String(config.code || '').trim()}
+              data-testid="workflow-function-test-run"
             >
-              <option value="assign">变量赋值</option>
-            </select>
-            <textarea
-              value={formatObject(config.assignments)}
-              onChange={(event) =>
-                updateJsonConfigField('assignments', event.target.value, config, replaceSelectedConfig)
-              }
-              className="min-h-[120px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
-              placeholder="请填写 assignments 对象"
-            />
-          </>
+              测试运行
+            </button>
+          </div>
         )}
 
         {nodeType === 'api' && (
@@ -1893,6 +2085,98 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     </aside>
   )
 
+  const renderFunctionTestDialog = () => {
+    if (!functionTestDialogOpen || !selectedFunctionConfig) return null
+    const variableSummary = formatFunctionTestVariableReferences(functionTestVariableReferences)
+
+    return (
+      <div className="form-overlay" data-testid="workflow-function-test-dialog" role="dialog" aria-modal="true">
+        <div className="api-center-modal">
+          <div className="mb-5 flex items-start justify-between gap-4">
+            <div>
+              <div className="panel-title">函数测试</div>
+              <div className="mt-2 text-sm text-slate-500">
+                {selectedFunctionName.trim() || '未命名函数'}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="text-sm text-slate-500 hover:text-slate-700"
+              onClick={() => setFunctionTestDialogOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+          <div className="api-center-modal-body space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              {functionTestRequiresVariables
+                ? `检测到变量：${variableSummary}`
+                : '当前函数未检测到需要输入的测试变量，可直接运行测试。'}
+            </div>
+            {functionTestRequiresVariables && (
+              <label className="block space-y-2">
+                <span className="text-xs font-medium text-slate-500">测试变量</span>
+                <textarea
+                  value={functionTestVariablesText}
+                  onChange={(event) => setFunctionTestVariablesText(event.target.value)}
+                  className="min-h-[160px] w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs leading-5"
+                  data-testid="workflow-function-test-variables-input"
+                  spellCheck={false}
+                />
+              </label>
+            )}
+            <div
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+              data-testid="workflow-function-test-result"
+            >
+              {functionTestError && (
+                <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">
+                  {functionTestError}
+                </div>
+              )}
+              {functionTestResult ? (
+                <div className="space-y-2">
+                  <div className={functionTestResult.success ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700'}>
+                    {functionTestResult.success ? '成功' : '失败'} · {functionTestResult.duration_ms} ms
+                  </div>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-[11px] text-slate-700">
+                    {JSON.stringify(functionTestResult.variables, null, 2)}
+                  </pre>
+                  {functionTestResult.stdout && (
+                    <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-[11px] text-slate-700">
+                      {functionTestResult.stdout}
+                    </pre>
+                  )}
+                </div>
+              ) : (
+                <div>尚未运行测试。</div>
+              )}
+            </div>
+          </div>
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <button
+              className="prompt-secondary"
+              type="button"
+              onClick={() => setFunctionTestDialogOpen(false)}
+              disabled={isFunctionTestRunning}
+            >
+              取消
+            </button>
+            <button
+              className="prompt-primary"
+              type="button"
+              onClick={() => void handleFunctionTestRun()}
+              disabled={isFunctionTestRunning}
+              data-testid="workflow-function-test-submit"
+            >
+              {isFunctionTestRunning ? '测试中...' : '运行测试'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   useImperativeHandle(
     ref,
     () => ({
@@ -1905,9 +2189,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
   )
 
   return (
-    <div className="panel-card flex h-[calc(100vh-168px)] min-h-[720px] flex-col overflow-hidden">
-      <div className="flex min-h-0 flex-1 flex-col gap-4">
-        <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(244,247,251,0.96))] px-5 py-4">
+    <>
+      <div className="panel-card flex h-[calc(100vh-168px)] min-h-[720px] flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(244,247,251,0.96))] px-5 py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="panel-title">工作流设计器</div>
@@ -2090,8 +2375,10 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
           {renderVariableManagementPanel()}
           </div>
         </div>
+        </div>
       </div>
-    </div>
+      {renderFunctionTestDialog()}
+    </>
   )
 })
 
@@ -2197,8 +2484,10 @@ function normalizeNodeConfig(
       }
     case 'function':
       return {
-        operation_type: String(config.operation_type || 'assign'),
-        assignments: ensureObject(config.assignments),
+        language: 'python',
+        function_name: String(config.function_name || ''),
+        code: String(config.code || ''),
+        timeout_ms: normalizeFunctionTimeoutMs(config.timeout_ms),
       }
     case 'api':
       return {
@@ -2262,8 +2551,79 @@ function ensureObject(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
-function formatObject(value: unknown) {
-  return JSON.stringify(ensureObject(value), null, 2)
+function normalizeFunctionTimeoutMs(value: unknown) {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) {
+    return 3000
+  }
+  return Math.max(1, Math.min(30000, Math.trunc(parsed)))
+}
+
+function normalizeFunctionTestVariables(value: unknown) {
+  const source = asRecord(value)
+  return {
+    global: ensureObject(source.global),
+    local: ensureObject(source.local),
+  }
+}
+
+function extractFunctionTestVariableReferences(code: string): FunctionTestVariableReference[] {
+  const references = new Map<string, FunctionTestVariableReference>()
+  const addReference = (scope: FunctionTestVariableScope, rawName: string) => {
+    const name = rawName.trim()
+    if (!name) return
+    references.set(`${scope}.${name}`, { scope, name })
+  }
+
+  const bracketPattern = /ctx\s*\[\s*(['"])(global|local)\1\s*]\s*\[\s*(['"])([^'"\]]+)\3\s*]/g
+  let bracketMatch: RegExpExecArray | null
+  while ((bracketMatch = bracketPattern.exec(code)) !== null) {
+    const scope = bracketMatch[2] as FunctionTestVariableScope
+    const name = bracketMatch[4]
+    if (!isFunctionVariableAssignmentTarget(code, bracketPattern.lastIndex)) {
+      addReference(scope, name)
+    }
+  }
+
+  const getPattern = /ctx\s*\[\s*(['"])(global|local)\1\s*]\s*\.get\s*\(\s*(['"])([^'"]+)\3/g
+  let getMatch: RegExpExecArray | null
+  while ((getMatch = getPattern.exec(code)) !== null) {
+    addReference(getMatch[2] as FunctionTestVariableScope, getMatch[4])
+  }
+
+  return Array.from(references.values())
+}
+
+function isFunctionVariableAssignmentTarget(code: string, referenceEndIndex: number) {
+  const following = code.slice(referenceEndIndex).trimStart()
+  return (
+    following.startsWith('=') && !following.startsWith('==')
+  ) || ['+=', '-=', '*=', '/=', '//=', '%=', '**='].some((operator) => following.startsWith(operator))
+}
+
+function buildFunctionTestVariablesText(references: FunctionTestVariableReference[], currentText: string) {
+  let current = normalizeFunctionTestVariables(null)
+  try {
+    current = normalizeFunctionTestVariables(JSON.parse(currentText))
+  } catch {
+    current = normalizeFunctionTestVariables(null)
+  }
+
+  const next: Record<FunctionTestVariableScope, Record<string, unknown>> = {
+    global: { ...current.global },
+    local: { ...current.local },
+  }
+  references.forEach((reference) => {
+    if (!(reference.name in next[reference.scope])) {
+      next[reference.scope][reference.name] = ''
+    }
+  })
+
+  return JSON.stringify({ global: next.global, local: next.local }, null, 2)
+}
+
+function formatFunctionTestVariableReferences(references: FunctionTestVariableReference[]) {
+  return references.map((reference) => `${reference.scope}.${reference.name}`).join('、')
 }
 
 function formatVariableReference(variable: VariableDefinition) {
@@ -2332,21 +2692,6 @@ function extractUrlTemplateParameters(rawUrl: string) {
     names.add(match[1])
   }
   return Array.from(names)
-}
-
-function updateJsonConfigField(
-  field: string,
-  rawValue: string,
-  currentConfig: Record<string, unknown>,
-  replaceConfig: (config: Record<string, unknown>) => void
-) {
-  try {
-    const parsed = rawValue.trim() ? JSON.parse(rawValue) : {}
-    const nextConfig = structuredClone(currentConfig)
-    nextConfig[field] = parsed
-    replaceConfig(nextConfig)
-  } catch {
-  }
 }
 
 function assignPath(target: Record<string, unknown>, field: string, value: unknown) {
@@ -2797,8 +3142,10 @@ function denormalizeNodeConfig(
       }
     case 'function':
       return {
-        operation_type: String(config.operation_type || 'assign'),
-        assignments: ensureObject(config.assignments),
+        language: 'python',
+        function_name: String(config.function_name || ''),
+        code: String(config.code || ''),
+        timeout_ms: normalizeFunctionTimeoutMs(config.timeout_ms),
       }
     case 'api':
       return {

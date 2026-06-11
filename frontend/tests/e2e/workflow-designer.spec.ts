@@ -838,6 +838,203 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-add-node-coordinator')).toHaveCount(0)
   })
 
+  test('edits function fragment node and publishes python snippet config', async ({ page }) => {
+    let nextSessionIndex = 1
+    let validateRequest: Record<string, unknown> | null = null
+    let testRunRequest: Record<string, unknown> | null = null
+    let draftPayload: Record<string, unknown> | null = null
+
+    await page.route('**/api/**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const { pathname } = url
+
+      if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/workflows' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/versions') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/api-center/groups' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/workflows/function-fragments/validate' && request.method() === 'POST') {
+        validateRequest = request.postDataJSON() as Record<string, unknown>
+        await route.fulfill({
+          json: {
+            valid: true,
+            error_message: null,
+            line: null,
+            column: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/workflows/function-fragments/test-run' && request.method() === 'POST') {
+        testRunRequest = request.postDataJSON() as Record<string, unknown>
+        await route.fulfill({
+          json: {
+            success: true,
+            variables: {
+              global: { user_name: '张三' },
+              local: { order_id: 'A001', result: 'ok' },
+            },
+            stdout: '开始处理\n',
+            error_message: null,
+            line: null,
+            column: null,
+            duration_ms: 12,
+          },
+        })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/validate-draft') && request.method() === 'POST') {
+        await route.fulfill({ json: { valid: true, issues: [] } })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/drafts') && request.method() === 'POST') {
+        draftPayload = request.postDataJSON() as Record<string, unknown>
+        await route.fulfill({
+          json: {
+            id: 901,
+            workflowId: 902,
+            workflowCode: String(draftPayload.workflow_code || `workflow_${Date.now()}`),
+            workflowName: String(draftPayload.workflow_name || 'Function Fragment Workflow'),
+            version: String(draftPayload.version || 'draft'),
+            status: 'DRAFT',
+          },
+        })
+        return
+      }
+      if (pathname.startsWith('/api/workflows/') && pathname.endsWith('/publish') && request.method() === 'POST') {
+        await route.fulfill({
+          json: {
+            id: 903,
+            workflowCode: pathname.split('/')[3] || 'function_fragment_workflow',
+            name: 'Function Fragment Workflow',
+            status: 'PUBLISHED',
+            currentVersion: 'v202606090001',
+            createdBy: 'demo-user',
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'POST') {
+        const createdId = `session-e2e-${nextSessionIndex}`
+        nextSessionIndex += 1
+        await route.fulfill({
+          json: {
+            id: createdId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+        await route.fulfill({
+          json: {
+            id: pathname.split('/').pop() || 'session-e2e-1',
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/executions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+
+      await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+    })
+
+    await openNewWorkflowEditor(page)
+
+    await page.getByTestId('workflow-name-input').fill('Function Fragment Workflow')
+    await page.getByTestId('workflow-description-input').fill('Function fragment workflow description')
+    await page.getByTestId('workflow-add-node-sub_agent').click()
+    await page.getByPlaceholder('流程名称').fill('函数子流程')
+    await page.getByTestId('workflow-node-description-input').fill('函数子流程描述')
+    await page.getByTestId('workflow-open-subgraph').click()
+    await page.getByTestId('workflow-current-graph-name-input').fill('函数子流程')
+    await page.getByTestId('workflow-current-graph-description-input').fill('函数子流程描述')
+    await page.getByTestId('workflow-add-node-function').click()
+    await page.locator('.react-flow__node').filter({ hasText: '函数节点' }).click()
+
+    await expect(page.getByTestId('workflow-function-name-input')).toBeVisible()
+    await expect(page.getByTestId('workflow-function-code-input')).toBeVisible()
+    await expect(page.getByText('函数(Python)')).toBeVisible()
+    await expect(page.getByTestId('workflow-function-test-variables-input')).toHaveCount(0)
+    await expect(page.getByText('等待校验：请输入 Python 函数片段')).toHaveCount(0)
+    await page.getByTestId('workflow-function-name-input').fill('处理订单变量')
+    await page.getByTestId('workflow-function-code-input').fill(
+      "print('开始处理')\nctx['local']['result'] = ctx['global']['user_name'] + '-' + ctx['local'].get('order_id', '')"
+    )
+    await expect.poll(() => validateRequest).not.toBeNull()
+    await expect(page.getByTestId('workflow-function-validation-status')).toContainText('校验通过')
+    expect(validateRequest?.code).toBe(
+      "print('开始处理')\nctx['local']['result'] = ctx['global']['user_name'] + '-' + ctx['local'].get('order_id', '')"
+    )
+
+    await page.getByTestId('workflow-function-test-run').click()
+    const testDialog = page.getByTestId('workflow-function-test-dialog')
+    await expect(testDialog).toBeVisible()
+    await expect(testDialog).toContainText('global.user_name')
+    await expect(testDialog).toContainText('local.order_id')
+    await testDialog.getByTestId('workflow-function-test-variables-input').fill(
+      JSON.stringify({ global: { user_name: '张三' }, local: { order_id: 'A001' } }, null, 2)
+    )
+    await testDialog.getByTestId('workflow-function-test-submit').click()
+    await expect(testDialog.getByTestId('workflow-function-test-result')).toContainText('成功')
+    await expect(testDialog.getByTestId('workflow-function-test-result')).toContainText('开始处理')
+    expect(testRunRequest?.variables).toEqual({
+      global: { user_name: '张三' },
+      local: { order_id: 'A001' },
+    })
+    await testDialog.getByRole('button', { name: '关闭' }).click()
+    await expect(testDialog).toHaveCount(0)
+
+    await page.getByTestId('workflow-add-node-start').click()
+    await page.getByTestId('workflow-add-node-end').click()
+    await page.getByTestId('workflow-publish').click()
+    await expect.poll(() => draftPayload).not.toBeNull()
+    const definition = JSON.parse(String((draftPayload || {}).definition || '{}')) as Record<string, unknown>
+    const graphs = definition.graphs as Record<string, Record<string, unknown>>
+    const subgraphId = Object.keys(graphs).find((graphId) => graphId !== 'main') as string
+    const subgraphNodes = graphs[subgraphId].nodes as Record<string, Record<string, unknown>>
+    const functionNode = Object.values(subgraphNodes).find((node) => node.type === 'function')
+    const functionConfig = functionNode?.config as Record<string, unknown>
+
+    expect(functionConfig.language).toBe('python')
+    expect(functionConfig.function_name).toBe('处理订单变量')
+    expect(functionConfig.code).toBe(
+      "print('开始处理')\nctx['local']['result'] = ctx['global']['user_name'] + '-' + ctx['local'].get('order_id', '')"
+    )
+    expect(functionConfig.timeout_ms).toBe(3000)
+    expect(functionConfig.operation_type).toBeUndefined()
+    expect(functionConfig.assignments).toBeUndefined()
+  })
+
   test('deletes selected nodes and loads API capability groups/items from real APIs', async ({ page }) => {
     let nextSessionIndex = 1
     let itemsRequestCount = 0

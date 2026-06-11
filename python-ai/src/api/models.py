@@ -98,3 +98,14 @@ class WelcomeDecisionResponse(BaseModel):
     should_greet: bool
     message: str = ""
     reason: str = ""
+
+
+class FunctionFragmentValidateRequest(BaseModel):
+    language: str = Field(default="python")
+    function_name: str = Field(default="")
+    code: str = Field(default="")
+    timeout_ms: int = Field(default=3000)
+
+
+class FunctionFragmentTestRunRequest(FunctionFragmentValidateRequest):
+    variables: Dict[str, Any] = Field(default_factory=lambda: {"global": {}, "local": {}})

@@ -112,6 +112,30 @@ public class PythonClient {
                 .doOnError(error -> log.error("python.subflow.recommend.failed workflowCode={} message={}", workflowCode, error.getMessage(), error));
     }
 
+    public Mono<Map<String, Object>> validateFunctionFragment(Map<String, Object> request) {
+        log.info("python.function_fragment.validate codeLength={}", codeLength(request));
+        return webClient.post()
+                .uri("/api/function-fragments/validate")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(error -> log.error("python.function_fragment.validate.failed message={}", error.getMessage(), error));
+    }
+
+    public Mono<Map<String, Object>> testRunFunctionFragment(Map<String, Object> request) {
+        log.info("python.function_fragment.test_run codeLength={}", codeLength(request));
+        return webClient.post()
+                .uri("/api/function-fragments/test-run")
+                .accept(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request == null ? Map.of() : request)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(error -> log.error("python.function_fragment.test_run.failed message={}", error.getMessage(), error));
+    }
+
     public Mono<Map<String, Object>> evaluateRag(List<Map<String, Object>> dataset) {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("dataset", dataset);
@@ -173,5 +197,12 @@ public class PythonClient {
         }
         String normalized = value.replaceAll("\\s+", " ").trim();
         return normalized.length() <= 80 ? normalized : normalized.substring(0, 80) + "...";
+    }
+
+    private int codeLength(Map<String, Object> request) {
+        if (request == null || request.get("code") == null) {
+            return 0;
+        }
+        return String.valueOf(request.get("code")).length();
     }
 }

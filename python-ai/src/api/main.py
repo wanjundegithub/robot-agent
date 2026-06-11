@@ -9,6 +9,8 @@ from .models import (
     ExecuteRequest,
     ExecuteStatusResponse,
     FormSubmitRequest,
+    FunctionFragmentTestRunRequest,
+    FunctionFragmentValidateRequest,
     IntentClassificationRequest,
     RagEvaluationRequest,
     RecommendationRequest,
@@ -20,6 +22,7 @@ from .models import (
 )
 from src.core.evaluation import rag_evaluator
 from src.core.events import utc_now_iso
+from src.core.function_fragments import run_function_fragment, validate_function_fragment
 from src.core.idempotency import (
     get_idempotency_backend,
     get_idempotency_store,
@@ -231,6 +234,16 @@ async def health_check():
             "telemetry": workflow_telemetry.exporter_status(),
         },
     }
+
+
+@app.post("/api/function-fragments/validate")
+async def validate_function_fragment_api(request: FunctionFragmentValidateRequest):
+    return validate_function_fragment(request.code)
+
+
+@app.post("/api/function-fragments/test-run")
+async def test_run_function_fragment_api(request: FunctionFragmentTestRunRequest):
+    return run_function_fragment(request.code, request.variables, request.timeout_ms)
 
 
 @app.get("/api/phase5/runtime-status")
