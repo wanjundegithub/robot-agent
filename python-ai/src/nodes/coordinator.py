@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from .base import BaseNode
@@ -35,16 +36,22 @@ class CoordinatorNode(BaseNode):
         metrics: Optional[Dict[str, Any]] = None
         security_events: List[Dict[str, Any]] = []
 
+        if len(candidates) > 1 and (not isinstance(target, str) or not target.strip()):
+            target = self._resolve_target_from_candidate_text(context, candidates)
+            if target:
+                output["reason"] = "candidate_text_match"
+
         if self._should_use_llm():
-            llm_result = await self._execute_llm_contract(context, candidates)
-            target = llm_result.get("targetNodeId") or llm_result.get(self.target_variable) or target
-            llm_message = llm_result.get("message") or llm_result.get("welcome_message")
-            message_deltas.extend(self._message_deltas(llm_message))
-            if isinstance(llm_result.get("reason"), str) and llm_result.get("reason"):
-                output["reason"] = llm_result["reason"]
-            if isinstance(llm_result.get("_metrics"), dict):
-                metrics = llm_result["_metrics"]
-            security_events = list(llm_result.get("_security_events", []))
+            if not isinstance(target, str) or not target.strip():
+                llm_result = await self._execute_llm_contract(context, candidates)
+                target = llm_result.get("targetNodeId") or llm_result.get(self.target_variable) or target
+                llm_message = llm_result.get("message") or llm_result.get("welcome_message")
+                message_deltas.extend(self._message_deltas(llm_message))
+                if isinstance(llm_result.get("reason"), str) and llm_result.get("reason"):
+                    output["reason"] = llm_result["reason"]
+                if isinstance(llm_result.get("_metrics"), dict):
+                    metrics = llm_result["_metrics"]
+                security_events = list(llm_result.get("_security_events", []))
 
         if len(candidates) == 1 and (not isinstance(target, str) or not target.strip()):
             target = candidates[0]
@@ -84,6 +91,72 @@ class CoordinatorNode(BaseNode):
         if key in context.execution_variables:
             return context.execution_variables.pop(key)
         return None
+
+    def _resolve_target_from_candidate_text(self, context, candidates: List[str]) -> Optional[str]:
+        message_tokens = set(self._route_tokens(context.get_variable("user_message", "")))
+        if not message_tokens:
+            return None
+
+        best_target: Optional[str] = None
+        best_score = 0
+        tied = False
+        node_context = self._candidate_node_context(context, candidates)
+        for target in candidates:
+            candidate_tokens: set[str] = set()
+            for text in self._candidate_texts(node_context.get(target, {})):
+                candidate_tokens.update(self._route_tokens(text))
+            if not candidate_tokens:
+                continue
+            score = len(message_tokens.intersection(candidate_tokens))
+            if score <= 0:
+                continue
+            if score > best_score:
+                best_target = target
+                best_score = score
+                tied = False
+            elif score == best_score:
+                tied = True
+
+        if best_target and not tied:
+            return best_target
+        return None
+
+    def _candidate_node_context(self, context, candidates: List[str]) -> Dict[str, Dict[str, Any]]:
+        allowed = set(candidates)
+        result: Dict[str, Dict[str, Any]] = {}
+        node_context = getattr(context, "workflow_node_context", [])
+        if not isinstance(node_context, list):
+            return result
+        for item in node_context:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("id", "")).strip()
+            if node_id in allowed:
+                result[node_id] = item
+        return result
+
+    def _candidate_texts(self, node: Dict[str, Any]) -> List[str]:
+        texts: List[str] = []
+        for key in ("name", "title", "label", "description", "prompt", "user_prompt"):
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+        return texts
+
+    def _route_tokens(self, value: Any) -> List[str]:
+        text = str(value or "").strip().lower()
+        if not text:
+            return []
+        normalized = re.sub(r"[\s,，。.!！?？;；:：、/\\|()（）\[\]{}<>《》\"'“”‘’_-]+", "", text)
+        tokens: List[str] = []
+        for match in re.finditer(r"[a-z0-9]+", text):
+            tokens.append(match.group(0))
+        cjk_chars = [char for char in normalized if "\u4e00" <= char <= "\u9fff"]
+        cjk = "".join(cjk_chars)
+        for size in (2, 3, 4):
+            if len(cjk) >= size:
+                tokens.extend(cjk[index:index + size] for index in range(0, len(cjk) - size + 1))
+        return tokens
 
     def _should_use_llm(self) -> bool:
         return bool(self.prompt or self.user_prompt or self.system_prompt or self.model_code)

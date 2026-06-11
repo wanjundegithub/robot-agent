@@ -796,6 +796,109 @@ async def test_v2_main_graph_can_finish_from_sub_agent_without_main_end_node():
 
 
 @pytest.mark.asyncio
+async def test_v2_coordinator_uses_sub_agent_text_to_select_goods_subgraph(monkeypatch):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return '{"targetNodeId":"sub_agent_product","reason":"wrong fallback"}'
+
+    monkeypatch.setattr("src.nodes.coordinator.execute_model_completion", fake_completion, raising=False)
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "graph_id": "main",
+                "graph_type": "main",
+                "entry_node_id": "coordinator_main",
+                "nodes": {
+                    "coordinator_main": {
+                        "id": "coordinator_main",
+                        "type": "coordinator",
+                        "config": {"prompt": "根据用户意图选择要进入的子代理流程。"},
+                    },
+                    "sub_agent_product": {
+                        "id": "sub_agent_product",
+                        "type": "sub_agent",
+                        "name": "查询商品",
+                        "description": "专门为查询商品的服务",
+                        "config": {
+                            "subgraph_id": "sub_product",
+                            "prompt": "专门为查询商品的服务",
+                        },
+                    },
+                    "sub_agent_goods": {
+                        "id": "sub_agent_goods",
+                        "type": "sub_agent",
+                        "name": "查询货物",
+                        "description": "查询货物子流程",
+                        "config": {
+                            "subgraph_id": "sub_goods",
+                            "prompt": "查询货物子流程",
+                        },
+                    },
+                },
+                "edges": [
+                    {"id": "e1", "source": "coordinator_main", "target": "sub_agent_product"},
+                    {"id": "e2", "source": "coordinator_main", "target": "sub_agent_goods"},
+                ],
+            },
+            "sub_product": {
+                "graph_id": "sub_product",
+                "graph_type": "subflow",
+                "entry_node_id": "product_done",
+                "nodes": {
+                    "product_done": {
+                        "id": "product_done",
+                        "type": "end",
+                        "config": {"output_format": {"selected": "literal.product"}},
+                    },
+                },
+                "edges": [],
+            },
+            "sub_goods": {
+                "graph_id": "sub_goods",
+                "graph_type": "subflow",
+                "entry_node_id": "goods_done",
+                "nodes": {
+                    "goods_done": {
+                        "id": "goods_done",
+                        "type": "end",
+                        "config": {"output_format": {"selected": "literal.goods"}},
+                    },
+                },
+                "edges": [],
+            },
+        },
+    }
+
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-goods-sub-agent-text-match",
+        "session_id": "session-v2-goods-sub-agent-text-match",
+        "workflow_code": "product_or_goods_lookup",
+        "workflow_version": "v20260611",
+        "workflow_definition": workflow,
+        "workflow_config": {"llm_defaults": {"model_code": "general-chat-v1"}},
+        "input_variables": {"user_message": "我要查询货物"},
+    })
+    await scheduler.run(runtime)
+    events = await _collect_events(runtime)
+
+    assert runtime.context.status == "completed"
+    assert "goods_done" in runtime.context.completed_nodes
+    assert "product_done" not in runtime.context.completed_nodes
+    assert calls == []
+    branch_events = [
+        payload for event, payload in events
+        if event == "branch.decided" and payload.get("node_id") == "coordinator_main"
+    ]
+    assert branch_events[0]["targetNodeId"] == "sub_agent_goods"
+
+
+@pytest.mark.asyncio
 async def test_v2_coordinator_selects_valid_target_node_id():
     registry = ExecutionRegistry()
     scheduler = WorkflowScheduler()

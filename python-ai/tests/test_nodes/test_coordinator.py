@@ -113,6 +113,53 @@ async def test_coordinator_uses_llm_json_contract_for_target_and_welcome_message
 
 
 @pytest.mark.asyncio
+async def test_coordinator_prefers_candidate_text_match_before_llm(monkeypatch):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return '{"targetNodeId":"product_agent","reason":"wrong fallback"}'
+
+    monkeypatch.setattr("src.nodes.coordinator.execute_model_completion", fake_completion, raising=False)
+    context = ExecutionContext(
+        execution_id="exec_coordinator_candidate_text",
+        session_id="sess_coordinator_candidate_text",
+        workflow_code="product_or_goods_lookup",
+        workflow_version="v2",
+        workflow_config={"llm_defaults": {"model_code": "general-chat-v1"}},
+    )
+    context.available_targets = ["product_agent", "goods_agent"]
+    context.workflow_node_context = [
+        {
+            "id": "product_agent",
+            "type": "sub_agent",
+            "name": "查询商品",
+            "description": "专门为查询商品的服务",
+            "prompt": "专门为查询商品的服务",
+        },
+        {
+            "id": "goods_agent",
+            "type": "sub_agent",
+            "name": "查询货物",
+            "description": "查询货物子流程",
+            "prompt": "查询货物子流程",
+        },
+    ]
+    context.add_execution_variable("user_message", "我要查询货物")
+
+    node = CoordinatorNode("coordinator_1", {
+        "type": "coordinator",
+        "config": {"prompt": "根据用户意图选择要进入的子代理流程。"},
+    })
+    result = await node.execute(context)
+
+    assert result["next_node"] == "goods_agent"
+    assert result["output"]["targetNodeId"] == "goods_agent"
+    assert result["output"]["reason"] == "candidate_text_match"
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_coordinator_ignores_configured_welcome_message_without_llm():
     context = ExecutionContext(
         execution_id="exec_coordinator_welcome",
