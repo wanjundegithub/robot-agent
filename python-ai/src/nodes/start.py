@@ -1,9 +1,13 @@
 import json
+import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
 from src.core.model_runtime import execute_model_completion
+
+logger = logging.getLogger(__name__)
 
 
 class StartNode(BaseNode):
@@ -26,9 +30,27 @@ class StartNode(BaseNode):
                 context.add_execution_variable(key, value)
 
         missing_before_extraction = self._missing_input_variables(context)
+        if missing_before_extraction:
+            rule_extracted = self._extract_variables_with_rules(context, missing_before_extraction)
+            for key, value in rule_extracted.items():
+                if key in missing_before_extraction and not self._is_missing(value):
+                    context.add_execution_variable(key, value)
+
+        missing_before_extraction = self._missing_input_variables(context)
         metrics = None
         if missing_before_extraction and self._resolve_model_code(context):
-            extracted, metrics = await self._extract_variables(context)
+            try:
+                extracted, metrics = await self._extract_variables(context, missing_before_extraction)
+            except Exception as exc:
+                logger.warning(
+                    "start.slot_extraction.failed sessionId=%s executionId=%s nodeId=%s missingFields=%s errorType=%s",
+                    context.session_id,
+                    context.execution_id,
+                    self.node_id,
+                    missing_before_extraction,
+                    type(exc).__name__,
+                )
+                extracted, metrics = {}, None
             for key, value in extracted.items():
                 if key in missing_before_extraction and not self._is_missing(value):
                     context.add_execution_variable(key, value)
@@ -91,11 +113,122 @@ class StartNode(BaseNode):
         model_code = self.model_code or workflow_defaults.get("model_code") or context.routing_model_code
         return str(model_code) if model_code else None
 
-    async def _extract_variables(self, context) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    def _extract_variables_with_rules(self, context, missing_fields: List[str]) -> Dict[str, Any]:
+        user_message = str(context.get_variable("user_message", "") or "")
+        if not user_message.strip():
+            return {}
+        missing = set(missing_fields)
+        extracted: Dict[str, Any] = {}
+        for variable in self.input_variables:
+            name = variable.get("name")
+            if name not in missing:
+                continue
+            value = self._extract_single_variable_with_rules(variable, user_message)
+            if not self._is_missing(value):
+                extracted[name] = value
+        return extracted
+
+    def _extract_single_variable_with_rules(self, variable: Dict[str, Any], user_message: str) -> Any:
+        pattern_value = variable.get("pattern") or variable.get("regex")
+        if pattern_value:
+            try:
+                match = re.search(str(pattern_value), user_message, flags=re.IGNORECASE)
+            except re.error:
+                match = None
+            if match:
+                return match.group(1) if match.groups() else match.group(0)
+
+        enum_value = self._extract_enum_value(variable, user_message)
+        if not self._is_missing(enum_value):
+            return enum_value
+
+        variable_type = str(variable.get("type") or "string").strip().lower()
+        lookup_text = " ".join([
+            str(variable.get("name") or ""),
+            str(variable.get("description") or ""),
+            variable_type,
+        ]).casefold()
+
+        if variable_type in {"integer", "int", "long"}:
+            return self._extract_integer(user_message)
+        if variable_type in {"number", "float", "double", "decimal"}:
+            return self._extract_number(user_message)
+        if variable_type in {"boolean", "bool"}:
+            return self._extract_boolean(user_message)
+        if "email" in lookup_text:
+            return self._extract_regex(user_message, r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+        if any(token in lookup_text for token in ("phone", "mobile", "tel")):
+            return self._extract_regex(user_message, r"\+?\d[\d\s-]{6,}\d")
+        if "url" in lookup_text or "uri" in lookup_text:
+            return self._extract_regex(user_message, r"https?://[^\s]+")
+        if "date" in lookup_text:
+            return self._extract_regex(user_message, r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b")
+        if "time" in lookup_text:
+            return self._extract_regex(user_message, r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+        return None
+
+    def _extract_enum_value(self, variable: Dict[str, Any], user_message: str) -> Any:
+        for label, value in self._enum_candidates(variable):
+            if not label:
+                continue
+            if self._message_contains_option(user_message, label):
+                return value
+        return None
+
+    def _enum_candidates(self, variable: Dict[str, Any]) -> List[tuple[str, Any]]:
+        candidates: List[tuple[str, Any]] = []
+        for key in ("enum", "enums", "options", "values", "allowed_values"):
+            raw = variable.get(key)
+            if isinstance(raw, dict):
+                candidates.extend((str(label), value) for label, value in raw.items())
+            elif isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, dict):
+                        value = item.get("value", item.get("name", item.get("label")))
+                        for label_key in ("label", "name", "value"):
+                            label = item.get(label_key)
+                            if label not in (None, ""):
+                                candidates.append((str(label), value))
+                    elif item not in (None, ""):
+                        candidates.append((str(item), item))
+        return candidates
+
+    def _message_contains_option(self, user_message: str, option: str) -> bool:
+        option = str(option or "").strip()
+        if not option:
+            return False
+        if re.fullmatch(r"[\w\s.-]+", option):
+            return re.search(rf"(?<!\w){re.escape(option)}(?!\w)", user_message, flags=re.IGNORECASE) is not None
+        return option.casefold() in user_message.casefold()
+
+    def _extract_integer(self, user_message: str) -> Optional[int]:
+        match = re.search(r"(?<![\w.])-?\d+(?![\w.])", user_message)
+        return int(match.group(0)) if match else None
+
+    def _extract_number(self, user_message: str) -> Optional[float | int]:
+        match = re.search(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", user_message)
+        if not match:
+            return None
+        text = match.group(0)
+        return float(text) if "." in text else int(text)
+
+    def _extract_boolean(self, user_message: str) -> Optional[bool]:
+        normalized = user_message.casefold()
+        if re.search(r"(?<!\w)(true|yes|y|on|enabled|enable)(?!\w)", normalized):
+            return True
+        if re.search(r"(?<!\w)(false|no|n|off|disabled|disable)(?!\w)", normalized):
+            return False
+        return None
+
+    def _extract_regex(self, user_message: str, pattern: str) -> Optional[str]:
+        match = re.search(pattern, user_message, flags=re.IGNORECASE)
+        return match.group(0) if match else None
+
+    async def _extract_variables(self, context, missing_fields: Optional[List[str]] = None) -> tuple[Dict[str, Any], Dict[str, Any]]:
         model_code = self._resolve_model_code(context)
         if not model_code:
             return {}, {}
-        prompt_payload = self._build_extraction_prompt(context)
+        prompt_payload = self._build_extraction_prompt(context, missing_fields)
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         completion = await execute_model_completion(
             model_code=model_code,
@@ -113,6 +246,7 @@ class StartNode(BaseNode):
             ),
             user_prompt=user_prompt,
             response_format={"type": "json_object"},
+            max_tokens=65535,
         )
         parsed = self._parse_extraction_output(completion)
         metrics = cost_tracker.build_cost_payload(
@@ -127,13 +261,25 @@ class StartNode(BaseNode):
         )
         return parsed, metrics
 
-    def _build_extraction_prompt(self, context) -> Dict[str, Any]:
+    def _build_extraction_prompt(self, context, missing_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+        requested_names = set(missing_fields or self._declared_variable_names())
+        target_variables = [
+            variable
+            for variable in self.input_variables
+            if variable.get("name") in requested_names
+        ]
+        known_variables = {
+            variable["name"]: context.get_variable(variable["name"])
+            for variable in self.input_variables
+            if variable.get("name") not in requested_names and not self._is_missing(context.get_variable(variable["name"]))
+        }
         return {
             "task": "start_node_slot_extraction",
             "user_message": context.get_variable("user_message", ""),
             "start_node": {
                 "node_id": self.node_id,
                 "prompt": self.prompt,
+                "known_variables": known_variables,
                 "input_variables": [
                     {
                         "name": variable["name"],
@@ -142,7 +288,7 @@ class StartNode(BaseNode):
                         "default": variable.get("default", ""),
                         "current_value": context.get_variable(variable["name"]),
                     }
-                    for variable in self.input_variables
+                    for variable in target_variables
                 ],
             },
             "rules": [

@@ -312,6 +312,62 @@ async def test_execute_model_completion_extracts_doubao_responses_output_text():
     call_args = mock_instance.post.call_args
     assert call_args.args[0] == "https://ark.cn-beijing.volces.com/api/v3/responses"
     assert call_args.kwargs["headers"]["Authorization"] == "Bearer test-secret"
+    assert call_args.kwargs["json"]["max_output_tokens"] == 256
+
+
+@pytest.mark.asyncio
+async def test_execute_model_completion_uses_call_max_tokens_override_for_doubao():
+    provider_configs = {
+        "doubao-prod": {
+            "provider_code": "doubao-prod",
+            "provider_type": "doubao",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        }
+    }
+    model_records = {
+        "doubao-chat": {
+            "model_code": "doubao-chat",
+            "provider_code": "doubao-prod",
+            "upstream_model_code": "doubao-seed-2-0-pro-260215",
+            "default_options": {
+                "max_tokens": 256,
+                "timeout_sec": 10,
+            },
+        }
+    }
+
+    with patch("src.core.model_runtime.httpx.AsyncClient") as mock_client:
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                    "status": "completed",
+                }
+            ],
+        }
+        mock_response.raise_for_status.return_value = None
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.post.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        result = await execute_model_completion(
+            model_code="doubao-chat",
+            provider_configs=provider_configs,
+            model_records=model_records,
+            system_prompt=None,
+            user_prompt="hello",
+            max_tokens=65535,
+        )
+
+    assert result == "ok"
+    assert mock_instance.post.call_args.kwargs["json"]["max_output_tokens"] == 65535
 
 
 @pytest.mark.asyncio
@@ -560,6 +616,7 @@ async def test_classify_intent_with_model_code_sends_prompt_contract():
         )
 
     kwargs = mocked_completion.await_args.kwargs
+    assert kwargs["max_tokens"] == 512
     assert "choose workflow_code only from provided candidate_workflows" in kwargs["system_prompt"].lower()
     assert "matched=false" in kwargs["system_prompt"].lower()
     assert "generate clarification_question" in kwargs["system_prompt"].lower()

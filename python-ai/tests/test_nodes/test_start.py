@@ -44,14 +44,10 @@ async def test_start_node_extracts_declared_empty_variables_with_metadata(monkey
     assert context.get_variable("priority") == "普通"
     prompt_payload = json.loads(captured["user_prompt"])
     assert prompt_payload["start_node"]["prompt"] == "请根据用户表达收集出行城市。"
-    assert prompt_payload["start_node"]["input_variables"][0] == {
-        "name": "city",
-        "type": "string",
-        "description": "用户要去的城市",
-        "default": "",
-        "current_value": "",
-    }
-    assert prompt_payload["start_node"]["input_variables"][1]["current_value"] == "普通"
+    assert [field["name"] for field in prompt_payload["start_node"]["input_variables"]] == ["city"]
+    assert prompt_payload["start_node"]["input_variables"][0]["current_value"] == ""
+    assert prompt_payload["start_node"]["known_variables"]["priority"] == context.get_variable("priority")
+    assert captured["max_tokens"] == 65535
 
 
 @pytest.mark.asyncio
@@ -193,6 +189,48 @@ async def test_start_node_keeps_slot_suspended_when_model_returns_invalid_json(m
 
 
 @pytest.mark.asyncio
+async def test_start_node_keeps_slot_suspended_when_model_call_fails(monkeypatch):
+    async def fake_completion(**_kwargs):
+        raise RuntimeError("Invalid provider payload")
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_model_failure",
+        session_id="session_start_model_failure",
+        workflow_code="product",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "truck")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect product name.",
+            "initial_variables": {"product_name": ""},
+            "input_variables": [
+                {"name": "product_name", "type": "String", "description": "Product name", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "suspended"
+    assert result["missing_fields"] == ["product_name"]
+    assert result["slot_request"]["fields"] == [
+        {
+            "name": "product_name",
+            "type": "String",
+            "description": "Product name",
+        }
+    ]
+    assert result["message_deltas"] == ["请提供Product name。"]
+    assert context.get_variable("product_name") == ""
+
+
+@pytest.mark.asyncio
 async def test_start_node_recovers_embedded_valid_json_object(monkeypatch):
     async def fake_completion(**_kwargs):
         return 'prefix {"variables": {"product_name": "paper"}, "missing_fields": []} suffix'
@@ -223,3 +261,77 @@ async def test_start_node_recovers_embedded_valid_json_object(monkeypatch):
 
     assert result["status"] == "completed"
     assert context.get_variable("product_name") == "paper"
+
+
+@pytest.mark.asyncio
+async def test_start_node_extracts_integer_slot_without_model(monkeypatch):
+    async def fail_completion(**_kwargs):
+        raise AssertionError("model should not be called when deterministic extraction completes all slots")
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fail_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_rule_integer",
+        session_id="session_start_rule_integer",
+        workflow_code="ticket",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "I need 3 tickets")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect ticket count.",
+            "initial_variables": {"quantity": ""},
+            "input_variables": [
+                {"name": "quantity", "type": "integer", "description": "Ticket count", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "completed"
+    assert context.get_variable("quantity") == 3
+    assert result["output"] == {"quantity": 3}
+
+
+@pytest.mark.asyncio
+async def test_start_node_sends_only_unresolved_slots_to_model_after_rule_extraction(monkeypatch):
+    captured = {}
+
+    async def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({"variables": {"destination": "Paris"}}, ensure_ascii=False)
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_partial_rules",
+        session_id="session_start_partial_rules",
+        workflow_code="ticket",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "I need 3 tickets to Paris")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect ticket count and destination.",
+            "initial_variables": {"quantity": "", "destination": ""},
+            "input_variables": [
+                {"name": "quantity", "type": "integer", "description": "Ticket count", "default": ""},
+                {"name": "destination", "type": "string", "description": "Destination city", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "completed"
+    assert context.get_variable("quantity") == 3
+    assert context.get_variable("destination") == "Paris"
+    prompt_payload = json.loads(captured["user_prompt"])
+    assert [field["name"] for field in prompt_payload["start_node"]["input_variables"]] == ["destination"]

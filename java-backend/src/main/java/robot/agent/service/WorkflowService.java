@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import robot.agent.common.ApplicationConstants;
 import robot.agent.config.WorkflowPromptProperties;
+import robot.agent.config.WorkflowRoutingProperties;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
 import robot.agent.dto.response.WorkflowResponse;
 import robot.agent.dto.response.WorkflowVersionResponse;
@@ -46,6 +47,7 @@ public class WorkflowService {
     private final PythonClient pythonClient;
     private final ModelConfigService modelConfigService;
     private final WorkflowPromptProperties workflowPromptProperties;
+    private final WorkflowRoutingProperties workflowRoutingProperties;
 
     @Autowired
     public WorkflowService(
@@ -56,7 +58,8 @@ public class WorkflowService {
             AuditService auditService,
             PythonClient pythonClient,
             ModelConfigService modelConfigService,
-            WorkflowPromptProperties workflowPromptProperties
+            WorkflowPromptProperties workflowPromptProperties,
+            WorkflowRoutingProperties workflowRoutingProperties
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowVersionRepository = workflowVersionRepository;
@@ -66,6 +69,7 @@ public class WorkflowService {
         this.pythonClient = pythonClient;
         this.modelConfigService = modelConfigService;
         this.workflowPromptProperties = workflowPromptProperties;
+        this.workflowRoutingProperties = workflowRoutingProperties;
     }
 
     public WorkflowService(
@@ -85,7 +89,31 @@ public class WorkflowService {
                 auditService,
                 pythonClient,
                 modelConfigService,
-                new WorkflowPromptProperties()
+                new WorkflowPromptProperties(),
+                new WorkflowRoutingProperties()
+        );
+    }
+
+    public WorkflowService(
+            WorkflowRepository workflowRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            AuditService auditService,
+            PythonClient pythonClient,
+            ModelConfigService modelConfigService,
+            WorkflowRoutingProperties workflowRoutingProperties
+    ) {
+        this(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService,
+                new WorkflowPromptProperties(),
+                workflowRoutingProperties
         );
     }
 
@@ -643,7 +671,14 @@ public class WorkflowService {
         List<RoutingDecision.IntentCandidate> regexCandidates = collectRegexCandidates(versions, normalizedContent);
         log.info("workflow.route.regex candidates={}", regexCandidates.size());
         if (!regexCandidates.isEmpty()) {
-            return buildAcceptedRoutingDecision(regexCandidates, versions, activeExecution, "regex_match", 1.0d, "regex");
+            return buildAcceptedRoutingDecision(
+                    regexCandidates,
+                    versions,
+                    activeExecution,
+                    "regex_match",
+                    regexAcceptThreshold(),
+                    "regex_accept_threshold"
+            );
         }
 
         List<RoutingDecision.IntentCandidate> phraseCandidates = collectPhraseCandidates(versions, normalizedContent);
@@ -654,7 +689,14 @@ public class WorkflowService {
                 phraseCandidates.isEmpty() ? null : phraseCandidates.get(0).evidence()
         );
         if (!phraseCandidates.isEmpty()) {
-            return buildAcceptedRoutingDecision(phraseCandidates, versions, activeExecution, "phrase_match", 1.0d, "phrase");
+            return buildAcceptedRoutingDecision(
+                    phraseCandidates,
+                    versions,
+                    activeExecution,
+                    "phrase_match",
+                    phraseAcceptThreshold(),
+                    "phrase_accept_threshold"
+            );
         }
 
         List<RoutingDecision.IntentCandidate> ragCandidates = collectRagCandidates(versions, normalizedContent);
@@ -674,6 +716,16 @@ public class WorkflowService {
                     "rag_match",
                     ragAcceptThreshold(),
                     "rag_accept_threshold"
+            );
+        }
+        if (isSingleRagCandidateAcceptable(ragCandidates)) {
+            return buildAcceptedRoutingDecision(
+                    ragCandidates,
+                    versions,
+                    activeExecution,
+                    "rag_single_candidate_match",
+                    singleRagAcceptThreshold(),
+                    "rag_single_candidate_threshold"
             );
         }
 
@@ -1239,12 +1291,29 @@ public class WorkflowService {
         return 5;
     }
 
+    private double regexAcceptThreshold() {
+        return workflowRoutingProperties.getRegexAcceptThreshold();
+    }
+
+    private double phraseAcceptThreshold() {
+        return workflowRoutingProperties.getPhraseAcceptThreshold();
+    }
+
     private double ragAcceptThreshold() {
-        return 0.80d;
+        return workflowRoutingProperties.getRagAcceptThreshold();
+    }
+
+    private double singleRagAcceptThreshold() {
+        return workflowRoutingProperties.getSingleRagAcceptThreshold();
+    }
+
+    private boolean isSingleRagCandidateAcceptable(List<RoutingDecision.IntentCandidate> ragCandidates) {
+        return ragCandidates.size() == 1
+                && ragCandidates.get(0).confidence() >= singleRagAcceptThreshold();
     }
 
     private double llmAcceptThreshold() {
-        return 0.70d;
+        return workflowRoutingProperties.getLlmAcceptThreshold();
     }
 
     private String defaultClarificationQuestion(String question) {
@@ -1505,21 +1574,22 @@ public class WorkflowService {
                     return row;
                 })
                 .toList();
+        ModelConfigService.RuntimeModelBundle classifierRuntimeBundle = runtimeBundleForModel(routingModelCode, runtimeBundle);
         Map<String, Object> response;
         try {
             log.info(
                     "workflow.intent.classify.request routingModelCode={} candidateCount={} providerCount={} modelRecordCount={}",
                     routingModelCode,
                     candidates.size(),
-                    runtimeBundle.providerConfigs().size(),
-                    runtimeBundle.modelRecords().size()
+                    classifierRuntimeBundle.providerConfigs().size(),
+                    classifierRuntimeBundle.modelRecords().size()
             );
             Map<String, Object> classifyRequest = new LinkedHashMap<>();
             classifyRequest.put("message", normalizedContent);
             classifyRequest.put("routing_model_code", routingModelCode);
             classifyRequest.put("candidate_workflows", candidates);
-            classifyRequest.put("provider_configs", runtimeBundle.providerConfigs());
-            classifyRequest.put("model_records", runtimeBundle.modelRecords());
+            classifyRequest.put("provider_configs", classifierRuntimeBundle.providerConfigs());
+            classifyRequest.put("model_records", classifierRuntimeBundle.modelRecords());
             classifyRequest.put("system_prompts", workflowPromptProperties.asWorkflowConfigSystemPrompts());
             response = pythonClient.classifyIntent(classifyRequest)
                     .blockOptional()
@@ -1572,6 +1642,44 @@ public class WorkflowService {
                 reason,
                 false,
                 clarificationQuestion
+        );
+    }
+
+    private ModelConfigService.RuntimeModelBundle runtimeBundleForModel(
+            String modelCode,
+            ModelConfigService.RuntimeModelBundle runtimeBundle
+    ) {
+        if (modelCode == null || modelCode.isBlank()
+                || runtimeBundle == null
+                || runtimeBundle.modelRecords() == null
+                || runtimeBundle.providerConfigs() == null) {
+            return runtimeBundle;
+        }
+
+        Map<String, Object> selectedModelRecord = runtimeBundle.modelRecords().stream()
+                .filter(record -> Objects.equals(modelCode, stringValue(record.get("model_code"))))
+                .findFirst()
+                .orElse(null);
+        if (selectedModelRecord == null) {
+            return runtimeBundle;
+        }
+
+        String providerCode = stringValue(selectedModelRecord.get("provider_code"));
+        if (providerCode == null) {
+            return runtimeBundle;
+        }
+
+        Map<String, Object> selectedProviderConfig = runtimeBundle.providerConfigs().stream()
+                .filter(provider -> Objects.equals(providerCode, stringValue(provider.get("provider_code"))))
+                .findFirst()
+                .orElse(null);
+        if (selectedProviderConfig == null) {
+            return runtimeBundle;
+        }
+
+        return new ModelConfigService.RuntimeModelBundle(
+                List.of(selectedProviderConfig),
+                List.of(selectedModelRecord)
         );
     }
 

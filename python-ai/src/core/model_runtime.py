@@ -21,6 +21,7 @@ class ModelExecutionError(Exception):
 
 
 logger = logging.getLogger(__name__)
+INTENT_ROUTING_MAX_TOKENS = 512
 
 
 def _provider_extra_headers(provider: Dict[str, Any]) -> Dict[str, Any]:
@@ -159,6 +160,7 @@ async def classify_intent_with_model_code(
         ),
         user_prompt=json.dumps(prompt, ensure_ascii=False),
         response_format={"type": "json_object"},
+        max_tokens=INTENT_ROUTING_MAX_TOKENS,
     )
     try:
         parsed = json.loads(content)
@@ -231,10 +233,11 @@ async def execute_model_completion(
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
     stream_callback: Callable[[str, bool], None] | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     model_record = resolve_model_record(model_records, model_code)
     provider = resolve_provider(provider_configs, str(model_record.get("provider_code")))
-    return await _invoke_provider(provider, model_record, system_prompt, user_prompt, response_format, stream_callback)
+    return await _invoke_provider(provider, model_record, system_prompt, user_prompt, response_format, stream_callback, max_tokens)
 
 
 async def _invoke_provider(
@@ -244,6 +247,7 @@ async def _invoke_provider(
     user_prompt: str,
     response_format: Dict[str, Any] | None = None,
     stream_callback: Callable[[str, bool], None] | None = None,
+    max_tokens_override: int | None = None,
 ) -> str:
     start_time = time.perf_counter()
     provider_type = str(provider.get("provider_type", "")).strip().lower()
@@ -275,7 +279,7 @@ async def _invoke_provider(
 
     temperature = float(_model_option(model_record, "temperature", 0.3))
     top_p = float(_model_option(model_record, "top_p", 1.0))
-    max_tokens = int(_model_option(model_record, "max_tokens", 1024))
+    max_tokens = int(max_tokens_override if max_tokens_override is not None else _model_option(model_record, "max_tokens", 1024))
     timeout = float(_model_option(model_record, "timeout_sec", 30))
 
     body: Dict[str, Any]

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import robot.agent.config.WorkflowRoutingProperties;
 import robot.agent.model.Workflow;
 import robot.agent.model.WorkflowStatus;
 import robot.agent.model.WorkflowVersion;
@@ -55,10 +56,12 @@ class WorkflowServiceTest {
 
     private WorkflowService workflowService;
     private ObjectMapper objectMapper;
+    private WorkflowRoutingProperties workflowRoutingProperties;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
+        workflowRoutingProperties = new WorkflowRoutingProperties();
         workflowService = new WorkflowService(
                 workflowRepository,
                 workflowVersionRepository,
@@ -66,7 +69,8 @@ class WorkflowServiceTest {
                 accessControlService,
                 auditService,
                 pythonClient,
-                modelConfigService
+                modelConfigService,
+                workflowRoutingProperties
         );
     }
 
@@ -103,6 +107,23 @@ class WorkflowServiceTest {
         assertThat(bundle.providerConfigs()).containsExactly(Map.of("provider_code", "doubao"));
         assertThat(bundle.modelRecords()).containsExactly(Map.of("model_code", "doubao-chat", "provider_code", "doubao"));
         assertThat(bundle.workflowConfig()).containsEntry("llm_defaults", Map.of("model_code", "doubao-chat"));
+    }
+
+    @Test
+    void workflowRoutingProperties_defaultsAndClampsThresholds() {
+        WorkflowRoutingProperties properties = new WorkflowRoutingProperties();
+
+        assertThat(properties.getRegexAcceptThreshold()).isEqualTo(1.0d);
+        assertThat(properties.getPhraseAcceptThreshold()).isEqualTo(1.0d);
+        assertThat(properties.getRagAcceptThreshold()).isEqualTo(0.80d);
+        assertThat(properties.getSingleRagAcceptThreshold()).isEqualTo(0.60d);
+        assertThat(properties.getLlmAcceptThreshold()).isEqualTo(0.70d);
+
+        properties.setRagAcceptThreshold(2.0d);
+        properties.setLlmAcceptThreshold(-1.0d);
+
+        assertThat(properties.getRagAcceptThreshold()).isEqualTo(1.0d);
+        assertThat(properties.getLlmAcceptThreshold()).isEqualTo(0.0d);
     }
 
     @Test
@@ -255,7 +276,7 @@ class WorkflowServiceTest {
                 "reason", "default model routed"
         )));
 
-        RoutingDecision decision = workflowService.routeMessage("定酒店", null);
+        RoutingDecision decision = workflowService.routeMessage("住宿安排", null);
 
         assertThat(decision.decision()).isEqualTo("start");
         assertThat(decision.workflowCode()).isEqualTo("hotel_booking");
@@ -265,6 +286,59 @@ class WorkflowServiceTest {
         assertThat(requestCaptor.getValue()).containsEntry("routing_model_code", "default-chat");
         assertThat((List<?>) requestCaptor.getValue().get("provider_configs")).hasSize(1);
         assertThat((List<?>) requestCaptor.getValue().get("model_records")).hasSize(1);
+    }
+
+    @Test
+    void routeMessage_sendsOnlyRoutingModelBundleToIntentClassifier() throws Exception {
+        WorkflowVersion travelVersion = publishedVersion(
+                "travel_booking",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of("travel booking"),
+                List.of("book_travel")
+        );
+        Workflow travelWorkflow = publishedWorkflow("travel_booking", "1.0.0", "Travel Booking", "Book trips");
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(travelWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("travel_booking", "1.0.0"))
+                .thenReturn(Optional.of(travelVersion));
+        when(workflowRepository.findByWorkflowCode("travel_booking"))
+                .thenReturn(Optional.of(travelWorkflow));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("route-model");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(
+                                Map.of("provider_code", "route-provider"),
+                                Map.of("provider_code", "workflow-provider")
+                        ),
+                        List.of(
+                                Map.of("model_code", "route-model", "provider_code", "route-provider"),
+                                Map.of("model_code", "workflow-model", "provider_code", "workflow-provider")
+                        )
+                ));
+        when(pythonClient.classifyIntent(anyMap())).thenReturn(Mono.just(Map.of(
+                "matched", true,
+                "intent_code", "book_travel",
+                "target_type", "workflow",
+                "target_code", "travel_booking",
+                "workflow_code", "travel_booking",
+                "confidence", 0.91d,
+                "reason", "route model selected travel"
+        )));
+
+        RoutingDecision decision = workflowService.routeMessage("please arrange travel", null);
+
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.workflowCode()).isEqualTo("travel_booking");
+        ArgumentCaptor<Map<String, Object>> requestCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonClient).classifyIntent(requestCaptor.capture());
+        List<?> providerConfigs = (List<?>) requestCaptor.getValue().get("provider_configs");
+        List<?> modelRecords = (List<?>) requestCaptor.getValue().get("model_records");
+        assertThat(providerConfigs).hasSize(1);
+        assertThat(((Map<?, ?>) providerConfigs.get(0)).get("provider_code")).isEqualTo("route-provider");
+        assertThat(modelRecords).hasSize(1);
+        assertThat(((Map<?, ?>) modelRecords.get(0)).get("model_code")).isEqualTo("route-model");
     }
 
     @Test
@@ -294,6 +368,92 @@ class WorkflowServiceTest {
         assertThat(decision.workflowCode()).isEqualTo("flight_booking");
         assertThat(decision.workflowVersion()).isEqualTo("1.0.0");
         assertThat(decision.reason()).isEqualTo("phrase_match");
+    }
+
+    @Test
+    void routeMessage_acceptsSingleRagCandidateBeforeModelFallback() throws Exception {
+        WorkflowVersion cargoVersion = publishedVersion(
+                "cargo_query",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of(),
+                List.of()
+        );
+        Workflow cargoWorkflow = publishedWorkflow("cargo_query", "1.0.0", "Cargo Query", null);
+        cargoVersion.setEntryRule(objectMapper.writeValueAsString(Map.of(
+                "examples", List.of("我要", "查询", "货物"),
+                "keywords", List.of(),
+                "intent_codes", List.of(),
+                "priority", 100
+        )));
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(cargoWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("cargo_query", "1.0.0"))
+                .thenReturn(Optional.of(cargoVersion));
+        when(workflowRepository.findByWorkflowCode("cargo_query"))
+                .thenReturn(Optional.of(cargoWorkflow));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("route-model");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(Map.of("provider_code", "demo")),
+                        List.of(Map.of("model_code", "route-model", "provider_code", "demo"))
+                ));
+
+        RoutingDecision decision = workflowService.routeMessage("我要查询货物", null);
+
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.workflowCode()).isEqualTo("cargo_query");
+        assertThat(decision.reason()).isEqualTo("rag_single_candidate_match");
+        verify(pythonClient, never()).classifyIntent(anyMap());
+    }
+
+    @Test
+    void routeMessage_usesConfiguredSingleRagThreshold() throws Exception {
+        workflowRoutingProperties.setSingleRagAcceptThreshold(0.75d);
+        WorkflowVersion cargoVersion = publishedVersion(
+                "cargo_query",
+                "1.0.0",
+                Map.of("routing_model_code", "route-model"),
+                List.of(),
+                List.of()
+        );
+        Workflow cargoWorkflow = publishedWorkflow("cargo_query", "1.0.0", "Cargo Query", null);
+        cargoVersion.setEntryRule(objectMapper.writeValueAsString(Map.of(
+                "examples", List.of("我要", "查询", "货物"),
+                "keywords", List.of(),
+                "intent_codes", List.of(),
+                "priority", 100
+        )));
+
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED))
+                .thenReturn(List.of(cargoWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("cargo_query", "1.0.0"))
+                .thenReturn(Optional.of(cargoVersion));
+        when(workflowRepository.findByWorkflowCode("cargo_query"))
+                .thenReturn(Optional.of(cargoWorkflow));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("route-model");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(Map.of("provider_code", "demo")),
+                        List.of(Map.of("model_code", "route-model", "provider_code", "demo"))
+                ));
+        when(pythonClient.classifyIntent(anyMap())).thenReturn(Mono.just(Map.of(
+                "matched", true,
+                "intent_code", "cargo_query",
+                "target_type", "workflow",
+                "target_code", "cargo_query",
+                "workflow_code", "cargo_query",
+                "confidence", 0.91d,
+                "reason", "model fallback after configured threshold"
+        )));
+
+        RoutingDecision decision = workflowService.routeMessage("我要查询货物", null);
+
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.workflowCode()).isEqualTo("cargo_query");
+        assertThat(decision.reason()).isEqualTo("llm_match");
+        verify(pythonClient).classifyIntent(anyMap());
     }
 
     @Test

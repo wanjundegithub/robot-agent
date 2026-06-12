@@ -37,6 +37,12 @@ robot:
     java-call:
       enabled: false
   workflow:
+    routing:
+      regex-accept-threshold: 1.0
+      phrase-accept-threshold: 1.0
+      rag-accept-threshold: 0.80
+      single-rag-accept-threshold: 0.60
+      llm-accept-threshold: 0.70
     prompts:
       system:
         workflow_control: |-
