@@ -61,7 +61,7 @@ class WorkflowServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        workflowRoutingProperties = new WorkflowRoutingProperties();
+        workflowRoutingProperties = defaultWorkflowRoutingProperties();
         workflowService = new WorkflowService(
                 workflowRepository,
                 workflowVersionRepository,
@@ -110,8 +110,8 @@ class WorkflowServiceTest {
     }
 
     @Test
-    void workflowRoutingProperties_defaultsAndClampsThresholds() {
-        WorkflowRoutingProperties properties = new WorkflowRoutingProperties();
+    void workflowRoutingProperties_requiresConfigAndClampsThresholds() {
+        WorkflowRoutingProperties properties = defaultWorkflowRoutingProperties();
 
         assertThat(properties.getRegexAcceptThreshold()).isEqualTo(1.0d);
         assertThat(properties.getPhraseAcceptThreshold()).isEqualTo(1.0d);
@@ -124,6 +124,10 @@ class WorkflowServiceTest {
 
         assertThat(properties.getRagAcceptThreshold()).isEqualTo(1.0d);
         assertThat(properties.getLlmAcceptThreshold()).isEqualTo(0.0d);
+
+        assertThatThrownBy(() -> new WorkflowRoutingProperties().getRagAcceptThreshold())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("robot.workflow.routing.rag-accept-threshold");
     }
 
     @Test
@@ -914,6 +918,16 @@ class WorkflowServiceTest {
         workflow.setDescription(description);
         workflow.setStatus(WorkflowStatus.PUBLISHED);
         return workflow;
+    }
+
+    private WorkflowRoutingProperties defaultWorkflowRoutingProperties() {
+        WorkflowRoutingProperties properties = new WorkflowRoutingProperties();
+        properties.setRegexAcceptThreshold(1.0d);
+        properties.setPhraseAcceptThreshold(1.0d);
+        properties.setRagAcceptThreshold(0.80d);
+        properties.setSingleRagAcceptThreshold(0.60d);
+        properties.setLlmAcceptThreshold(0.70d);
+        return properties;
     }
 
     @SuppressWarnings("unchecked")
