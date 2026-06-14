@@ -30,6 +30,50 @@ python:
 robot:
   gateway:
     port: 8091
+  knowledge:
+    storage:
+      type: minio
+      minio:
+        endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+        bucket: ${MINIO_BUCKET:robot-knowledge}
+        access-key: ${MINIO_ACCESS_KEY:robot}
+        secret-key: ${MINIO_SECRET_KEY:robot-knowledge-secret}
+        region: ${MINIO_REGION:us-east-1}
+        secure: ${MINIO_SECURE:false}
+      presigned-url-ttl-seconds: 300
+      max-file-size-mb: 100
+      allowed-types:
+        - txt
+        - pdf
+        - doc
+        - docx
+        - md
+    embedding:
+      default-model-code: embedding-bge-m3
+      default-upstream-model: bge-m3
+      dimension: 1024
+      batch-size: 32
+      timeout-ms: 30000
+    retrieval:
+      mode: hybrid
+      top-k: 5
+      score-threshold: 0.65
+      vector-weight: 0.7
+      keyword-weight: 0.3
+      metadata-boost: 0.05
+      vector-top-k: 20
+      keyword-top-k: 20
+      query-ngram-min: 2
+      query-ngram-max: 4
+    route:
+      intent-primary-threshold: 0.75
+      knowledge-primary-threshold: 0.65
+      intent-clarify-threshold: 0.55
+      knowledge-clarify-threshold: 0.55
+      intent-timeout-ms: 1200
+      knowledge-timeout-ms: 1800
+      max-wait-ms: 2000
+      cancel-late-branch: true
   chat:
     fallback:
       model-unavailable-message: 当前模型服务暂时不可用，请稍后再试。

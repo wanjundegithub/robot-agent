@@ -19,6 +19,11 @@ services:
     volumes:
       - /data/docker-data/java-backend/config:/app/config:ro
       - /data/docker-data/java-backend/logs:/app/logs
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: ${MINIO_BUCKET:-robot-knowledge}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-robot}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-robot-knowledge-secret}
 
   python-ai:
     image: crpi-30e9if32nlglqiu7.cn-shanghai.personal.cr.aliyuncs.com/robot-namespace/robot-repo-python-ai:latest
@@ -76,6 +81,25 @@ services:
       - /data/docker-data/pgvector/data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    container_name: robot-agent-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-robot}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-robot-knowledge-secret}
+    ports:
+      - "${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - /data/docker-data/minio/data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 5s
       retries: 30

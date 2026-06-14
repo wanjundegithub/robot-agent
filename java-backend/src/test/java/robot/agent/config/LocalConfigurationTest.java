@@ -27,9 +27,13 @@ class LocalConfigurationTest {
     @Test
     void applicationConfiguration_definesDefaultModelAtRobotRoot() throws IOException {
         String applicationYaml = readProjectFile("src/main/resources/application.yml");
+        String normalizedYaml = applicationYaml.replace("\r\n", "\n");
 
-        assertThat(applicationYaml).contains("\n  model:\n    default:\n");
-        assertThat(applicationYaml).doesNotContain("\n    robot:\n      model:\n");
+        assertThat(normalizedYaml).contains("\n  model:\n    default:\n");
+        assertThat(normalizedYaml).doesNotContain("\n    robot:\n      model:\n");
+        assertThat(normalizedYaml).contains("knowledge:");
+        assertThat(normalizedYaml).contains("storage:");
+        assertThat(normalizedYaml).contains("minio:");
     }
 
     @Test
@@ -45,6 +49,8 @@ class LocalConfigurationTest {
         String dockerCompose = readProjectFile("../docker-compose.yml");
 
         assertThat(dockerCompose.toLowerCase(Locale.ROOT)).doesNotContain("nacos");
+        assertThat(dockerCompose).contains("robot-agent-minio");
+        assertThat(dockerCompose).contains("minio-data");
     }
 
     private String readProjectFile(String relativePath) throws IOException {

@@ -29,11 +29,17 @@ services:
       ROBOT_PYTHON_BASE_URL: http://python-ai:8000
       ROBOT_SERVER_PORT: 8080
       ROBOT_GATEWAY_PORT: 8091
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: ${MINIO_BUCKET:-robot-knowledge}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-robot}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-robot-knowledge-secret}
       JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=75.0}
     depends_on:
       mysql:
         condition: service_healthy
       python-ai:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     expose:
       - "8080"
@@ -115,7 +121,28 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    container_name: robot-agent-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-robot}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-robot-knowledge-secret}
+    ports:
+      - "${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   redis-data:
   pgvector-data:
+  minio-data:
