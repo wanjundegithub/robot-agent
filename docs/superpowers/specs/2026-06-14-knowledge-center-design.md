@@ -130,7 +130,20 @@ data/knowledge/raw/{workspace_id}/{kb_code}/{doc_id}/{original_filename}
 - 文件名必须做安全清洗，前端不能直接访问真实文件路径。
 - 后续扩展 MinIO/S3 时，只替换文件存储服务，不改变知识条目模型。
 
-### 5.2 元数据存储
+### 5.2 存储归属
+
+| 数据类型 | 存储位置 | 说明 |
+|---|---|---|
+| 知识空间、知识条目、采集任务 | MySQL | 业务元数据、状态、统计、错误信息、绑定关系 |
+| 用户粘贴的短文本原文 | MySQL 或本地文件 | 短文本可存 `knowledge_document.raw_content`；长文本建议写文件 |
+| 上传原始文件 | 本地文件存储 | 保存 PDF、DOC、DOCX、TXT、MD 原文件 |
+| 解析后的全文 | 本地文件存储或 MySQL | 推荐保存为 `extracted_text_path` 指向的 UTF-8 文本/JSON 文件 |
+| chunk 文本 | PostgreSQL + pgvector | 存在 `knowledge_chunks.content`，参与检索与引用展示 |
+| embedding 向量 | PostgreSQL + pgvector | 存在 `knowledge_chunks.embedding` |
+| 检索关键词/token | PostgreSQL + pgvector | 存在 `knowledge_chunks.keywords`、`search_terms` 或 `metadata` |
+| 短期缓存 | Redis | 检索结果缓存、路由结果缓存、幂等控制，不作为持久数据源 |
+
+### 5.3 元数据存储
 
 MySQL 存储：
 
@@ -140,12 +153,13 @@ MySQL 存储：
 - 会话/工作流与知识空间绑定关系。
 - 任务状态、失败原因、统计字段。
 
-### 5.3 向量数据存储
+### 5.4 向量数据存储
 
 pgvector 存储：
 
 - chunk 文本。
 - embedding 向量。
+- 检索关键词/token。
 - chunk 来源元数据。
 - `kb_code`、`doc_id`、`index_version`、`status`。
 
@@ -162,6 +176,9 @@ CREATE TABLE knowledge_chunks (
     chunk_index INT NOT NULL,
     title TEXT,
     content TEXT NOT NULL,
+    search_text TEXT,
+    keywords TEXT[],
+    search_terms TEXT[],
     content_hash TEXT,
     embedding VECTOR(1536) NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -183,11 +200,17 @@ ON knowledge_chunks (doc_id, index_version);
 CREATE INDEX idx_knowledge_chunks_metadata
 ON knowledge_chunks USING GIN (metadata);
 
+CREATE INDEX idx_knowledge_chunks_keywords
+ON knowledge_chunks USING GIN (keywords);
+
+CREATE INDEX idx_knowledge_chunks_search_terms
+ON knowledge_chunks USING GIN (search_terms);
+
 CREATE INDEX idx_knowledge_chunks_embedding
 ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops);
 ```
 
-### 5.4 索引版本
+### 5.5 索引版本
 
 知识处理成功后立即可检索。
 
@@ -376,14 +399,119 @@ knowledge.route.cancel_late_branch
 
 1. 对用户问题生成 query embedding。
 2. 在 pgvector 中按绑定 `kb_code`、`status=ACTIVE`、有效 `index_version` 做向量召回。
-3. 在 pgvector/PostgreSQL 中对 `content`、`title`、`metadata` 做关键词召回。
+3. 在 pgvector 所在 PostgreSQL 中对 `search_terms`、`keywords`、`search_text` 做关键词召回。
 4. 合并两个候选集合。
 5. 按 `chunk_id` 去重。
 6. 计算综合分数。
 7. 按分数排序取 Top K。
 8. 构建引用来源。
 
-### 8.3 分数融合
+### 8.3 向量召回实现
+
+向量召回由 Python AI 调用 embedding 服务和 pgvector 完成。
+
+入库阶段：
+
+1. 对解析后的全文进行语义分块。
+2. 对每个 chunk 生成 embedding。
+3. 将 chunk 文本、embedding、来源 metadata 写入 `knowledge_chunks`。
+4. `embedding` 字段使用 pgvector 的 `VECTOR(n)` 类型，`n` 必须等于 embedding 模型维度。
+5. 使用 `ivfflat` 或后续可选的 `hnsw` 索引加速相似度检索。
+
+查询阶段：
+
+1. 对用户问题生成 query embedding。
+2. 使用绑定知识空间过滤条件限制范围。
+3. 使用 cosine 距离计算相似度。
+4. 返回 topN 候选 chunk。
+
+示例 SQL：
+
+```sql
+SELECT
+    chunk_id,
+    doc_id,
+    kb_code,
+    title,
+    content,
+    metadata,
+    CAST(1 - (embedding <=> :query_embedding) AS DOUBLE PRECISION) AS vector_score
+FROM knowledge_chunks
+WHERE kb_code = ANY(:kb_codes)
+  AND status = 'ACTIVE'
+  AND index_version = :active_index_version
+ORDER BY embedding <=> :query_embedding
+LIMIT :vector_top_k;
+```
+
+### 8.4 关键词召回实现
+
+关键词召回不引入 Elasticsearch，初版使用 pgvector 所在 PostgreSQL 完成。
+
+入库阶段：
+
+1. 对 chunk 的 `title`、`content`、用户填写的知识描述、文件名进行规范化。
+2. 生成 `search_text`，用于全文/模糊匹配。
+3. 生成 `keywords`，保存自动抽取关键词。
+4. 生成 `search_terms`，保存分词后的查询 token。
+5. `keywords` 和 `search_terms` 使用 GIN 索引。
+
+查询阶段：
+
+1. 对用户问题做同样的规范化和分词。
+2. 在绑定知识空间内检索 `search_terms`、`keywords` 和 `search_text`。
+3. 按命中位置和命中数量计算 `keyword_score`。
+4. 返回 topN 候选 chunk。
+
+推荐初版采用以下组合：
+
+- 中文和英文统一转小写。
+- 去除多余空白和常见标点。
+- 对英文按空格/token 拆分。
+- 对中文优先使用轻量分词器；如果暂不引入分词器，则用关键词抽取结果和 n-gram 兜底。
+- 标题、文件名、用户描述命中给予更高权重。
+
+示例 SQL：
+
+```sql
+SELECT
+    chunk_id,
+    doc_id,
+    kb_code,
+    title,
+    content,
+    metadata,
+    (
+      CASE WHEN search_terms && :query_terms THEN 0.5 ELSE 0 END +
+      CASE WHEN keywords && :query_terms THEN 0.3 ELSE 0 END +
+      CASE WHEN search_text ILIKE :query_like THEN 0.2 ELSE 0 END
+    ) AS keyword_score
+FROM knowledge_chunks
+WHERE kb_code = ANY(:kb_codes)
+  AND status = 'ACTIVE'
+  AND index_version = :active_index_version
+  AND (
+    search_terms && :query_terms
+    OR keywords && :query_terms
+    OR search_text ILIKE :query_like
+  )
+ORDER BY keyword_score DESC, updated_at DESC
+LIMIT :keyword_top_k;
+```
+
+### 8.5 混合召回与去重
+
+混合检索会分别执行向量召回和关键词召回，然后合并结果。
+
+合并规则：
+
+1. 以 `chunk_id` 为唯一键去重。
+2. 同时被向量和关键词命中的 chunk，保留两个分数。
+3. 只有向量命中的 chunk，`keyword_score = 0`。
+4. 只有关键词命中的 chunk，`vector_score = 0` 或使用默认低值。
+5. 根据综合分数排序。
+
+### 8.6 分数融合
 
 建议综合分数：
 
@@ -404,7 +532,7 @@ knowledge.retrieval.metadata_boost = 0.05
 
 `metadata_boost` 可用于提升标题、用户填写描述、文件名中的明确命中。
 
-### 8.4 检索返回
+### 8.7 检索返回
 
 检索接口返回 chunk 列表，不直接只返回答案。
 
@@ -540,6 +668,9 @@ knowledge.retrieval.metadata_boost = 0.05
 - `index_version`
 - `chunk_index`
 - `content`
+- `search_text`
+- `keywords`
+- `search_terms`
 - `summary`
 - `embedding`
 - `metadata`
@@ -618,6 +749,10 @@ knowledge.retrieval.score_threshold = 0.65
 knowledge.retrieval.vector_weight = 0.7
 knowledge.retrieval.keyword_weight = 0.3
 knowledge.retrieval.metadata_boost = 0.05
+knowledge.retrieval.vector_top_k = 20
+knowledge.retrieval.keyword_top_k = 20
+knowledge.retrieval.query_ngram_min = 2
+knowledge.retrieval.query_ngram_max = 4
 ```
 
 ### 12.4 路由配置
