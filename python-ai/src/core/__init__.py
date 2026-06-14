@@ -2,6 +2,8 @@ from importlib import import_module
 
 
 __all__ = [
+    "knowledge_ingestion",
+    "knowledge_store",
     "ExecutionContext",
     "ContextAssembler",
     "PlanningContext",
@@ -40,8 +42,18 @@ _EXPORTS = {
     "ExecutionRegistry": ("registry", "ExecutionRegistry"),
 }
 
+_SUBMODULES = {
+    "knowledge_ingestion",
+    "knowledge_store",
+}
+
 
 def __getattr__(name):
+    if name in _SUBMODULES:
+        module = import_module(f".{name}", __name__)
+        globals()[name] = module
+        return module
+
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
