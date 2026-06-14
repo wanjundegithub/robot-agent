@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>采集任务页</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #0f172a;
+      background: radial-gradient(circle at top, #e2e8f0 0%, #f8fafc 45%, #ffffff 100%);
+    }
+    .shell { min-height: 100vh; display: flex; flex-direction: column; padding: 24px; gap: 20px; }
+    .app-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,.9);
+      border: 1px solid rgba(148,163,184,.25);
+      border-radius: 18px;
+      padding: 18px 22px;
+      box-shadow: 0 12px 30px rgba(15,23,42,.08);
+      backdrop-filter: blur(12px);
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
+    h2 { margin: 0; font-size: 20px; }
+    .sub { margin-top: 4px; font-size: 14px; color: #64748b; }
+    .nav-tabs { display: flex; gap: 8px; align-items: center; }
+    .nav-tab {
+      border-radius: 999px;
+      border: 1px solid rgba(148,163,184,.35);
+      background: rgba(255,255,255,.72);
+      color: #475569;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .nav-tab.active { background: #0f172a; color: white; border-color: #0f172a; }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+    }
+    .side, .main, .detail {
+      min-height: 0;
+      border: 1px solid rgba(148,163,184,.3);
+      border-radius: 18px;
+      background: rgba(255,255,255,.95);
+      box-shadow: 0 18px 40px rgba(15,23,42,.08);
+    }
+    .side { display: flex; flex-direction: column; padding: 14px; }
+    .side-title, .panel-title {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      letter-spacing: .08em;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #64748b;
+    }
+    .side-title { padding: 6px 8px 12px; }
+    .panel-title { margin-bottom: 8px; }
+    .side-item {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .side-item.active { background: #0f172a; color: white; }
+    .task-layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(360px, .95fr);
+      gap: 16px;
+    }
+    .main, .detail { display: flex; flex-direction: column; overflow: hidden; }
+    .main-toolbar {
+      flex: 0 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(148,163,184,.22);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    button {
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid rgba(148,163,184,.45);
+      background: rgba(255,255,255,.75);
+      color: #475569;
+    }
+    .primary { border-color: #0f172a; background: #0f172a; color: white; }
+    .content {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 18px 20px 20px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid rgba(148,163,184,.22); }
+    .tab {
+      padding: 10px 2px 12px;
+      margin-right: 18px;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 700;
+      border-bottom: 2px solid transparent;
+    }
+    .tab.active { color: #0f172a; border-bottom-color: #0f172a; }
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) 150px 150px 150px auto;
+      gap: 10px;
+      align-items: center;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid rgba(148,163,184,.42);
+      border-radius: 12px;
+      background: #f8fafc;
+      color: #0f172a;
+      padding: 10px 12px;
+      font-size: 13px;
+      outline: none;
+    }
+    .table {
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      overflow: hidden;
+      background: white;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: .9fr 1fr 1fr .7fr .7fr .8fr .8fr;
+      gap: 10px;
+      align-items: center;
+      padding: 13px 14px;
+      border-top: 1px solid rgba(226,232,240,.9);
+      font-size: 13px;
+    }
+    .row.header {
+      border-top: 0;
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .link { color: #2563eb; font-weight: 700; }
+    .muted { color: #64748b; font-size: 12px; }
+    .ready { color: #15803d; font-weight: 700; }
+    .running { color: #f97316; font-weight: 700; }
+    .failed { color: #dc2626; font-weight: 700; }
+    .detail-head { padding: 18px 20px; border-bottom: 1px solid rgba(148,163,184,.22); }
+    .detail-body { overflow: auto; padding: 18px 20px 20px; display: grid; gap: 16px; }
+    .kv {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px 12px;
+      color: #475569;
+      font-size: 13px;
+    }
+    .kv span:nth-child(odd) { color: #64748b; }
+    .steps { border: 1px solid rgba(148,163,184,.28); border-radius: 14px; padding: 14px; display: grid; gap: 12px; }
+    .step { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; gap: 10px; align-items: start; font-size: 13px; }
+    .dot { width: 10px; height: 10px; border-radius: 999px; margin-top: 5px; background: #cbd5e1; }
+    .dot.ok { background: #16a34a; }
+    .dot.fail { background: #dc2626; }
+    .log {
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      background: #f8fafc;
+      padding: 12px;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    @media (max-width: 1180px) {
+      .workspace, .task-layout { grid-template-columns: 1fr; }
+      .side { flex-direction: row; overflow-x: auto; }
+      .side-title { display: none; }
+      .filters { grid-template-columns: 1fr; }
+      .row { min-width: 980px; }
+      .table { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div>
+        <h1>机器人代理控制台</h1>
+        <div class="sub">多工作流编排与会话调试</div>
+      </div>
+      <nav class="nav-tabs">
+        <span class="nav-tab">聊天</span>
+        <span class="nav-tab">工作流</span>
+        <span class="nav-tab">执行</span>
+        <span class="nav-tab">模型</span>
+        <span class="nav-tab">API中心</span>
+        <span class="nav-tab active">知识库</span>
+      </nav>
+    </header>
+
+    <section class="workspace">
+      <aside class="side">
+        <div class="side-title">知识库管理</div>
+        <div class="side-item">知识空间</div>
+        <div class="side-item active">采集任务</div>
+        <div class="side-item">知识检索</div>
+      </aside>
+
+      <section class="task-layout">
+        <main class="main">
+          <div class="main-toolbar">
+            <div>
+              <div class="panel-title">知识库</div>
+              <h2>采集任务</h2>
+              <div class="sub">查看文本解析、文件抽取、分块、向量化和入库过程。</div>
+            </div>
+            <div class="actions">
+              <button>刷新</button>
+              <button class="primary">查看失败任务</button>
+            </div>
+          </div>
+
+          <div class="content">
+            <div class="tabs">
+              <span class="tab active">全部 56</span>
+              <span class="tab">处理中 12</span>
+              <span class="tab">成功 40</span>
+              <span class="tab">失败 4</span>
+            </div>
+            <div class="filters">
+              <input value="搜索任务 ID、知识标题、文件名" readonly>
+              <select><option>空间：全部</option></select>
+              <select><option>状态：全部</option></select>
+              <select><option>阶段：全部</option></select>
+              <button>重置</button>
+            </div>
+            <div class="table">
+              <div class="row header">
+                <span>任务 ID</span><span>知识标题</span><span>知识空间</span><span>当前阶段</span><span>进度</span><span>状态</span><span>操作</span>
+              </div>
+              <div class="row">
+                <span>TASK-00056</span><span>产品手册.pdf</span><span>产品知识</span><span>向量化</span><span>80%</span><span class="running">处理中</span><span class="link">查看详情</span>
+              </div>
+              <div class="row">
+                <span>TASK-00055</span><span>价格说明.docx</span><span>产品知识</span><span>分块</span><span>45%</span><span class="running">处理中</span><span class="link">查看详情</span>
+              </div>
+              <div class="row">
+                <span>TASK-00054</span><span>售后 FAQ</span><span>FAQ</span><span>向量化</span><span>100%</span><span class="failed">失败</span><span class="link">查看错误 重试</span>
+              </div>
+              <div class="row">
+                <span>TASK-00053</span><span>产品介绍</span><span>产品知识</span><span>完成</span><span>100%</span><span class="ready">成功</span><span class="link">查看详情</span>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="detail">
+          <div class="detail-head">
+            <div class="panel-title">任务详情</div>
+            <h2>TASK-00054</h2>
+            <div class="sub">售后 FAQ / FAQ</div>
+          </div>
+          <div class="detail-body">
+            <div class="kv">
+              <span>任务类型</span><span>文本采集</span>
+              <span>创建时间</span><span>2026-06-14 08:20</span>
+              <span>状态</span><span class="failed">失败</span>
+              <span>失败原因</span><span>向量化服务超时，已保留原知识未生效</span>
+            </div>
+            <div class="steps">
+              <div class="step"><i class="dot ok"></i><span>文本保存</span><span class="ready">成功</span></div>
+              <div class="step"><i class="dot ok"></i><span>内容清洗</span><span class="ready">成功</span></div>
+              <div class="step"><i class="dot ok"></i><span>语义分块</span><span class="ready">成功</span></div>
+              <div class="step"><i class="dot fail"></i><span>向量化</span><span class="failed">失败</span></div>
+              <div class="step"><i class="dot"></i><span>索引入库</span><span class="muted">未开始</span></div>
+            </div>
+            <div class="log">
+              08:20:21 开始文本采集<br>
+              08:20:35 清洗完成，生成 8 个语义块<br>
+              08:21:06 请求 embedding 服务<br>
+              08:21:36 embedding 超时，任务失败，可点击重试
+            </div>
+            <div class="actions">
+              <button class="primary">重试任务</button>
+              <button>返回知识详情</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </section>
+  </div>
+</body>
+</html>

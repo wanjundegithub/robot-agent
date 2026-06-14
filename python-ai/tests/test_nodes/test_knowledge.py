@@ -32,7 +32,7 @@ async def test_knowledge_node_retrieves_documents_and_updates_context(monkeypatc
 
     node = KnowledgeNode("retrieve_policy", {
         "config": {
-            "knowledge_base_code": "flight_policy_kb",
+            "knowledge_base_code": "knowledge-demo",
             "kb_version": "1.0.0",
             "retrieval_mode": "hybrid",
             "top_k": 2,
@@ -79,7 +79,7 @@ async def test_knowledge_node_reuses_vector_cache_on_second_search(monkeypatch):
 
     node = KnowledgeNode("retrieve_policy", {
         "config": {
-            "knowledge_base_code": "flight_policy_kb",
+            "knowledge_base_code": "knowledge-demo",
             "kb_version": "1.0.0",
             "retrieval_mode": "hybrid",
             "top_k": 2

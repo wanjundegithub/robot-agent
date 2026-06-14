@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>知识空间首页</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #0f172a;
+      background: radial-gradient(circle at top, #e2e8f0 0%, #f8fafc 45%, #ffffff 100%);
+    }
+    .shell { min-height: 100vh; display: flex; flex-direction: column; padding: 24px; gap: 20px; }
+    .app-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,.9);
+      border: 1px solid rgba(148,163,184,.25);
+      border-radius: 18px;
+      padding: 18px 22px;
+      box-shadow: 0 12px 30px rgba(15,23,42,.08);
+      backdrop-filter: blur(12px);
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
+    .sub { margin-top: 4px; font-size: 14px; color: #64748b; }
+    .nav-tabs { display: flex; gap: 8px; align-items: center; }
+    .nav-tab {
+      border-radius: 999px;
+      border: 1px solid rgba(148,163,184,.35);
+      background: rgba(255,255,255,.72);
+      color: #475569;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .nav-tab.active { background: #0f172a; color: white; border-color: #0f172a; }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+    }
+    .side,
+    .main {
+      min-height: 0;
+      border: 1px solid rgba(148,163,184,.3);
+      border-radius: 18px;
+      background: rgba(255,255,255,.95);
+      box-shadow: 0 18px 40px rgba(15,23,42,.08);
+    }
+    .side { display: flex; flex-direction: column; padding: 14px; }
+    .side-title {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      letter-spacing: .08em;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #64748b;
+      padding: 6px 8px 12px;
+    }
+    .side-item {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .side-item.active {
+      background: #0f172a;
+      color: white;
+    }
+    .main { display: flex; flex-direction: column; overflow: hidden; }
+    .main-toolbar {
+      flex: 0 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(148,163,184,.22);
+    }
+    .panel-title {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      letter-spacing: .08em;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+    h2 { margin: 0; font-size: 20px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    button {
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid rgba(148,163,184,.45);
+      background: rgba(255,255,255,.75);
+      color: #475569;
+    }
+    .primary { border-color: #0f172a; background: #0f172a; color: white; }
+    .content {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 18px 20px 20px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .stat {
+      min-height: 88px;
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(248,250,252,.98), rgba(255,255,255,.92));
+      padding: 14px;
+    }
+    .stat-label { font-size: 12px; color: #64748b; }
+    .stat-value { margin-top: 8px; font-size: 26px; font-weight: 700; color: #0f172a; }
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) 160px auto;
+      gap: 10px;
+      align-items: center;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid rgba(148,163,184,.42);
+      border-radius: 12px;
+      background: #f8fafc;
+      color: #0f172a;
+      padding: 10px 12px;
+      font-size: 13px;
+      outline: none;
+    }
+    .table {
+      min-height: 0;
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      overflow: hidden;
+      background: white;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1.1fr 1.8fr .7fr .7fr .8fr .9fr;
+      gap: 12px;
+      align-items: center;
+      padding: 13px 14px;
+      border-top: 1px solid rgba(226,232,240,.9);
+      font-size: 13px;
+    }
+    .row.header {
+      border-top: 0;
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .link { color: #2563eb; font-weight: 700; }
+    .muted { color: #64748b; font-size: 12px; }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #64748b;
+      font-size: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid rgba(226,232,240,.9);
+      background: #f8fafc;
+    }
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 1fr; }
+      .side { flex-direction: row; overflow-x: auto; }
+      .side-title { display: none; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .filters { grid-template-columns: 1fr; }
+      .row { grid-template-columns: minmax(180px,1fr) minmax(220px,1.3fr) .6fr .6fr .8fr .9fr; min-width: 900px; }
+      .table { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div>
+        <h1>机器人代理控制台</h1>
+        <div class="sub">多工作流编排与会话调试</div>
+      </div>
+      <nav class="nav-tabs">
+        <span class="nav-tab">聊天</span>
+        <span class="nav-tab">工作流</span>
+        <span class="nav-tab">执行</span>
+        <span class="nav-tab">模型</span>
+        <span class="nav-tab">API中心</span>
+        <span class="nav-tab active">知识库</span>
+      </nav>
+    </header>
+
+    <section class="workspace">
+      <aside class="side">
+        <div class="side-title">知识库管理</div>
+        <div class="side-item active">知识空间</div>
+        <div class="side-item">采集任务</div>
+        <div class="side-item">知识检索</div>
+      </aside>
+
+      <main class="main">
+        <div class="main-toolbar">
+          <div>
+            <div class="panel-title">知识库</div>
+            <h2>知识空间</h2>
+            <div class="sub">按业务范围管理知识，用户在会话或工作流中显式绑定后才参与检索。</div>
+          </div>
+          <div class="actions">
+            <button class="primary">+ 新增知识空间</button>
+            <button>刷新</button>
+          </div>
+        </div>
+
+        <div class="content">
+          <div class="stats">
+            <div class="stat"><div class="stat-label">空间总数</div><div class="stat-value">5</div></div>
+            <div class="stat"><div class="stat-label">知识总数</div><div class="stat-value">1,248</div></div>
+            <div class="stat"><div class="stat-label">文件总数</div><div class="stat-value">856</div></div>
+            <div class="stat"><div class="stat-label">采集中任务</div><div class="stat-value" style="color:#f97316">12</div></div>
+            <div class="stat"><div class="stat-label">采集失败任务</div><div class="stat-value" style="color:#ef4444">3</div></div>
+          </div>
+
+          <div class="filters">
+            <input value="搜索空间名称或描述" readonly>
+            <select><option>状态：全部</option></select>
+            <button>重置</button>
+          </div>
+
+          <div class="table">
+            <div class="row header">
+              <span>空间名称</span><span>描述</span><span>知识数</span><span>文件数</span><span>更新时间</span><span>操作</span>
+            </div>
+            <div class="row">
+              <span class="link">产品知识</span>
+              <span>产品相关资料、说明书、营销资料等</span>
+              <span>328</span>
+              <span>215</span>
+              <span>2026-06-14</span>
+              <span class="link">进入 编辑 删除</span>
+            </div>
+            <div class="row">
+              <span class="link">FAQ</span>
+              <span>常见问题及解答</span>
+              <span>256</span>
+              <span>210</span>
+              <span>2026-06-13</span>
+              <span class="link">进入 编辑 删除</span>
+            </div>
+            <div class="row">
+              <span class="link">企业制度</span>
+              <span>公司制度、流程、规范等</span>
+              <span>198</span>
+              <span>156</span>
+              <span>2026-06-10</span>
+              <span class="link">进入 编辑 删除</span>
+            </div>
+            <div class="row">
+              <span class="link">技术文档</span>
+              <span>技术方案、API 文档、故障处理</span>
+              <span>276</span>
+              <span>210</span>
+              <span>2026-06-08</span>
+              <span class="link">进入 编辑 删除</span>
+            </div>
+            <div class="row">
+              <span class="link">培训资料</span>
+              <span>内部培训资料</span>
+              <span>190</span>
+              <span>65</span>
+              <span>2026-06-05</span>
+              <span class="link">进入 编辑 删除</span>
+            </div>
+            <div class="footer">
+              <span>共 5 条</span>
+              <span>上一页　1　下一页　10 条/页</span>
+            </div>
+          </div>
+        </div>
+      </main>
+    </section>
+  </div>
+</body>
+</html>

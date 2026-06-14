@@ -181,6 +181,62 @@ public class UnifiedModelService {
         );
     }
 
+    public UnifiedModelResult invokeDirectEmbedding(
+            String providerType,
+            String baseUrl,
+            String apiKey,
+            String modelName,
+            Map<String, ?> options
+    ) {
+        long startedAt = System.currentTimeMillis();
+        LlmProviderConfig provider = new LlmProviderConfig();
+        provider.setProviderType(required(providerType, "provider"));
+        provider.setBaseUrl(required(baseUrl, "base_url").replaceAll("/+$", ""));
+        provider.setApiKeySecretRef(required(apiKey, "api_key"));
+        provider.setEnabled(true);
+
+        Map<String, Object> effectiveOptions = new LinkedHashMap<>();
+        if (options != null) {
+            effectiveOptions.putAll(options);
+        }
+        int timeoutSec = integerValue(effectiveOptions.get("timeout_sec")) == null
+                ? 30
+                : Math.max(5, integerValue(effectiveOptions.get("timeout_sec")));
+        ProviderRequest providerRequest = buildEmbeddingRequest(
+                provider,
+                required(modelName, "model_name"),
+                effectiveOptions
+        );
+        log.info(
+                "model.invoke.request mode=direct-embedding providerType={} modelName={} timeoutSec={} optionKeys={}",
+                providerType,
+                modelName,
+                timeoutSec,
+                effectiveOptions.keySet()
+        );
+        Map<String, Object> payload = postForMap(providerRequest, timeoutSec);
+        List<List<Double>> vectors = extractEmbeddingVectors(payload);
+        Map<String, Object> usage = extractUsage(resolveProviderProtocol(normalizeProviderType(provider.getProviderType())), payload);
+        String text = summarizeEmbeddingResponse(vectors);
+        log.info(
+                "model.invoke.completed mode=direct-embedding providerType={} modelName={} durationMs={} vectorCount={} dimension={} usageKeys={}",
+                providerType,
+                modelName,
+                System.currentTimeMillis() - startedAt,
+                vectors.size(),
+                vectors.isEmpty() ? 0 : vectors.get(0).size(),
+                usage.keySet()
+        );
+        return new UnifiedModelResult(
+                "draft-" + normalizeProviderType(providerType),
+                "draft-provider",
+                modelName,
+                text,
+                usage,
+                payload
+        );
+    }
+
     public int validateProviderConnection(LlmProviderConfig provider, String modelCode, Map<String, Object> requestBodyOverride) {
         long startedAt = System.currentTimeMillis();
         String providerType = normalizeProviderType(required(provider.getProviderType(), "provider_type"));
@@ -340,6 +396,34 @@ public class UnifiedModelService {
                 probeHeaders(providerProtocol, headers, apiKey),
                 defaultProbeBody(providerProtocol, modelCode)
         );
+    }
+
+    private ProviderRequest buildEmbeddingRequest(
+            LlmProviderConfig provider,
+            String modelCode,
+            Map<String, Object> options
+    ) {
+        String baseUrl = normalizedBaseUrl(provider);
+        Map<String, String> headers = buildHeaders(provider);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", modelCode);
+        body.put("input", normalizeEmbeddingInput(options));
+
+        Object encodingFormat = options.get("encoding_format");
+        if (encodingFormat != null) {
+            body.put("encoding_format", encodingFormat);
+        }
+        Object dimensions = firstNonNull(options.get("dimensions"), options.get("embedding_dimension"));
+        Integer parsedDimensions = integerValue(dimensions);
+        if (parsedDimensions != null) {
+            body.put("dimensions", parsedDimensions);
+        }
+        applyAdditionalBodyOptions(body, options, Set.of(
+                "model", "input", "encoding_format", "dimensions", "embedding_dimension", "timeout_sec",
+                "message", "messages", "include_messages", "single_input_as_string",
+                "temperature", "top_p", "max_tokens", "max_output_tokens", "stream", "response_format"
+        ));
+        return new ProviderRequest(joinUrl(baseUrl, "/embeddings"), headers, body);
     }
 
     private Map<String, Object> postForMap(ProviderRequest providerRequest, int timeoutSec) {
@@ -650,6 +734,25 @@ public class UnifiedModelService {
         return normalized;
     }
 
+    private Object normalizeEmbeddingInput(Map<String, Object> options) {
+        if (options == null || options.isEmpty()) {
+            return "ping";
+        }
+        Object input = options.get("input");
+        if (input != null) {
+            return input;
+        }
+        Object messages = options.get("messages");
+        if (messages instanceof List<?> list && !list.isEmpty()) {
+            return flattenArbitraryMessages(list);
+        }
+        Object message = options.get("message");
+        if (message != null) {
+            return message;
+        }
+        return "ping";
+    }
+
     private Map<String, Object> mergeOptions(Map<String, Object> defaults, Map<String, Object> overrides) {
         Map<String, Object> merged = new LinkedHashMap<>();
         if (defaults != null) {
@@ -659,6 +762,18 @@ public class UnifiedModelService {
             merged.putAll(overrides);
         }
         return merged;
+    }
+
+    private Object firstNonNull(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private void applyAdditionalBodyOptions(Map<String, Object> body, Map<String, Object> options, Set<String> protectedKeys) {
@@ -759,6 +874,44 @@ public class UnifiedModelService {
             }
         }
         return String.join("\n", parts);
+    }
+
+    private List<List<Double>> extractEmbeddingVectors(Map<String, Object> payload) {
+        Object data = payload.get("data");
+        if (!(data instanceof List<?> list) || list.isEmpty()) {
+            throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+        }
+        List<List<Double>> vectors = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) {
+                throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+            }
+            Object embedding = map.get("embedding");
+            if (!(embedding instanceof List<?> embeddingList) || embeddingList.isEmpty()) {
+                throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+            }
+            List<Double> vector = new ArrayList<>();
+            for (Object value : embeddingList) {
+                double parsed = decimalValue(value, Double.NaN);
+                if (Double.isNaN(parsed)) {
+                    throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+                }
+                vector.add(parsed);
+            }
+            vectors.add(vector);
+        }
+        return vectors;
+    }
+
+    private String summarizeEmbeddingResponse(List<List<Double>> vectors) {
+        if (vectors == null || vectors.isEmpty()) {
+            throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+        }
+        int dimension = vectors.get(0).size();
+        if (dimension <= 0) {
+            throw stableError("PROVIDER_RESPONSE_INVALID", "Provider returned invalid embedding response");
+        }
+        return "Embedding call succeeded: " + vectors.size() + " vector(s), dimension " + dimension;
     }
 
     private String flattenArbitraryMessages(List<?> messages) {

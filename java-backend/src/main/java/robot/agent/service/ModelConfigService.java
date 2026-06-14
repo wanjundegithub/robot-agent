@@ -483,21 +483,66 @@ public class ModelConfigService {
 
     public Map<String, Object> testSimpleModelConnection(String userId, UpsertModelRecordRequest request) {
         // requireAdmin(userId, "model.record.test_chat");
-        UnifiedModelResult result = unifiedModelService.invokeDirectChat(
-                required(firstNonBlank(request.getProvider(), request.getProviderCode()), "provider"),
-                required(request.getBaseUrl(), "base_url").replaceAll("/+$", ""),
-                required(request.getApiKey(), "api_key"),
-                required(request.getModelName(), "model_name"),
-                List.of(Map.of("role", "user", "content", "ping")),
-                objectToMap(request.getDefaultOptions())
-        );
+        String providerType = required(firstNonBlank(request.getProvider(), request.getProviderCode()), "provider");
+        String baseUrl = required(request.getBaseUrl(), "base_url").replaceAll("/+$", "");
+        String apiKey = required(request.getApiKey(), "api_key");
+        String modelName = required(request.getModelName(), "model_name");
+        Map<String, Object> defaultOptions = objectToMap(request.getDefaultOptions());
+        boolean embeddingModel = isEmbeddingModel(modelName, baseUrl, defaultOptions);
+        UnifiedModelResult result = embeddingModel
+                ? unifiedModelService.invokeDirectEmbedding(
+                        providerType,
+                        baseUrl,
+                        apiKey,
+                        modelName,
+                        defaultOptions
+                )
+                : unifiedModelService.invokeDirectChat(
+                        providerType,
+                        baseUrl,
+                        apiKey,
+                        modelName,
+                        List.of(Map.of("role", "user", "content", "ping")),
+                        defaultOptions
+                );
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("ok", true);
-        response.put("provider", request.getProvider());
-        response.put("model_name", request.getModelName());
+        response.put("provider", providerType);
+        response.put("model_name", modelName);
+        response.put("model_type", embeddingModel ? "embedding" : "chat");
         response.put("answer", result.text());
         response.put("usage", result.usage());
         return response;
+    }
+
+    private boolean isEmbeddingModel(String modelName, String baseUrl, Map<String, Object> defaultOptions) {
+        String normalizedModelName = blankToNull(modelName);
+        String normalizedBaseUrl = blankToNull(baseUrl);
+        if (normalizedModelName != null && normalizedModelName.toLowerCase(Locale.ROOT).contains("embedding")) {
+            return true;
+        }
+        if (normalizedBaseUrl != null && normalizedBaseUrl.toLowerCase(Locale.ROOT).contains("embeddings")) {
+            return true;
+        }
+        if (defaultOptions != null) {
+            Object input = defaultOptions.get("input");
+            if (input != null) {
+                return true;
+            }
+            Object encodingFormat = defaultOptions.get("encoding_format");
+            if (encodingFormat != null) {
+                return true;
+            }
+            Object dimensions = defaultOptions.get("dimensions");
+            if (dimensions != null) {
+                return true;
+            }
+            Object embeddingDimension = defaultOptions.get("embedding_dimension");
+            if (embeddingDimension != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Map<String, LlmProviderConfig> loadProvidersByCode(List<LlmModelRecord> modelRecords) {

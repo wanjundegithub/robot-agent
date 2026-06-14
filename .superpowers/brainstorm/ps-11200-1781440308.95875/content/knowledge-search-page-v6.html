@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>知识检索页</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #0f172a;
+      background: radial-gradient(circle at top, #e2e8f0 0%, #f8fafc 45%, #ffffff 100%);
+    }
+    .shell { min-height: 100vh; display: flex; flex-direction: column; padding: 24px; gap: 20px; }
+    .app-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,.9);
+      border: 1px solid rgba(148,163,184,.25);
+      border-radius: 18px;
+      padding: 18px 22px;
+      box-shadow: 0 12px 30px rgba(15,23,42,.08);
+      backdrop-filter: blur(12px);
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
+    h2 { margin: 0; font-size: 20px; }
+    h3 { margin: 0; font-size: 15px; }
+    .sub { margin-top: 4px; font-size: 14px; color: #64748b; }
+    .nav-tabs { display: flex; gap: 8px; align-items: center; }
+    .nav-tab {
+      border-radius: 999px;
+      border: 1px solid rgba(148,163,184,.35);
+      background: rgba(255,255,255,.72);
+      color: #475569;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .nav-tab.active { background: #0f172a; color: white; border-color: #0f172a; }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+    }
+    .side, .main, .summary, .hit-detail {
+      min-height: 0;
+      border: 1px solid rgba(148,163,184,.3);
+      border-radius: 18px;
+      background: rgba(255,255,255,.95);
+      box-shadow: 0 18px 40px rgba(15,23,42,.08);
+    }
+    .side { display: flex; flex-direction: column; padding: 14px; }
+    .side-title, .panel-title {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      letter-spacing: .08em;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #64748b;
+    }
+    .side-title { padding: 6px 8px 12px; }
+    .panel-title { margin-bottom: 8px; }
+    .side-item {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .side-item.active { background: #0f172a; color: white; }
+    .search-layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(400px, .95fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+    }
+    .main { grid-row: 1 / span 2; display: flex; flex-direction: column; overflow: hidden; }
+    .summary, .hit-detail { display: flex; flex-direction: column; overflow: hidden; }
+    .main-toolbar {
+      flex: 0 0 auto;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(148,163,184,.22);
+    }
+    .content {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 18px 20px 20px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .search-box {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 132px;
+      gap: 10px;
+    }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid rgba(148,163,184,.42);
+      border-radius: 12px;
+      background: #f8fafc;
+      color: #0f172a;
+      padding: 10px 12px;
+      font-size: 13px;
+      outline: none;
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(190px, 1fr) minmax(160px, .8fr) 120px;
+      gap: 10px;
+    }
+    button {
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid rgba(148,163,184,.45);
+      background: rgba(255,255,255,.75);
+      color: #475569;
+    }
+    .primary { border-color: #0f172a; background: #0f172a; color: white; }
+    .result-list { display: grid; gap: 12px; }
+    .result {
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      background: white;
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .result-head { display: flex; justify-content: space-between; gap: 12px; }
+    .score {
+      display: inline-flex;
+      align-items: center;
+      height: 26px;
+      border-radius: 999px;
+      background: #dcfce7;
+      color: #15803d;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .link { color: #2563eb; font-weight: 700; }
+    .muted { color: #64748b; font-size: 12px; }
+    .snippet {
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.65;
+      background: #f8fafc;
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .summary-head, .detail-head {
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(148,163,184,.22);
+    }
+    .summary-body, .detail-body { overflow: auto; padding: 18px 20px 20px; display: grid; gap: 14px; }
+    .answer {
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      background: #f8fafc;
+      padding: 14px;
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.75;
+    }
+    .citation {
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: 14px;
+      background: white;
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 8px 12px;
+      color: #475569;
+      font-size: 13px;
+    }
+    .kv span:nth-child(odd) { color: #64748b; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    @media (max-width: 1180px) {
+      .workspace, .search-layout { grid-template-columns: 1fr; }
+      .search-layout { grid-template-rows: auto; }
+      .main { grid-row: auto; }
+      .side { flex-direction: row; overflow-x: auto; }
+      .side-title { display: none; }
+      .filters, .search-box { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div>
+        <h1>机器人代理控制台</h1>
+        <div class="sub">多工作流编排与会话调试</div>
+      </div>
+      <nav class="nav-tabs">
+        <span class="nav-tab">聊天</span>
+        <span class="nav-tab">工作流</span>
+        <span class="nav-tab">执行</span>
+        <span class="nav-tab">模型</span>
+        <span class="nav-tab">API中心</span>
+        <span class="nav-tab active">知识库</span>
+      </nav>
+    </header>
+
+    <section class="workspace">
+      <aside class="side">
+        <div class="side-title">知识库管理</div>
+        <div class="side-item">知识空间</div>
+        <div class="side-item">采集任务</div>
+        <div class="side-item active">知识检索</div>
+      </aside>
+
+      <section class="search-layout">
+        <main class="main">
+          <div class="main-toolbar">
+            <div class="panel-title">知识库</div>
+            <h2>知识检索</h2>
+            <div class="sub">单独查询知识空间，查看命中片段、命中详情和总结答案。</div>
+          </div>
+
+          <div class="content">
+            <div class="search-box">
+              <input value="请输入问题，例如：产品保修期多久？" readonly>
+              <button class="primary">检索</button>
+            </div>
+            <div class="filters">
+              <select><option>检索范围：产品知识、FAQ</option></select>
+              <select><option>知识类型：全部</option></select>
+              <select><option>Top K：5</option></select>
+            </div>
+            <div class="result-list">
+              <div class="result">
+                <div class="result-head">
+                  <div>
+                    <div class="link">产品手册.pdf <span class="muted">/ 产品知识</span></div>
+                    <div class="muted">来源页码：第 15 页 · 命中方式：向量 + 关键词</div>
+                  </div>
+                  <span class="score">0.96</span>
+                </div>
+                <div class="snippet">保修期为自购买之日起一年。在保修期内，如因产品本身质量问题导致故障，我们将提供免费的维修或更换服务。</div>
+              </div>
+              <div class="result">
+                <div class="result-head">
+                  <div>
+                    <div class="link">售后 FAQ <span class="muted">/ FAQ</span></div>
+                    <div class="muted">来源段落：售后政策 · 命中方式：向量</div>
+                  </div>
+                  <span class="score">0.91</span>
+                </div>
+                <div class="snippet">若在保修期内出现非人为损坏，可联系售后申请维修，具体以售后审核结果为准。</div>
+              </div>
+              <div class="result">
+                <div class="result-head">
+                  <div>
+                    <div class="link">产品介绍 <span class="muted">/ 产品知识</span></div>
+                    <div class="muted">来源段落：服务承诺 · 命中方式：关键词</div>
+                  </div>
+                  <span class="score">0.78</span>
+                </div>
+                <div class="snippet">产品服务包含售前咨询、交付培训和售后支持，具体服务期限依据合同和产品保修条款执行。</div>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="summary">
+          <div class="summary-head">
+            <div class="panel-title">总结答案</div>
+            <h3>基于命中知识生成</h3>
+          </div>
+          <div class="summary-body">
+            <div class="answer">根据当前绑定的知识空间，产品保修期通常为自购买之日起一年。若在保修期内出现非人为造成的质量问题，可申请免费维修或更换。该结论主要来自产品手册和售后 FAQ。</div>
+            <div class="citation">
+              <strong>引用 1：产品手册.pdf / 第 15 页</strong>
+              <span class="muted">相似度 0.96，说明了保修期和免费维修/更换条件。</span>
+            </div>
+            <div class="citation">
+              <strong>引用 2：售后 FAQ / 售后政策</strong>
+              <span class="muted">相似度 0.91，补充了售后申请路径和审核规则。</span>
+            </div>
+          </div>
+        </aside>
+
+        <aside class="hit-detail">
+          <div class="detail-head">
+            <div class="panel-title">命中详情</div>
+            <h3>产品手册.pdf</h3>
+          </div>
+          <div class="detail-body">
+            <div class="kv">
+              <span>知识空间</span><span>产品知识</span>
+              <span>来源</span><span>产品手册.pdf</span>
+              <span>页码</span><span>第 15 页</span>
+              <span>相关度</span><span>0.96</span>
+              <span>命中内容</span><span>保修期为自购买之日起一年。在保修期内，如因产品本身质量问题导致故障，我们将提供免费的维修或更换服务。</span>
+            </div>
+            <div class="actions">
+              <button>查看知识详情</button>
+              <button>查看原文片段</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </section>
+  </div>
+</body>
+</html>

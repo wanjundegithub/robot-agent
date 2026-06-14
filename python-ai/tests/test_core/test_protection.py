@@ -77,8 +77,8 @@ def test_tool_confirmation_gate_allows_confirmed_high_risk_tool():
 
 
 def test_vector_access_optimizer_builds_stable_plan_and_cache():
-    first = vector_access_optimizer.plan("flight_policy_kb", "1.0.0", "退票规则")
-    second = vector_access_optimizer.plan("flight_policy_kb", "1.0.0", "退票规则")
+    first = vector_access_optimizer.plan("knowledge-demo", "1.0.0", "退票规则")
+    second = vector_access_optimizer.plan("knowledge-demo", "1.0.0", "退票规则")
 
     vector_access_optimizer.put_cached(first.cache_key, [{"content": "cached"}])
 

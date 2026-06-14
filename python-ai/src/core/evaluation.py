@@ -6,18 +6,6 @@ from typing import Dict, Iterable, List
 from .knowledge_store import get_knowledge_store
 
 
-DEFAULT_RAG_DATASET = [
-    {
-        "query": "航班退票政策是什么",
-        "expected_terms": ["退票", "手续费"],
-    },
-    {
-        "query": "航班改签规则是什么",
-        "expected_terms": ["改签", "航班"],
-    },
-]
-
-
 @dataclass
 class RagEvaluationItemResult:
     query: str
@@ -29,7 +17,7 @@ class RagEvaluationItemResult:
 
 class RagEvaluator:
     def evaluate_dataset(self, dataset: Iterable[Dict[str, object]] | None = None) -> Dict[str, object]:
-        items = list(dataset or DEFAULT_RAG_DATASET)
+        items = list(dataset or [])
         results = [self.evaluate_query(item["query"], item.get("expected_terms", [])) for item in items]
         total = len(results)
         hit_rate = sum(1 for result in results if result.hit) / total if total else 0.0
@@ -53,7 +41,7 @@ class RagEvaluator:
     def evaluate_query(self, query: str, expected_terms: Iterable[str]) -> RagEvaluationItemResult:
         expected_terms_list = list(expected_terms)
         documents = get_knowledge_store().search(
-            kb_code="flight_policy_kb",
+            kb_code="knowledge-demo",
             kb_version="1.0.0",
             query=query,
             retrieval_mode="hybrid",

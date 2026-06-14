@@ -170,6 +170,45 @@ class ModelConfigServiceTest {
         );
     }
 
+    @Test
+    void testSimpleModelConnectionRoutesEmbeddingDraftToDirectEmbedding() {
+        UpsertModelRecordRequest request = new UpsertModelRecordRequest();
+        request.setCustomModelName("Qwen/Qwen3-Embedding-8B");
+        request.setProvider("custom");
+        request.setModelName("Qwen/Qwen3-Embedding-8B");
+        request.setApiKey("test-secret");
+        request.setBaseUrl("https://api-inference.modelscope.cn/v1/embeddings");
+        request.setDefaultOptions(Map.of("input", "hello", "encoding_format", "float"));
+        when(unifiedModelService.invokeDirectEmbedding(
+                eq("custom"),
+                eq("https://api-inference.modelscope.cn/v1/embeddings"),
+                eq("test-secret"),
+                eq("Qwen/Qwen3-Embedding-8B"),
+                any()
+        )).thenReturn(new UnifiedModelResult(
+                "draft-custom",
+                "draft-provider",
+                "Qwen/Qwen3-Embedding-8B",
+                "Embedding call succeeded: 1 vector(s), dimension 3",
+                Map.of("total_tokens", 2),
+                Map.of()
+        ));
+
+        Map<String, Object> response = modelConfigService.testSimpleModelConnection("demo-admin", request);
+
+        assertThat(response).containsEntry("ok", true);
+        assertThat(response).containsEntry("model_type", "embedding");
+        assertThat(response).containsEntry("answer", "Embedding call succeeded: 1 vector(s), dimension 3");
+        verify(unifiedModelService).invokeDirectEmbedding(
+                eq("custom"),
+                eq("https://api-inference.modelscope.cn/v1/embeddings"),
+                eq("test-secret"),
+                eq("Qwen/Qwen3-Embedding-8B"),
+                eq(Map.of("input", "hello", "encoding_format", "float"))
+        );
+        verify(unifiedModelService, never()).invokeDirectChat(any(), any(), any(), any(), any(), any());
+    }
+
     private LlmModelRecord modelRecord(String modelCode, String providerCode) {
         LlmModelRecord modelRecord = new LlmModelRecord();
         modelRecord.setModelCode(modelCode);

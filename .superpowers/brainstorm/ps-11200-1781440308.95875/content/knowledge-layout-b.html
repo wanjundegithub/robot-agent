@@ -1,0 +1,49 @@
+<h2>B 方案页面蓝图</h2>
+<p class="subtitle">保持现有控制台风格：顶部全局导航 + 单页内容面板；知识中心内部使用左侧二级导航。</p>
+
+<div class="mockup">
+  <div class="mockup-header">知识库中心 / 首页</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:170px 1fr;gap:16px;min-height:430px">
+      <div class="mock-sidebar">
+        <div style="font-weight:700;margin-bottom:14px">知识库管理</div>
+        <div style="padding:10px;border-radius:10px;background:#2563eb;color:white;margin-bottom:8px">知识空间</div>
+        <div style="padding:10px;border-radius:10px;background:#f8fafc;margin-bottom:8px">采集任务</div>
+        <div style="padding:10px;border-radius:10px;background:#f8fafc">知识检索</div>
+      </div>
+      <div class="mock-content">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div>
+            <h3 style="margin:0">知识空间</h3>
+            <p style="margin:4px 0 0;color:#64748b;font-size:13px">空间是知识绑定和检索授权的最小业务范围</p>
+          </div>
+          <button class="mock-button">+ 新建知识空间</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+          <div class="placeholder">空间总数<br><strong>5</strong></div>
+          <div class="placeholder">知识总数<br><strong>1,248</strong></div>
+          <div class="placeholder">文件总数<br><strong>856</strong></div>
+          <div class="placeholder">采集中<br><strong>12</strong></div>
+          <div class="placeholder">失败任务<br><strong>3</strong></div>
+        </div>
+        <div class="mock-input">搜索空间名称或描述</div>
+        <div style="margin-top:12px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+          <div style="display:grid;grid-template-columns:1.1fr 1.8fr .7fr .7fr .8fr .8fr;padding:10px;background:#f8fafc;font-size:12px;color:#64748b;font-weight:700">
+            <span>空间名称</span><span>描述</span><span>知识数</span><span>文件数</span><span>更新时间</span><span>操作</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1.1fr 1.8fr .7fr .7fr .8fr .8fr;padding:10px;border-top:1px solid #e2e8f0;font-size:12px">
+            <span style="color:#2563eb;font-weight:700">产品知识</span><span>产品相关资料、说明书、营销资料等</span><span>328</span><span>215</span><span>2026-06-14</span><span style="color:#2563eb">进入 编辑 删除</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1.1fr 1.8fr .7fr .7fr .8fr .8fr;padding:10px;border-top:1px solid #e2e8f0;font-size:12px">
+            <span style="color:#2563eb;font-weight:700">FAQ</span><span>常见问题及解答</span><span>256</span><span>210</span><span>2026-06-13</span><span style="color:#2563eb">进入 编辑 删除</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>核心页面</h3>
+  <p>知识空间：空间概览和入口。知识列表：上传、编辑、查看内容。采集任务：排查解析/分块/入库状态。知识检索：单独查询知识库并查看命中与总结。</p>
+</div>
