@@ -372,6 +372,7 @@ export async function saveModelRecord(
     model_name: string
     api_key: string
     base_url: string
+    default_options?: Record<string, unknown>
   },
   currentUserId: string,
   existingId?: number
@@ -413,6 +414,7 @@ export async function testModelRecordConnection(
     model_name: string
     api_key: string
     base_url: string
+    default_options?: Record<string, unknown>
   },
   currentUserId: string
 ): Promise<Record<string, unknown>> {

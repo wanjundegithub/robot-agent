@@ -47,7 +47,46 @@ async def test_start_node_extracts_declared_empty_variables_with_metadata(monkey
     assert [field["name"] for field in prompt_payload["start_node"]["input_variables"]] == ["city"]
     assert prompt_payload["start_node"]["input_variables"][0]["current_value"] == ""
     assert prompt_payload["start_node"]["known_variables"]["priority"] == context.get_variable("priority")
-    assert captured["max_tokens"] == 65535
+    assert captured["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_start_node_uses_configured_slot_extraction_system_prompt(monkeypatch):
+    captured = {}
+
+    async def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({"variables": {"product_name": "iPhone 15"}}, ensure_ascii=False)
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_configured_prompt",
+        session_id="session_start_configured_prompt",
+        workflow_code="product",
+        workflow_version="v1",
+        workflow_config={
+            "llm_defaults": {"model_code": "slot-model"},
+            "system_prompts": {"slot_extraction": "配置中心提槽提示词"},
+        },
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "我要查 iPhone 15")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "收集产品名称。",
+            "initial_variables": {"product_name": ""},
+            "input_variables": [
+                {"name": "product_name", "type": "string", "description": "产品名称", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "completed"
+    assert captured["system_prompt"] == "配置中心提槽提示词"
 
 
 @pytest.mark.asyncio
@@ -228,6 +267,41 @@ async def test_start_node_keeps_slot_suspended_when_model_call_fails(monkeypatch
     ]
     assert result["message_deltas"] == ["请提供Product name。"]
     assert context.get_variable("product_name") == ""
+
+
+@pytest.mark.asyncio
+async def test_start_node_uses_resume_text_for_single_string_slot_when_model_call_fails(monkeypatch):
+    async def fake_completion(**_kwargs):
+        raise RuntimeError("Invalid provider payload")
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    context = ExecutionContext(
+        execution_id="exec_start_resume_text",
+        session_id="session_start_resume_text",
+        workflow_code="product",
+        workflow_version="v1",
+        workflow_config={"llm_defaults": {"model_code": "slot-model"}},
+        provider_configs={"test-provider": {"provider_code": "test-provider"}},
+        model_records={"slot-model": {"model_code": "slot-model", "provider_code": "test-provider"}},
+    )
+    context.add_execution_variable("user_message", "iPhone 15")
+    context.add_execution_variable("_resume_node_id", "start")
+    context.add_execution_variable("_resume_reason", "start_input_variables_missing")
+
+    node = StartNode("start", {
+        "config": {
+            "prompt": "Collect product name.",
+            "initial_variables": {"product_name": ""},
+            "input_variables": [
+                {"name": "product_name", "type": "String", "description": "Product name", "default": ""},
+            ],
+        }
+    })
+
+    result = await node.execute(context)
+
+    assert result["status"] == "completed"
+    assert context.get_variable("product_name") == "iPhone 15"
 
 
 @pytest.mark.asyncio

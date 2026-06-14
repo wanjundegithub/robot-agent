@@ -810,6 +810,10 @@ class WorkflowScheduler:
         })
         runtime.prepare_wait()
         form_data = await runtime.wait_for_resume()
+        form_data = dict(form_data or {})
+        if not is_form_request:
+            form_data["_resume_node_id"] = node_def["id"]
+            form_data["_resume_reason"] = wait_reason
         context.add_execution_variables(form_data)
         if state_machine.can_transition(TransitionEvent.RESUME):
             state_machine.transition(TransitionEvent.RESUME)

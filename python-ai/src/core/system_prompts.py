@@ -28,6 +28,17 @@ DEFAULT_WORKFLOW_WELCOME_SYSTEM_PROMPT = (
     "如果没有可复用的配置话术或无法确认欢迎语符合流程定义，应返回 should_greet=false。"
 )
 
+DEFAULT_SLOT_EXTRACTION_SYSTEM_PROMPT = (
+    "你是工作流开始节点的槽位提取器，只返回 JSON。"
+    "只能处理 start_node.input_variables 中声明的变量。"
+    "若能从 user_message 提取缺失变量，则写入 variables；无法提取则放入 missing_fields。"
+    "已有非空 current_value 的变量只作为上下文传递，不要覆盖，也不要追问。"
+    "不要生成流程外变量、办理步骤、成功承诺或用户可见话术。"
+    "Return exactly one valid JSON object only. "
+    "The root object must be {\"variables\": {...}, \"missing_fields\": [...]}. "
+    "Do not output Markdown, comments, duplicate JSON objects, trailing commas, or any text outside JSON. "
+)
+
 
 def system_prompts_from_workflow_config(workflow_config: Mapping[str, Any] | None) -> Dict[str, Any]:
     if not isinstance(workflow_config, Mapping):

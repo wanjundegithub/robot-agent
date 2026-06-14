@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
@@ -254,6 +255,9 @@ public class UnifiedModelService {
                 if (!responseFormat.isEmpty()) {
                     body.put("response_format", responseFormat);
                 }
+                applyAdditionalBodyOptions(body, options, Set.of(
+                        "model", "messages", "temperature", "top_p", "max_tokens", "response_format", "timeout_sec"
+                ));
                 yield new ProviderRequest(joinUrl(baseUrl, "/chat/completions"), headers, body);
             }
             case "doubao" -> {
@@ -270,6 +274,10 @@ public class UnifiedModelService {
                 if (!responseFormat.isEmpty()) {
                     body.put("text", Map.of("format", responseFormat));
                 }
+                applyAdditionalBodyOptions(body, options, Set.of(
+                        "model", "instructions", "input", "temperature", "top_p", "max_tokens",
+                        "max_output_tokens", "response_format", "timeout_sec"
+                ));
                 yield new ProviderRequest(joinUrl(baseUrl, "/responses"), headers, body);
             }
             case "claude" -> {
@@ -283,6 +291,9 @@ public class UnifiedModelService {
                 body.put("temperature", temperature);
                 body.put("top_p", topP);
                 body.put("max_tokens", maxTokens);
+                applyAdditionalBodyOptions(body, options, Set.of(
+                        "model", "system", "messages", "temperature", "top_p", "max_tokens", "timeout_sec"
+                ));
                 yield new ProviderRequest(joinUrl(baseUrl, "/messages"), headers, body);
             }
             case "gemini" -> {
@@ -296,6 +307,9 @@ public class UnifiedModelService {
                         "temperature", temperature,
                         "topP", topP,
                         "maxOutputTokens", maxTokens
+                ));
+                applyAdditionalBodyOptions(body, options, Set.of(
+                        "system_instruction", "contents", "generationConfig", "response_format", "timeout_sec"
                 ));
                 String url = joinUrl(baseUrl, "/models/" + urlEncode(modelCode) + ":generateContent")
                         + "?key=" + urlEncode(required(apiKey, "api_key_secret_ref"));
@@ -330,6 +344,9 @@ public class UnifiedModelService {
 
     private Map<String, Object> postForMap(ProviderRequest providerRequest, int timeoutSec) {
         long startedAt = System.currentTimeMillis();
+        if (isStreamingRequest(providerRequest.body())) {
+            return postStreamForMap(providerRequest, timeoutSec, startedAt);
+        }
         try {
             String endpoint = sanitizeUrlForLog(providerRequest.url());
             log.debug("model.provider.request endpoint={} timeoutSec={} bodyKeys={}", endpoint, timeoutSec, providerRequest.body().keySet());
@@ -349,6 +366,36 @@ public class UnifiedModelService {
                     result.keySet()
             );
             return result;
+        } catch (WebClientResponseException exception) {
+            throw stableError("PROVIDER_REQUEST_FAILED", responseMessage(exception));
+        } catch (ResponseStatusException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw stableError("PROVIDER_REQUEST_FAILED", exception.getMessage());
+        }
+    }
+
+    private Map<String, Object> postStreamForMap(ProviderRequest providerRequest, int timeoutSec, long startedAt) {
+        try {
+            String endpoint = sanitizeUrlForLog(providerRequest.url());
+            log.debug("model.provider.stream.request endpoint={} timeoutSec={} bodyKeys={}", endpoint, timeoutSec, providerRequest.body().keySet());
+            String streamBody = webClient.post()
+                    .uri(providerRequest.url())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_JSON)
+                    .headers(headers -> providerRequest.headers().forEach(headers::set))
+                    .bodyValue(providerRequest.body())
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(Math.max(5, timeoutSec + 5)));
+            Map<String, Object> payload = openAiStreamToChatPayload(streamBody);
+            log.debug(
+                    "model.provider.stream.response endpoint={} durationMs={} answerLength={}",
+                    endpoint,
+                    System.currentTimeMillis() - startedAt,
+                    extractStreamAnswer(payload).length()
+            );
+            return payload;
         } catch (WebClientResponseException exception) {
             throw stableError("PROVIDER_REQUEST_FAILED", responseMessage(exception));
         } catch (ResponseStatusException exception) {
@@ -502,6 +549,93 @@ public class UnifiedModelService {
         return Map.of();
     }
 
+    private Map<String, Object> openAiStreamToChatPayload(String streamBody) {
+        StringBuilder answer = new StringBuilder();
+        Map<String, Object> usage = new LinkedHashMap<>();
+        if (streamBody != null && !streamBody.isBlank()) {
+            for (String item : streamDataItems(streamBody)) {
+                if ("[DONE]".equals(item)) {
+                    break;
+                }
+                try {
+                    JsonNode node = objectMapper.readTree(item);
+                    JsonNode usageNode = node.get("usage");
+                    if (usageNode != null && usageNode.isObject()) {
+                        usage = objectMapper.convertValue(usageNode, new TypeReference<Map<String, Object>>() {});
+                    }
+                    String delta = extractOpenAiStreamDelta(node);
+                    if (delta != null && !delta.isEmpty()) {
+                        answer.append(delta);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("choices", List.of(Map.of("message", Map.of("content", answer.toString()))));
+        if (!usage.isEmpty()) {
+            payload.put("usage", usage);
+        }
+        return payload;
+    }
+
+    private List<String> streamDataItems(String streamBody) {
+        List<String> items = new ArrayList<>();
+        String[] lines = streamBody.split("\\R");
+        for (String line : lines) {
+            String text = line == null ? "" : line.trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            if (text.startsWith("data:")) {
+                items.add(text.substring("data:".length()).trim());
+            } else if (text.startsWith("{") || "[DONE]".equals(text)) {
+                items.add(text);
+            }
+        }
+        return items;
+    }
+
+    private String extractOpenAiStreamDelta(JsonNode node) {
+        JsonNode choices = node.get("choices");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
+            return null;
+        }
+        JsonNode first = choices.get(0);
+        JsonNode delta = first.get("delta");
+        if (delta != null && delta.isObject()) {
+            JsonNode content = delta.get("content");
+            if (content != null && !content.isNull()) {
+                return content.asText();
+            }
+        }
+        JsonNode message = first.get("message");
+        if (message != null && message.isObject()) {
+            JsonNode content = message.get("content");
+            if (content != null && !content.isNull()) {
+                return content.asText();
+            }
+        }
+        return null;
+    }
+
+    private String extractStreamAnswer(Map<String, Object> payload) {
+        try {
+            Object choices = payload.get("choices");
+            if (choices instanceof List<?> list && !list.isEmpty()) {
+                Object first = list.get(0);
+                if (first instanceof Map<?, ?> choice) {
+                    Object message = choice.get("message");
+                    if (message instanceof Map<?, ?> messageMap && messageMap.get("content") != null) {
+                        return String.valueOf(messageMap.get("content"));
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
     private List<Map<String, Object>> normalizeMessages(List<? extends Map<String, ?>> messages) {
         if (messages == null || messages.isEmpty()) {
             return List.of(Map.of("role", "user", "content", "ping"));
@@ -525,6 +659,18 @@ public class UnifiedModelService {
             merged.putAll(overrides);
         }
         return merged;
+    }
+
+    private void applyAdditionalBodyOptions(Map<String, Object> body, Map<String, Object> options, Set<String> protectedKeys) {
+        if (options == null || options.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : options.entrySet()) {
+            if (entry.getKey() == null || protectedKeys.contains(entry.getKey()) || entry.getValue() == null) {
+                continue;
+            }
+            body.put(entry.getKey(), entry.getValue());
+        }
     }
 
     private Map<String, String> buildHeaders(LlmProviderConfig provider) {
@@ -654,6 +800,14 @@ public class UnifiedModelService {
             }
         }
         return result;
+    }
+
+    private boolean isStreamingRequest(Map<String, Object> body) {
+        Object stream = body.get("stream");
+        if (stream instanceof Boolean booleanValue) {
+            return booleanValue;
+        }
+        return stream != null && "true".equalsIgnoreCase(String.valueOf(stream).trim());
     }
 
     private String normalizedBaseUrl(LlmProviderConfig provider) {

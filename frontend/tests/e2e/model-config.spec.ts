@@ -7,6 +7,7 @@ type ModelConfig = {
   model_name: string
   api_key: string
   base_url: string
+  default_options?: Record<string, unknown>
   updated_at: string
 }
 
@@ -223,6 +224,7 @@ test.describe('简化后的模型配置页', () => {
     await expect(page.getByLabel('Model 名称（实际调用模型）')).toHaveAttribute('required', '')
     await expect(page.getByLabel('API Key（接口密钥）')).toHaveAttribute('required', '')
     await expect(page.getByLabel('Base URL（接口地址）')).toHaveAttribute('required', '')
+    await expect(page.getByLabel('请求参数 JSON')).toBeVisible()
 
     const sidebarBox = await page.getByTestId('model-config-sidebar').boundingBox()
     const listBox = await page.getByTestId('model-config-list').boundingBox()
@@ -249,12 +251,12 @@ test.describe('简化后的模型配置页', () => {
     await expect(page.getByText(/^已加载模型/)).toHaveCount(0)
     await expect(page.getByText(/^ID\s+\d+$/)).toHaveCount(0)
 
-    const baseUrlBox = await page.getByLabel('Base URL（接口地址）').boundingBox()
+    const defaultOptionsBox = await page.getByLabel('请求参数 JSON').boundingBox()
     const saveButtonBox = await page.getByTestId('model-config-save').boundingBox()
-    expect(baseUrlBox).not.toBeNull()
+    expect(defaultOptionsBox).not.toBeNull()
     expect(saveButtonBox).not.toBeNull()
-    expect(saveButtonBox?.y || 0).toBeGreaterThan((baseUrlBox?.y || 0) + (baseUrlBox?.height || 0))
-    expect(saveButtonBox?.y || 0).toBeLessThan((baseUrlBox?.y || 0) + (baseUrlBox?.height || 0) + 72)
+    expect(saveButtonBox?.y || 0).toBeGreaterThan((defaultOptionsBox?.y || 0) + (defaultOptionsBox?.height || 0))
+    expect(saveButtonBox?.y || 0).toBeLessThan((defaultOptionsBox?.y || 0) + (defaultOptionsBox?.height || 0) + 72)
 
     await page.getByLabel('自定义模型名').fill('通用对话模型-已编辑')
     await page.getByTestId('model-config-save').click()
@@ -266,16 +268,22 @@ test.describe('简化后的模型配置页', () => {
 
     await page.getByTestId('model-config-create').click()
     lastTestPayload = null
-    await page.getByLabel('供应商').selectOption('deepseek')
-    await page.getByLabel('Model 名称（实际调用模型）').fill('deepseek-chat')
-    await page.getByLabel('API Key（接口密钥）').fill('sk-deepseek-demo')
-    await page.getByLabel('Base URL（接口地址）').fill('https://api.deepseek.com/v1')
+    await page.getByLabel('供应商').selectOption('custom')
+    await page.getByLabel('Model 名称（实际调用模型）').fill('Qwen/Qwen3-8B')
+    await page.getByLabel('API Key（接口密钥）').fill('ms-modelscope-demo')
+    await page.getByLabel('Base URL（接口地址）').fill('https://api-inference.modelscope.cn/v1/chat/completions')
+    await page.getByLabel('请求参数 JSON').fill('{"stream":true,"enable_thinking":true}')
     await page.getByTestId('model-config-test-call').click()
     await expect(page.getByText('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')).toBeVisible()
     expect(lastTestPayload).toBeNull()
 
-    await page.getByLabel('自定义模型名').fill('结构化抽取模型')
+    await page.getByLabel('自定义模型名').fill('ModelScope Qwen3')
+    await page.getByTestId('model-config-test-call').click()
+    await expect(page.getByText('测试返回：connectivity ok')).toBeVisible()
+    expect(lastTestPayload?.default_options).toEqual({ stream: true, enable_thinking: true })
+
     await page.getByTestId('model-config-save').click()
-    await expect(page.getByText('结构化抽取模型')).toBeVisible()
+    await expect(page.getByText('ModelScope Qwen3')).toBeVisible()
+    expect(models[0].default_options).toEqual({ stream: true, enable_thinking: true })
   })
 })

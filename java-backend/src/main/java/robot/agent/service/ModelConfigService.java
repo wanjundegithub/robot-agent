@@ -447,7 +447,7 @@ public class ModelConfigService {
                 required(request.getApiKey(), "api_key"),
                 required(request.getModelName(), "model_name"),
                 List.of(Map.of("role", "user", "content", "ping")),
-                Map.of()
+                objectToMap(request.getDefaultOptions())
         );
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("ok", true);
@@ -588,9 +588,15 @@ public class ModelConfigService {
         modelRecord.setUpstreamModelCode(actualModelName);
         modelRecord.setApiKey(apiKey);
         modelRecord.setBaseUrl(baseUrl);
-        modelRecord.setCapabilitiesJson(null);
-        modelRecord.setDefaultSystemPrompt(null);
-        modelRecord.setDefaultOptionsJson(null);
+        if (creating || request.getCapabilities() != null) {
+            modelRecord.setCapabilitiesJson(writeJson(request.getCapabilities()));
+        }
+        if (creating || request.getDefaultSystemPrompt() != null) {
+            modelRecord.setDefaultSystemPrompt(blankToNull(request.getDefaultSystemPrompt()));
+        }
+        if (creating || request.getDefaultOptions() != null) {
+            modelRecord.setDefaultOptionsJson(writeJson(request.getDefaultOptions()));
+        }
         modelRecord.setEnabled(true);
     }
 
@@ -657,6 +663,7 @@ public class ModelConfigService {
                 blankToNull(modelRecord.getBaseUrl()),
                 provider == null ? null : blankToNull(provider.getBaseUrl())
         ));
+        value.put("default_options", parseJson(modelRecord.getDefaultOptionsJson()));
         value.put("created_at", modelRecord.getCreatedAt());
         value.put("updated_at", modelRecord.getUpdatedAt());
         return value;
@@ -721,6 +728,36 @@ public class ModelConfigService {
             return objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
         } catch (Exception exception) {
             return new LinkedHashMap<>();
+        }
+    }
+
+    private Map<String, Object> objectToMap(Object value) {
+        if (value == null) {
+            return Map.of();
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    result.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return result;
+        }
+        try {
+            if (value instanceof String text) {
+                if (text.isBlank()) {
+                    return Map.of();
+                }
+                JsonNode node = objectMapper.readTree(text);
+                if (node.isTextual()) {
+                    node = objectMapper.readTree(node.asText());
+                }
+                return objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
+            }
+            return objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception exception) {
+            throw badRequest("Invalid default_options JSON payload");
         }
     }
 

@@ -102,6 +102,60 @@ async def test_execute_model_completion_calls_openai_compatible_provider():
 
 
 @pytest.mark.asyncio
+async def test_execute_model_completion_passes_custom_body_options_for_structured_openai_compatible_call():
+    provider_configs = {
+        "modelscope-prod": {
+            "provider_code": "modelscope-prod",
+            "provider_type": "custom",
+            "base_url": "https://api-inference.modelscope.cn/v1/chat/completions",
+            "api_key_secret_ref": "test-secret",
+        }
+    }
+    model_records = {
+        "qwen3-json": {
+            "model_code": "qwen3-json",
+            "provider_code": "modelscope-prod",
+            "upstream_model_code": "Qwen/Qwen3-8B",
+            "default_options": {
+                "stream": True,
+                "enable_thinking": False,
+                "max_tokens": 2048,
+                "timeout_sec": 10,
+            },
+        }
+    }
+
+    with patch("src.core.model_runtime.httpx.AsyncClient") as mock_client:
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "{\"ok\":true}"}}]
+        }
+        mock_response.raise_for_status.return_value = None
+
+        mock_instance = AsyncMock()
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_instance.__aexit__.return_value = None
+        mock_instance.post.return_value = mock_response
+        mock_client.return_value = mock_instance
+
+        result = await execute_model_completion(
+            model_code="qwen3-json",
+            provider_configs=provider_configs,
+            model_records=model_records,
+            system_prompt="Return JSON only.",
+            user_prompt="ping",
+            response_format={"type": "json_object"},
+        )
+
+    assert result == "{\"ok\":true}"
+    body = mock_instance.post.call_args.kwargs["json"]
+    assert body["max_tokens"] == 2048
+    assert body["enable_thinking"] is False
+    assert body["stream"] is False
+    assert body["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
 async def test_execute_model_completion_streams_openai_compatible_delta_chunks():
     provider_configs = {
         "openai-compatible-prod": {
@@ -616,7 +670,7 @@ async def test_classify_intent_with_model_code_sends_prompt_contract():
         )
 
     kwargs = mocked_completion.await_args.kwargs
-    assert kwargs["max_tokens"] == 512
+    assert kwargs["max_tokens"] == 2048
     assert "choose workflow_code only from provided candidate_workflows" in kwargs["system_prompt"].lower()
     assert "matched=false" in kwargs["system_prompt"].lower()
     assert "generate clarification_question" in kwargs["system_prompt"].lower()

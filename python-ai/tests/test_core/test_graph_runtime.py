@@ -9,6 +9,7 @@ from src.core.costing import BudgetAlert
 from src.core.protection import runtime_protection_manager
 from src.core.registry import ExecutionRegistry
 from src.core.scheduler import WorkflowScheduler
+from src.nodes.start import StartNode
 
 
 async def _collect_events(runtime):
@@ -209,6 +210,77 @@ async def test_v2_start_node_extracts_slot_from_chat_reply_after_wait(monkeypatc
     assert runtime.context.status == "completed"
     assert runtime.context.execution_variables["city"] == "上海"
     assert calls == ["帮我安排一下", "我的目的地是上海"]
+
+
+@pytest.mark.asyncio
+async def test_v2_start_node_marks_resume_context_for_slot_reply(monkeypatch):
+    captured_resume_context = {}
+
+    async def fake_completion(**_kwargs):
+        return json.dumps({"variables": {}, "missing_fields": ["city"]}, ensure_ascii=False)
+
+    monkeypatch.setattr("src.nodes.start.execute_model_completion", fake_completion)
+    registry = ExecutionRegistry()
+    scheduler = WorkflowScheduler()
+    workflow = {
+        "schema_version": "workflow-designer/v2",
+        "main_graph_id": "main",
+        "graphs": {
+            "main": {
+                "id": "main",
+                "entry_node_id": "start",
+                "nodes": {
+                    "start": {
+                        "id": "start",
+                        "type": "start",
+                        "config": {
+                            "prompt": "收集城市",
+                            "input_variables": [
+                                {"name": "city", "type": "string", "description": "城市", "default": ""},
+                            ],
+                            "model_code": "slot-model",
+                        },
+                    },
+                    "end": {"id": "end", "type": "end", "config": {}},
+                },
+                "edges": [{"id": "e1", "source": "start", "target": "end"}],
+            },
+        },
+    }
+
+    original_execute = StartNode.execute
+
+    async def wrapped_execute(self, context):
+        if context.get_variable("_resume_node_id"):
+            captured_resume_context.update({
+                "node_id": context.get_variable("_resume_node_id"),
+                "reason": context.get_variable("_resume_reason"),
+            })
+        return await original_execute(self, context)
+
+    monkeypatch.setattr(StartNode, "execute", wrapped_execute)
+    runtime = await registry.create_execution({
+        "execution_id": "exec-v2-start-resume-marker",
+        "session_id": "session-v2-start-resume-marker",
+        "workflow_code": "travel",
+        "workflow_version": "v1",
+        "workflow_definition": workflow,
+        "provider_configs": [{"provider_code": "test-provider"}],
+        "model_records": [{"model_code": "slot-model", "provider_code": "test-provider"}],
+        "input_variables": {"user_message": "帮我安排一下"},
+    })
+    run_task = asyncio.create_task(scheduler.run(runtime))
+    for _ in range(100):
+        if runtime.context.status == "waiting_user":
+            break
+        await asyncio.sleep(0.01)
+    runtime.resume({"user_message": "上海"})
+    await run_task
+
+    assert captured_resume_context == {
+        "node_id": "start",
+        "reason": "start_input_variables_missing",
+    }
 
 
 @pytest.mark.asyncio

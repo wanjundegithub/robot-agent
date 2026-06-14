@@ -25,6 +25,14 @@ class LocalConfigurationTest {
     }
 
     @Test
+    void applicationConfiguration_definesDefaultModelAtRobotRoot() throws IOException {
+        String applicationYaml = readProjectFile("src/main/resources/application.yml");
+
+        assertThat(applicationYaml).contains("\n  model:\n    default:\n");
+        assertThat(applicationYaml).doesNotContain("\n    robot:\n      model:\n");
+    }
+
+    @Test
     void buildConfiguration_doesNotPullNacosDependencies() throws IOException {
         String pomXml = readProjectFile("pom.xml");
 

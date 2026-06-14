@@ -13,6 +13,7 @@ type ModelFormState = {
   model_name: string
   api_key: string
   base_url: string
+  default_options: string
 }
 
 const providerOptions = ['openai', 'openai_compatible', 'doubao', 'gemini', 'claude', 'qwen', 'deepseek', 'custom']
@@ -23,6 +24,7 @@ const createEmptyForm = (): ModelFormState => ({
   model_name: '',
   api_key: '',
   base_url: '',
+  default_options: '',
 })
 
 const recordToForm = (record: ModelRecordConfig): ModelFormState => ({
@@ -32,6 +34,9 @@ const recordToForm = (record: ModelRecordConfig): ModelFormState => ({
   model_name: record.model_name,
   api_key: record.api_key,
   base_url: record.base_url,
+  default_options: record.default_options && Object.keys(record.default_options).length > 0
+    ? JSON.stringify(record.default_options, null, 2)
+    : '',
 })
 
 const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) => {
@@ -90,6 +95,22 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
         form.base_url.trim()
     )
 
+  const parseDefaultOptions = (): Record<string, unknown> | undefined => {
+    const text = form.default_options.trim()
+    if (!text) {
+      return undefined
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('请求参数 JSON 必须是对象')
+      }
+      return parsed as Record<string, unknown>
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : '请求参数 JSON 格式不正确')
+    }
+  }
+
   const handleSave = async () => {
     if (!isFormComplete()) {
       setStatus('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')
@@ -98,6 +119,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
     try {
       setIsSaving(true)
+      const defaultOptions = parseDefaultOptions()
       const saved = await saveModelRecord(
         {
           custom_model_name: form.custom_model_name.trim(),
@@ -105,6 +127,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
           model_name: form.model_name.trim(),
           api_key: form.api_key.trim(),
           base_url: form.base_url.trim(),
+          ...(defaultOptions ? { default_options: defaultOptions } : {}),
         },
         currentUserId,
         form.id
@@ -150,6 +173,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     }
     try {
       setIsTesting(true)
+      const defaultOptions = parseDefaultOptions()
       const result = await testModelRecordConnection(
         {
           custom_model_name: form.custom_model_name.trim(),
@@ -157,6 +181,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
           model_name: form.model_name.trim(),
           api_key: form.api_key.trim(),
           base_url: form.base_url.trim(),
+          ...(defaultOptions ? { default_options: defaultOptions } : {}),
         },
         currentUserId
       )
@@ -281,6 +306,20 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 onChange={(event) => setForm((current) => ({ ...current, base_url: event.target.value }))}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="default-options" className="block text-sm font-medium text-slate-700">
+                请求参数 JSON
+              </label>
+              <div className="text-xs text-slate-500">透传给上游模型接口的额外 JSON 参数。</div>
+              <textarea
+                id="default-options"
+                value={form.default_options}
+                onChange={(event) => setForm((current) => ({ ...current, default_options: event.target.value }))}
+                className="min-h-[96px] w-full resize-y rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs"
+                placeholder='{"stream":true,"enable_thinking":true}'
               />
             </div>
 

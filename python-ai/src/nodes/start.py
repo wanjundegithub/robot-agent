@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from .base import BaseNode
 from src.core.costing import cost_tracker, estimate_tokens
 from src.core.model_runtime import execute_model_completion
+from src.core.system_prompts import DEFAULT_SLOT_EXTRACTION_SYSTEM_PROMPT, resolve_system_prompt, system_prompts_from_workflow_config
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,13 @@ class StartNode(BaseNode):
                 extracted, metrics = {}, None
             for key, value in extracted.items():
                 if key in missing_before_extraction and not self._is_missing(value):
+                    context.add_execution_variable(key, value)
+
+        missing_before_resume_fallback = self._missing_input_variables(context)
+        if missing_before_resume_fallback:
+            resume_extracted = self._extract_variables_from_resume_text(context, missing_before_resume_fallback)
+            for key, value in resume_extracted.items():
+                if key in missing_before_resume_fallback and not self._is_missing(value):
                     context.add_execution_variable(key, value)
 
         missing_fields = self._missing_input_variables(context)
@@ -224,6 +232,26 @@ class StartNode(BaseNode):
         match = re.search(pattern, user_message, flags=re.IGNORECASE)
         return match.group(0) if match else None
 
+    def _extract_variables_from_resume_text(self, context, missing_fields: List[str]) -> Dict[str, Any]:
+        if len(missing_fields) != 1:
+            return {}
+        if context.get_variable("_resume_node_id") != self.node_id:
+            return {}
+        if context.get_variable("_resume_reason") != "start_input_variables_missing":
+            return {}
+
+        variable = next((item for item in self.input_variables if item.get("name") == missing_fields[0]), None)
+        if not variable:
+            return {}
+        variable_type = str(variable.get("type") or "string").strip().lower()
+        if variable_type not in {"string", "str", "text"}:
+            return {}
+
+        user_message = str(context.get_variable("user_message", "") or "").strip()
+        if not user_message:
+            return {}
+        return {missing_fields[0]: user_message}
+
     async def _extract_variables(self, context, missing_fields: Optional[List[str]] = None) -> tuple[Dict[str, Any], Dict[str, Any]]:
         model_code = self._resolve_model_code(context)
         if not model_code:
@@ -234,19 +262,14 @@ class StartNode(BaseNode):
             model_code=model_code,
             provider_configs=context.provider_configs,
             model_records=context.model_records,
-            system_prompt=(
-                "你是工作流开始节点的槽位提取器，只返回 JSON。"
-                "只能处理 start_node.input_variables 中声明的变量。"
-                "若能从 user_message 提取缺失变量，则写入 variables；无法提取则放入 missing_fields。"
-                "已有非空 current_value 的变量只作为上下文传递，不要覆盖，也不要追问。"
-                "不要生成流程外变量、办理步骤、成功承诺或用户可见话术。"
-                "Return exactly one valid JSON object only. "
-                "The root object must be {\"variables\": {...}, \"missing_fields\": [...]}. "
-                "Do not output Markdown, comments, duplicate JSON objects, trailing commas, or any text outside JSON. "
+            system_prompt=resolve_system_prompt(
+                system_prompts_from_workflow_config(context.workflow_config),
+                "slot_extraction",
+                DEFAULT_SLOT_EXTRACTION_SYSTEM_PROMPT,
             ),
             user_prompt=user_prompt,
             response_format={"type": "json_object"},
-            max_tokens=65535,
+            max_tokens=2048,
         )
         parsed = self._parse_extraction_output(completion)
         metrics = cost_tracker.build_cost_payload(

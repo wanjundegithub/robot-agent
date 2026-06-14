@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.apicenter.repository.ApiItemRepository;
 import robot.agent.config.DefaultModelProperties;
+import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
 import robot.agent.repository.LlmModelRecordRepository;
@@ -18,8 +19,10 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -88,6 +91,44 @@ class ModelConfigServiceTest {
 
         assertThat(modelConfigService.resolveConfiguredPurposeModelCode("slot-extraction")).isEqualTo("slot-chat");
         assertThat(modelConfigService.resolveConfiguredPurposeModelCode("welcome")).isEqualTo("default-chat");
+    }
+
+    @Test
+    void testSimpleModelConnectionPassesDefaultOptionsToDirectChat() {
+        UpsertModelRecordRequest request = new UpsertModelRecordRequest();
+        request.setCustomModelName("Qwen/Qwen3-8B");
+        request.setProvider("custom");
+        request.setModelName("Qwen/Qwen3-8B");
+        request.setApiKey("test-secret");
+        request.setBaseUrl("https://api-inference.modelscope.cn/v1/chat/completions");
+        request.setDefaultOptions(Map.of("stream", true, "enable_thinking", true));
+        when(unifiedModelService.invokeDirectChat(
+                eq("custom"),
+                eq("https://api-inference.modelscope.cn/v1/chat/completions"),
+                eq("test-secret"),
+                eq("Qwen/Qwen3-8B"),
+                any(),
+                any()
+        )).thenReturn(new UnifiedModelResult(
+                "draft-custom",
+                "draft-provider",
+                "Qwen/Qwen3-8B",
+                "ok",
+                Map.of(),
+                Map.of()
+        ));
+
+        Map<String, Object> response = modelConfigService.testSimpleModelConnection("demo-admin", request);
+
+        assertThat(response).containsEntry("ok", true);
+        verify(unifiedModelService).invokeDirectChat(
+                eq("custom"),
+                eq("https://api-inference.modelscope.cn/v1/chat/completions"),
+                eq("test-secret"),
+                eq("Qwen/Qwen3-8B"),
+                any(),
+                eq(Map.of("stream", true, "enable_thinking", true))
+        );
     }
 
     private LlmModelRecord modelRecord(String modelCode, String providerCode) {

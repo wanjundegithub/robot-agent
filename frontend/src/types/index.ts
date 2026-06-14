@@ -411,6 +411,7 @@ export interface ModelRecordConfig {
   model_name: string
   api_key: string
   base_url: string
+  default_options?: Record<string, unknown>
   created_at?: string
   updated_at?: string
 }

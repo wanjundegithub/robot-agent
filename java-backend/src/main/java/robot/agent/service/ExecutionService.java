@@ -548,6 +548,7 @@ public class ExecutionService {
             pythonClient.submitSlotAnswer(execution.getId(), resumeData).block(Duration.ofSeconds(5));
             execution.setStatus(ExecutionStatus.RUNNING);
             execution.setError(null);
+            appendSlotUserMessage(execution, request == null ? null : request.getContent());
             executionRepository.save(execution);
         } catch (RuntimeException error) {
             log.error("execution.waiting_user.chat_resume.failed executionId={} message={}", execution.getId(), error.getMessage(), error);
@@ -659,6 +660,20 @@ public class ExecutionService {
                         execution.getId() + "_user",
                         "user",
                         userMessage,
+                        execution.getCreatedAt(),
+                        execution.getId()
+                ));
+            }
+            List<String> slotUserMessages = readStringList(parseJson(execution.getInputVariables()).get("slot_user_messages"));
+            for (int index = 0; index < slotUserMessages.size(); index++) {
+                String slotUserMessage = slotUserMessages.get(index);
+                if (slotUserMessage == null || slotUserMessage.isBlank()) {
+                    continue;
+                }
+                messages.add(buildSessionMessage(
+                        execution.getId() + "_slot_user_" + index,
+                        "user",
+                        slotUserMessage,
                         execution.getCreatedAt(),
                         execution.getId()
                 ));
@@ -1385,6 +1400,30 @@ public class ExecutionService {
 
     private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private void appendSlotUserMessage(Execution execution, String content) {
+        if (execution == null || content == null || content.isBlank()) {
+            return;
+        }
+        Map<String, Object> inputVariables = parseJson(execution.getInputVariables());
+        List<String> slotMessages = new ArrayList<>(readStringList(inputVariables.get("slot_user_messages")));
+        slotMessages.add(content);
+        inputVariables.put("slot_user_messages", slotMessages);
+        execution.setInputVariables(writeJson(inputVariables));
+    }
+
+    private List<String> readStringList(Object value) {
+        if (!(value instanceof List<?> rawList)) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (Object item : rawList) {
+            if (item != null) {
+                result.add(String.valueOf(item));
+            }
+        }
+        return result;
     }
 
     private String preview(String value) {

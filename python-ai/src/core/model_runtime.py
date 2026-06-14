@@ -21,7 +21,8 @@ class ModelExecutionError(Exception):
 
 
 logger = logging.getLogger(__name__)
-INTENT_ROUTING_MAX_TOKENS = 512
+INTERNAL_JSON_MAX_TOKENS = 2048
+INTENT_ROUTING_MAX_TOKENS = INTERNAL_JSON_MAX_TOKENS
 
 
 def _provider_extra_headers(provider: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,6 +98,18 @@ def _model_option(model_record: Dict[str, Any], option_key: str, default_value: 
     if option_key in options and options.get(option_key) is not None:
         return options.get(option_key)
     return default_value
+
+
+def _apply_extra_body_options(body: Dict[str, Any], model_record: Dict[str, Any], protected_keys: set[str]) -> None:
+    for key, value in _model_default_options(model_record).items():
+        if key in protected_keys or value is None:
+            continue
+        body[key] = value
+
+
+def _prepare_structured_body(body: Dict[str, Any], response_format: Dict[str, Any] | None) -> None:
+    if response_format is not None:
+        body["stream"] = False
 
 
 def _build_openai_compatible_body(
@@ -301,6 +314,12 @@ async def _invoke_provider(
         }
         if response_format is not None:
             body["response_format"] = response_format
+        _apply_extra_body_options(
+            body,
+            model_record,
+            {"model", "messages", "temperature", "top_p", "max_tokens", "response_format", "timeout_sec"},
+        )
+        _prepare_structured_body(body, response_format)
         request_url = _join_url(base_url, str(meta.get("chat_path", "/chat/completions")))
     elif protocol == "doubao":
         auth_header = str(meta.get("auth_header", "Authorization"))
@@ -320,6 +339,12 @@ async def _invoke_provider(
         }
         if response_format is not None:
             body["text"] = {"format": response_format}
+        _apply_extra_body_options(
+            body,
+            model_record,
+            {"model", "instructions", "input", "temperature", "top_p", "max_tokens", "max_output_tokens", "response_format", "timeout_sec"},
+        )
+        _prepare_structured_body(body, response_format)
         request_url = _join_url(base_url, str(meta.get("chat_path", "/responses")))
     elif protocol == "claude":
         headers.pop("Authorization", None)
@@ -332,6 +357,12 @@ async def _invoke_provider(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        _apply_extra_body_options(
+            body,
+            model_record,
+            {"model", "system", "messages", "temperature", "top_p", "max_tokens", "timeout_sec"},
+        )
+        _prepare_structured_body(body, response_format)
         request_url = _join_url(base_url, str(meta.get("chat_path", "/messages")))
     else:
         headers.pop("Authorization", None)
@@ -345,6 +376,12 @@ async def _invoke_provider(
                 "maxOutputTokens": max_tokens,
             },
         }
+        _apply_extra_body_options(
+            body,
+            model_record,
+            {"system_instruction", "contents", "generationConfig", "response_format", "timeout_sec"},
+        )
+        _prepare_structured_body(body, response_format)
         gemini_path = str(meta.get("chat_path", "/models/{model}:generateContent")).replace("{model}", quote(upstream_model_code, safe=""))
         request_url = f"{_join_url(base_url, gemini_path)}?{quote(query_auth_name, safe='')}={quote(api_key, safe='')}"
 
