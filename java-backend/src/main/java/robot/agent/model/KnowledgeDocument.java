@@ -30,6 +30,42 @@ public class KnowledgeDocument {
     @Column(name = "file_url", length = 512)
     private String fileUrl;
 
+    @Column(name = "source_type", length = 32)
+    private String sourceType;
+
+    @Column(name = "raw_content", columnDefinition = "TEXT")
+    private String rawContent;
+
+    @Column(name = "raw_bucket", length = 128)
+    private String rawBucket;
+
+    @Column(name = "raw_object_key", length = 512)
+    private String rawObjectKey;
+
+    @Column(name = "raw_etag", length = 128)
+    private String rawEtag;
+
+    @Column(name = "raw_content_type", length = 128)
+    private String rawContentType;
+
+    @Column(name = "extracted_object_key", length = 512)
+    private String extractedObjectKey;
+
+    @Column(name = "content_hash", length = 128)
+    private String contentHash;
+
+    @Column(name = "generated_title", length = 256)
+    private String generatedTitle;
+
+    @Column(name = "generated_summary", columnDefinition = "TEXT")
+    private String generatedSummary;
+
+    @Column(name = "generated_keywords", columnDefinition = "TEXT")
+    private String generatedKeywords;
+
+    @Column(name = "index_version")
+    private Integer indexVersion;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
     private KnowledgeDocumentStatus status = KnowledgeDocumentStatus.PENDING;
@@ -103,6 +139,102 @@ public class KnowledgeDocument {
 
     public void setFileUrl(String fileUrl) {
         this.fileUrl = fileUrl;
+    }
+
+    public String getSourceType() {
+        return sourceType;
+    }
+
+    public void setSourceType(String sourceType) {
+        this.sourceType = sourceType;
+    }
+
+    public String getRawContent() {
+        return rawContent;
+    }
+
+    public void setRawContent(String rawContent) {
+        this.rawContent = rawContent;
+    }
+
+    public String getRawBucket() {
+        return rawBucket;
+    }
+
+    public void setRawBucket(String rawBucket) {
+        this.rawBucket = rawBucket;
+    }
+
+    public String getRawObjectKey() {
+        return rawObjectKey;
+    }
+
+    public void setRawObjectKey(String rawObjectKey) {
+        this.rawObjectKey = rawObjectKey;
+    }
+
+    public String getRawEtag() {
+        return rawEtag;
+    }
+
+    public void setRawEtag(String rawEtag) {
+        this.rawEtag = rawEtag;
+    }
+
+    public String getRawContentType() {
+        return rawContentType;
+    }
+
+    public void setRawContentType(String rawContentType) {
+        this.rawContentType = rawContentType;
+    }
+
+    public String getExtractedObjectKey() {
+        return extractedObjectKey;
+    }
+
+    public void setExtractedObjectKey(String extractedObjectKey) {
+        this.extractedObjectKey = extractedObjectKey;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
+
+    public String getGeneratedTitle() {
+        return generatedTitle;
+    }
+
+    public void setGeneratedTitle(String generatedTitle) {
+        this.generatedTitle = generatedTitle;
+    }
+
+    public String getGeneratedSummary() {
+        return generatedSummary;
+    }
+
+    public void setGeneratedSummary(String generatedSummary) {
+        this.generatedSummary = generatedSummary;
+    }
+
+    public String getGeneratedKeywords() {
+        return generatedKeywords;
+    }
+
+    public void setGeneratedKeywords(String generatedKeywords) {
+        this.generatedKeywords = generatedKeywords;
+    }
+
+    public Integer getIndexVersion() {
+        return indexVersion;
+    }
+
+    public void setIndexVersion(Integer indexVersion) {
+        this.indexVersion = indexVersion;
     }
 
     public KnowledgeDocumentStatus getStatus() {

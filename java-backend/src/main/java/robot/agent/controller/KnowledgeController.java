@@ -2,9 +2,12 @@ package robot.agent.controller;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import robot.agent.dto.request.CreateKnowledgeBaseRequest;
+import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
 import robot.agent.dto.request.CreateKnowledgeVersionRequest;
 import robot.agent.dto.response.KnowledgeBaseResponse;
+import robot.agent.dto.response.KnowledgeDocumentResponse;
 import robot.agent.dto.response.KnowledgeVersionResponse;
 import robot.agent.service.KnowledgeService;
 
@@ -56,5 +59,28 @@ public class KnowledgeController {
             @PathVariable String version
     ) {
         return ResponseEntity.ok(knowledgeService.publishKnowledgeVersion(userId, kbCode, version));
+    }
+
+    @GetMapping("/{kbCode}/documents")
+    public ResponseEntity<List<KnowledgeDocumentResponse>> getKnowledgeDocuments(@PathVariable String kbCode) {
+        return ResponseEntity.ok(knowledgeService.getKnowledgeDocuments(kbCode));
+    }
+
+    @PostMapping("/{kbCode}/documents/text")
+    public ResponseEntity<KnowledgeDocumentResponse> createTextKnowledgeDocument(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String kbCode,
+            @RequestBody CreateKnowledgeDocumentRequest request
+    ) {
+        return ResponseEntity.ok(knowledgeService.createTextKnowledgeDocument(userId, kbCode, request));
+    }
+
+    @PostMapping("/{kbCode}/documents/files")
+    public ResponseEntity<KnowledgeDocumentResponse> uploadKnowledgeDocument(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String kbCode,
+            @RequestParam("file") MultipartFile file
+    ) {
+        return ResponseEntity.ok(knowledgeService.uploadKnowledgeDocument(userId, kbCode, file));
     }
 }
