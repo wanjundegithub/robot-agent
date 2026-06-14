@@ -45,6 +45,7 @@ class KnowledgeStore(Protocol):
         top_k: int = 5,
         score_threshold: float = 0.0,
         embedding: List[float] | None = None,
+        **_kwargs: Any,
     ) -> List[Dict[str, Any]]:
         ...
 
@@ -104,6 +105,7 @@ class InMemoryKnowledgeStore:
         top_k: int = 5,
         score_threshold: float = 0.0,
         embedding: List[float] | None = None,
+        **_kwargs: Any,
     ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         for kb_code in kb_codes:
@@ -247,6 +249,7 @@ class PgVectorKnowledgeStore:
         top_k: int = 5,
         score_threshold: float = 0.0,
         embedding: List[float] | None = None,
+        **_kwargs: Any,
     ) -> List[Dict[str, Any]]:
         if not kb_codes:
             return []

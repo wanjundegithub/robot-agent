@@ -137,3 +137,16 @@ class KnowledgeIngestResponse(BaseModel):
     generated_summary: str = ""
     generated_keywords: list[str] = Field(default_factory=list)
     error_message: Optional[str] = None
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str
+    kb_codes: list[str] = Field(default_factory=list)
+    retrieval_mode: str = "hybrid"
+    top_k: int = 5
+    score_threshold: float = 0.65
+    embedding_model_code: str = "embedding-qwen3-8b"
+    provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
+    model_records: list[Dict[str, Any]] = Field(default_factory=list)
+    answer_model_code: Optional[str] = None
+    generate_answer: bool = True

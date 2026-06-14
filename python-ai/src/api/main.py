@@ -14,6 +14,7 @@ from .models import (
     IntentClassificationRequest,
     KnowledgeIngestRequest,
     KnowledgeIngestResponse,
+    KnowledgeSearchRequest,
     RagEvaluationRequest,
     RecommendationRequest,
     ResumeExecutionResponse,
@@ -30,7 +31,7 @@ from src.core.idempotency import (
     get_idempotency_store,
     initialize_idempotency_store,
 )
-from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
+from src.core.knowledge_store import get_knowledge_backend, get_knowledge_store, initialize_knowledge_store
 from src.core.knowledge_ingestion import ingest_knowledge_document
 from src.core.logging_utils import configure_logging
 from src.core.model_runtime import classify_intent_with_model_code
@@ -315,6 +316,40 @@ async def ingest_knowledge(request: KnowledgeIngestRequest):
         if item.get("model_code")
     }
     return await ingest_knowledge_document(request, provider_configs, model_records)
+
+
+@app.post("/api/knowledge/search")
+async def search_knowledge(request: KnowledgeSearchRequest):
+    provider_configs = {
+        str(item.get("provider_code")): item
+        for item in request.provider_configs
+        if item.get("provider_code")
+    }
+    model_records = {
+        str(item.get("model_code")): item
+        for item in request.model_records
+        if item.get("model_code")
+    }
+    documents = get_knowledge_store().search_many(
+        kb_codes=request.kb_codes,
+        query=request.query,
+        retrieval_mode=request.retrieval_mode,
+        top_k=request.top_k,
+        score_threshold=request.score_threshold,
+        embedding_model_code=request.embedding_model_code,
+        provider_configs=provider_configs,
+        model_records=model_records,
+    )
+    return {
+        "query": request.query,
+        "documents": documents,
+        "answer": "",
+        "citations": [
+            {"chunkId": item.get("chunk_id"), "docId": item.get("doc_id"), "score": item.get("score")}
+            for item in documents
+        ],
+        "bestScore": max([float(item.get("score", 0.0)) for item in documents], default=0.0),
+    }
 
 
 @app.post("/api/phase4/route-thresholds/resolve")

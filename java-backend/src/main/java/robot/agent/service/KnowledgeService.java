@@ -9,8 +9,10 @@ import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.CreateKnowledgeBaseRequest;
 import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
 import robot.agent.dto.request.CreateKnowledgeVersionRequest;
+import robot.agent.dto.request.KnowledgeSearchRequest;
 import robot.agent.dto.response.KnowledgeBaseResponse;
 import robot.agent.dto.response.KnowledgeDocumentResponse;
+import robot.agent.dto.response.KnowledgeSearchResponse;
 import robot.agent.dto.response.KnowledgeTaskResponse;
 import robot.agent.dto.response.KnowledgeVersionResponse;
 import robot.agent.model.KnowledgeBase;
@@ -295,6 +297,45 @@ public class KnowledgeService {
         task.setUpdatedAt(LocalDateTime.now());
         runIngestion(knowledgeBase, document, task, null);
         return KnowledgeTaskResponse.fromEntity(task);
+    }
+
+    public KnowledgeSearchResponse searchKnowledge(String userId, KnowledgeSearchRequest request) {
+        if (request == null || request.getQuery() == null || request.getQuery().isBlank()) {
+            throw new IllegalArgumentException("Knowledge search query must not be empty");
+        }
+        List<String> kbCodes = request.getKbCodes() == null ? List.of() : request.getKbCodes();
+        if (kbCodes.isEmpty()) {
+            throw new IllegalArgumentException("At least one knowledge base is required");
+        }
+
+        List<KnowledgeBase> knowledgeBases = kbCodes.stream()
+                .map(kbCode -> knowledgeBaseRepository.findByKbCode(kbCode)
+                        .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + kbCode)))
+                .toList();
+        for (KnowledgeBase knowledgeBase : knowledgeBases) {
+            accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin", "viewer"));
+        }
+
+        String embeddingModelCode = firstNonBlank(
+                knowledgeBases.stream()
+                        .map(KnowledgeBase::getEmbeddingModel)
+                        .filter(value -> value != null && !value.isBlank())
+                        .findFirst()
+                        .orElse(null),
+                knowledgeProperties.getEmbedding().getDefaultModelCode()
+        );
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
+        Map<String, Object> pythonRequest = new LinkedHashMap<>();
+        pythonRequest.put("query", request.getQuery());
+        pythonRequest.put("kb_codes", kbCodes);
+        pythonRequest.put("retrieval_mode", firstNonBlank(request.getRetrievalMode(), knowledgeProperties.getRetrieval().getMode()));
+        pythonRequest.put("top_k", request.getTopK() == null ? knowledgeProperties.getRetrieval().getTopK() : request.getTopK());
+        pythonRequest.put("score_threshold", request.getScoreThreshold() == null ? knowledgeProperties.getRetrieval().getScoreThreshold() : request.getScoreThreshold());
+        pythonRequest.put("embedding_model_code", embeddingModelCode);
+        pythonRequest.put("provider_configs", bundle.providerConfigs());
+        pythonRequest.put("model_records", bundle.modelRecords());
+        pythonRequest.put("generate_answer", request.getGenerateAnswer() == null ? Boolean.TRUE : request.getGenerateAnswer());
+        return KnowledgeSearchResponse.fromMap(pythonKnowledgeClient.search(pythonRequest));
     }
 
     private KnowledgeTask createQueuedTask(KnowledgeDocument document) {
