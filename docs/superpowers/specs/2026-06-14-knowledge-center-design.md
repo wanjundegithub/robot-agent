@@ -61,12 +61,12 @@
 
 ### 4.1 中间件选择
 
-本阶段使用现有中间件，不额外引入 Elasticsearch、Milvus、Qdrant、Kafka 或 RabbitMQ。
+本阶段在现有中间件基础上新增 MinIO，不额外引入 Elasticsearch、Milvus、Qdrant、Kafka 或 RabbitMQ。
 
 | 用途 | 中间件 | 说明 |
 |---|---|---|
 | 业务元数据 | MySQL 8 | 存储知识空间、知识条目、采集任务、绑定关系、审计信息 |
-| 原始文件 | 本地文件存储 | 初版使用后端本地挂载目录；后续可替换 MinIO/S3 |
+| 原始文件 | MinIO | 存储用户上传的 PDF、DOC、DOCX、TXT、MD 原文件和可选解析全文对象 |
 | 向量与分块 | PostgreSQL + pgvector | 存储 chunk 文本、embedding、来源元数据、索引状态 |
 | 缓存与幂等 | Redis 7 | 复用现有 Redis，用于幂等、短期检索缓存、路由结果缓存 |
 | 异步处理 | Java 任务表 + Python AI 处理接口 | 初版不引入独立消息队列；任务状态落 MySQL，处理可由后台线程或轮询 worker 驱动 |
@@ -77,7 +77,7 @@
 
 - 管理知识空间和知识条目元数据。
 - 接收文本与文件上传。
-- 存储原始文件。
+- 将原始文件写入 MinIO。
 - 创建采集任务。
 - 调用 Python AI 进行解析、分块、向量化、检索。
 - 对前端提供统一接口。
@@ -105,6 +105,13 @@
 - 存储检索用来源 metadata。
 - 执行向量相似度召回。
 
+**MinIO**
+
+- 存储用户上传的原始文件对象。
+- 存储较长文本输入的原文对象。
+- 可选存储解析后的 UTF-8 全文对象。
+- 不参与关键词召回或向量召回。
+
 ## 5. 存储设计
 
 ### 5.1 原始数据存储
@@ -114,30 +121,38 @@
 **文本输入**
 
 - Java 后端接收文本内容。
-- 原始文本作为知识条目的原始内容保存，可存 MySQL `TEXT` 字段或落本地文本文件。
-- 推荐初版将较短文本存 MySQL，较长文本写入本地文件，并在 MySQL 中保存 `raw_content_path`。
+- 原始文本作为知识条目的原始内容保存。
+- 较短文本可存 MySQL `TEXT` 字段。
+- 较长文本写入 MinIO 文本对象，并在 MySQL 中保存 `raw_object_key`。
 
 **文件输入**
 
-- 文件由 Java 后端保存到本地挂载目录。
-- 推荐路径结构：
+- 文件由 Java 后端保存到 MinIO。
+- 推荐 bucket：
 
 ```text
-data/knowledge/raw/{workspace_id}/{kb_code}/{doc_id}/{original_filename}
+robot-knowledge
 ```
 
-- MySQL 只保存文件元数据和路径，不保存二进制文件内容。
-- 文件名必须做安全清洗，前端不能直接访问真实文件路径。
-- 后续扩展 MinIO/S3 时，只替换文件存储服务，不改变知识条目模型。
+- 推荐对象 key 结构：
+
+```text
+raw/{workspace_id}/{kb_code}/{doc_id}/{safe_original_filename}
+```
+
+- MySQL 只保存文件元数据、bucket、object key、etag、content type，不保存二进制文件内容。
+- 文件名必须做安全清洗，前端不能直接访问 MinIO 内部地址。
+- 下载或预览必须由 Java 后端鉴权后生成短有效期预签名 URL，或由后端代理输出。
 
 ### 5.2 存储归属
 
 | 数据类型 | 存储位置 | 说明 |
 |---|---|---|
 | 知识空间、知识条目、采集任务 | MySQL | 业务元数据、状态、统计、错误信息、绑定关系 |
-| 用户粘贴的短文本原文 | MySQL 或本地文件 | 短文本可存 `knowledge_document.raw_content`；长文本建议写文件 |
-| 上传原始文件 | 本地文件存储 | 保存 PDF、DOC、DOCX、TXT、MD 原文件 |
-| 解析后的全文 | 本地文件存储或 MySQL | 推荐保存为 `extracted_text_path` 指向的 UTF-8 文本/JSON 文件 |
+| 用户粘贴的短文本原文 | MySQL | 短文本可存 `knowledge_document.raw_content` |
+| 用户粘贴的长文本原文 | MinIO | 保存为 UTF-8 文本对象，MySQL 存 `raw_object_key` |
+| 上传原始文件 | MinIO | 保存 PDF、DOC、DOCX、TXT、MD 原文件 |
+| 解析后的全文 | MinIO 或 MySQL | 推荐保存为 `extracted_object_key` 指向的 UTF-8 文本/JSON 对象 |
 | chunk 文本 | PostgreSQL + pgvector | 存在 `knowledge_chunks.content`，参与检索与引用展示 |
 | embedding 向量 | PostgreSQL + pgvector | 存在 `knowledge_chunks.embedding` |
 | 检索关键词/token | PostgreSQL + pgvector | 存在 `knowledge_chunks.keywords`、`search_terms` 或 `metadata` |
@@ -165,6 +180,32 @@ pgvector 存储：
 
 正式表的 embedding 维度必须与实际 embedding 模型一致，不能沿用当前测试雏形中的 `VECTOR(8)`。
 
+embedding 模型必须使用独立的向量模型配置，不复用 `knowledge-answer` 对话模型。
+
+推荐默认模型：
+
+```text
+knowledge.embedding.default_model_code = embedding-bge-m3
+knowledge.embedding.default_upstream_model = bge-m3
+knowledge.embedding.dimension = 1024
+```
+
+选择理由：
+
+- `bge-m3` 对中文、英文和混合文本检索都比较稳。
+- 支持较长文本语义表达，适合知识库 chunk embedding。
+- 1024 维向量存储成本和召回效果比较均衡。
+
+如果实际部署使用 OpenAI、通义、火山、私有 vLLM/Ollama 等 embedding 服务，仍通过同一套模型配置记录表达：
+
+- `model_code`：系统内部稳定模型编码，例如 `embedding-bge-m3`。
+- `provider_code`：供应商配置编码。
+- `upstream_model_code`：真实上游 embedding 模型名。
+- `provider_type`、`base_url`、`api_key`：复用现有模型配置中心的供应商配置。
+- `embedding_dimension`：向量维度，必须与 pgvector 表定义一致。
+
+每个知识空间可保存 `embedding_model`。创建知识空间时默认使用 `knowledge.embedding.default_model_code`，后续如切换 embedding 模型，必须创建新的 `index_version` 并全量重建该空间 chunk，不能混用不同维度或不同模型的向量。
+
 推荐表结构：
 
 ```sql
@@ -180,7 +221,7 @@ CREATE TABLE knowledge_chunks (
     keywords TEXT[],
     search_terms TEXT[],
     content_hash TEXT,
-    embedding VECTOR(1536) NOT NULL,
+    embedding VECTOR(1024) NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -613,6 +654,7 @@ knowledge.retrieval.metadata_boost = 0.05
 - `kb_code`
 - `name`
 - `description`
+- `embedding_model`
 - `status`
 - `created_by`
 - `created_at`
@@ -636,7 +678,11 @@ knowledge.retrieval.metadata_boost = 0.05
 建议新增字段：
 
 - `source_type`
-- `raw_content_path`
+- `raw_bucket`
+- `raw_object_key`
+- `raw_etag`
+- `raw_content_type`
+- `extracted_object_key`
 - `content_hash`
 - `generated_title`
 - `generated_summary`
@@ -721,8 +767,14 @@ POST /api/knowledge/search
 ### 12.1 存储配置
 
 ```text
-knowledge.storage.type = local
-knowledge.storage.local_path = data/knowledge/raw
+knowledge.storage.type = minio
+knowledge.storage.minio.endpoint = ${MINIO_ENDPOINT:http://localhost:9000}
+knowledge.storage.minio.bucket = robot-knowledge
+knowledge.storage.minio.access_key = ${MINIO_ACCESS_KEY}
+knowledge.storage.minio.secret_key = ${MINIO_SECRET_KEY}
+knowledge.storage.minio.region = ${MINIO_REGION:us-east-1}
+knowledge.storage.minio.secure = false
+knowledge.storage.presigned_url_ttl_seconds = 300
 knowledge.storage.max_file_size_mb = 100
 knowledge.storage.allowed_types = txt,pdf,doc,docx,md
 ```
@@ -733,12 +785,22 @@ knowledge.storage.allowed_types = txt,pdf,doc,docx,md
 knowledge.vector.enabled = true
 knowledge.vector.dsn = ROBOT_VECTOR_DSN
 knowledge.vector.table = knowledge_chunks
-knowledge.embedding.provider = configurable
-knowledge.embedding.model = configurable
-knowledge.embedding.dimension = 1536
+knowledge.embedding.default_model_code = embedding-bge-m3
+knowledge.embedding.default_upstream_model = bge-m3
+knowledge.embedding.dimension = 1024
 knowledge.embedding.batch_size = 32
 knowledge.embedding.timeout_ms = 30000
 ```
+
+embedding 供应商、base URL、API Key 和真实模型名优先复用现有模型配置中心：
+
+- 供应商配置存在 `llm_provider_config`。
+- 模型记录存在 `llm_model_record`。
+- 知识空间的 `knowledge_base.embedding_model` 保存 `model_code`。
+- Java 后端创建采集任务时把该 `model_code` 和对应 provider/model runtime bundle 传给 Python AI。
+- Python AI 根据 `model_code` 调用 embedding 接口生成向量。
+
+如果某些 embedding 服务与对话模型接口协议不同，Python AI 需要增加 `embedding_runtime` 适配器，但配置归属仍在模型配置中心，不在代码中硬编码。
 
 ### 12.3 检索配置
 
@@ -805,8 +867,9 @@ knowledge.route.cancel_late_branch = true
 - 知识处理成功后立即可检索。
 - 不做图片 OCR。
 - MySQL 存储知识元数据和任务状态。
-- 原始文件存储到本地挂载目录。
+- 原始文件存储到 MinIO，MySQL 只保存对象引用。
 - pgvector 存储 chunk 与 embedding。
+- embedding 模型配置来自模型配置中心，知识空间记录使用的 `embedding_model`。
 - 默认知识检索方式为混合检索。
 
 ## 16. 推荐实施顺序
