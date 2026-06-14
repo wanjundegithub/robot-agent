@@ -225,7 +225,7 @@ public class ExecutionService {
                 ? forcedRoutingDecision
                 : (explicitWorkflowExecution
                 ? buildExplicitRoutingDecision(request, activeExecution)
-                : workflowService.routeMessage(request.getContent(), activeExecution));
+                : workflowService.routeMessage(request.getContent(), activeExecution, session.getId(), effectiveUserId));
         log.info(
                 "execution.route sessionId={} workflowCode={} workflowVersion={} decision={} reason={} confidence={}",
                 session.getId(),
@@ -246,6 +246,16 @@ public class ExecutionService {
                     routingDecision.clarificationQuestion()
             );
             return buildClarificationRequiredResponse(session, activeExecution, routingDecision);
+        }
+
+        if ("knowledge_answer".equalsIgnoreCase(routingDecision.decision())) {
+            log.info(
+                    "execution.routing.knowledge_answer sessionId={} confidence={} reason={}",
+                    session.getId(),
+                    routingDecision.confidence(),
+                    routingDecision.reason()
+            );
+            return buildKnowledgeAnswerResponse(session, activeExecution, routingDecision);
         }
 
         String requestedToolCode = confirmationService.resolveRequestedToolCode(
@@ -1231,6 +1241,18 @@ public class ExecutionService {
         response.setExecutionId(null);
         response.setStatus("clarification_required");
         response.setRouteDecision("clarification_required");
+        return response;
+    }
+
+    private SendMessageResponse buildKnowledgeAnswerResponse(
+            Session session,
+            Execution activeExecution,
+            RoutingDecision routingDecision
+    ) {
+        SendMessageResponse response = buildRouteDecisionResponse(session, activeExecution, routingDecision);
+        response.setExecutionId(null);
+        response.setStatus("clarification_required");
+        response.setRouteDecision("knowledge_answer");
         return response;
     }
 

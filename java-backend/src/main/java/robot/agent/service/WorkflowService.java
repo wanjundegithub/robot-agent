@@ -12,16 +12,22 @@ import robot.agent.common.ApplicationConstants;
 import robot.agent.config.WorkflowPromptProperties;
 import robot.agent.config.WorkflowRoutingProperties;
 import robot.agent.dto.request.CreateWorkflowVersionRequest;
+import robot.agent.dto.request.KnowledgeSearchRequest;
+import robot.agent.dto.response.KnowledgeSearchResponse;
 import robot.agent.dto.response.WorkflowResponse;
 import robot.agent.dto.response.WorkflowVersionResponse;
 import robot.agent.model.Execution;
 import robot.agent.model.ExecutionStatus;
+import robot.agent.model.KnowledgeBinding;
+import robot.agent.model.KnowledgeBindingScope;
 import robot.agent.model.Workflow;
 import robot.agent.model.WorkflowStatus;
 import robot.agent.model.WorkflowVersion;
 import robot.agent.model.WorkflowVersionStatus;
 import robot.agent.repository.WorkflowRepository;
 import robot.agent.repository.WorkflowVersionRepository;
+import robot.agent.service.knowledge.KnowledgeBindingService;
+import robot.agent.service.knowledge.KnowledgeRouteDecisionService;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -48,6 +54,9 @@ public class WorkflowService {
     private final ModelConfigService modelConfigService;
     private final WorkflowPromptProperties workflowPromptProperties;
     private final WorkflowRoutingProperties workflowRoutingProperties;
+    private final KnowledgeBindingService knowledgeBindingService;
+    private final KnowledgeRouteDecisionService knowledgeRouteDecisionService;
+    private final KnowledgeService knowledgeService;
 
     @Autowired
     public WorkflowService(
@@ -59,7 +68,10 @@ public class WorkflowService {
             PythonClient pythonClient,
             ModelConfigService modelConfigService,
             WorkflowPromptProperties workflowPromptProperties,
-            WorkflowRoutingProperties workflowRoutingProperties
+            WorkflowRoutingProperties workflowRoutingProperties,
+            KnowledgeBindingService knowledgeBindingService,
+            KnowledgeRouteDecisionService knowledgeRouteDecisionService,
+            KnowledgeService knowledgeService
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowVersionRepository = workflowVersionRepository;
@@ -70,6 +82,36 @@ public class WorkflowService {
         this.modelConfigService = modelConfigService;
         this.workflowPromptProperties = workflowPromptProperties;
         this.workflowRoutingProperties = workflowRoutingProperties;
+        this.knowledgeBindingService = knowledgeBindingService;
+        this.knowledgeRouteDecisionService = knowledgeRouteDecisionService;
+        this.knowledgeService = knowledgeService;
+    }
+
+    public WorkflowService(
+            WorkflowRepository workflowRepository,
+            WorkflowVersionRepository workflowVersionRepository,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            AuditService auditService,
+            PythonClient pythonClient,
+            ModelConfigService modelConfigService,
+            WorkflowPromptProperties workflowPromptProperties,
+            WorkflowRoutingProperties workflowRoutingProperties
+    ) {
+        this(
+                workflowRepository,
+                workflowVersionRepository,
+                objectMapper,
+                accessControlService,
+                auditService,
+                pythonClient,
+                modelConfigService,
+                workflowPromptProperties,
+                workflowRoutingProperties,
+                null,
+                null,
+                null
+        );
     }
 
     public WorkflowService(
@@ -634,12 +676,17 @@ public class WorkflowService {
     }
 
     public RoutingDecision routeMessage(String content, Execution activeExecution) {
+        return routeMessage(content, activeExecution, null, null);
+    }
+
+    public RoutingDecision routeMessage(String content, Execution activeExecution, String sessionId, String userId) {
         log.info(
-                "workflow.route.start contentLength={} contentPreview={} activeExecutionId={} activeWorkflowCode={}",
+                "workflow.route.start contentLength={} contentPreview={} activeExecutionId={} activeWorkflowCode={} sessionId={}",
                 content == null ? 0 : content.length(),
                 preview(content),
                 activeExecution == null ? null : activeExecution.getId(),
-                activeExecution == null ? null : activeExecution.getWorkflowCode()
+                activeExecution == null ? null : activeExecution.getWorkflowCode(),
+                sessionId
         );
         List<WorkflowVersion> versions = resolveCurrentWorkflowVersions();
         if (versions.isEmpty()) {
@@ -745,6 +792,18 @@ public class WorkflowService {
                 modelIntent.confidence(),
                 modelIntent.reason()
         );
+        RoutingDecision knowledgeDecision = tryBuildKnowledgeRoutingDecision(
+                normalizedContent,
+                activeExecution,
+                sessionId,
+                userId,
+                modelIntent,
+                ragCandidates,
+                versions
+        );
+        if (knowledgeDecision != null) {
+            return knowledgeDecision;
+        }
         return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
     }
 
@@ -896,6 +955,163 @@ public class WorkflowService {
                 llmAcceptThreshold(),
                 "llm_accept_threshold"
         );
+    }
+
+    private RoutingDecision tryBuildKnowledgeRoutingDecision(
+            String normalizedContent,
+            Execution activeExecution,
+            String sessionId,
+            String userId,
+            ModelIntent modelIntent,
+            List<RoutingDecision.IntentCandidate> ragCandidates,
+            List<WorkflowVersion> versions
+    ) {
+        if (knowledgeBindingService == null
+                || knowledgeRouteDecisionService == null
+                || knowledgeService == null
+                || sessionId == null
+                || sessionId.isBlank()) {
+            return null;
+        }
+        if (modelIntent != null && modelIntent.confidence() >= knowledgeRouteDecisionService.intentPrimaryThreshold()) {
+            log.info(
+                    "workflow.knowledge.route.skip reason=intent_primary sessionId={} intentConfidence={}",
+                    sessionId,
+                    modelIntent.confidence()
+            );
+            return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
+        }
+        List<String> boundKbCodes = boundKnowledgeBaseCodes(sessionId, activeExecution);
+        if (boundKbCodes.isEmpty()) {
+            log.info("workflow.knowledge.route.skip reason=no_bound_knowledge sessionId={}", sessionId);
+            return null;
+        }
+
+        KnowledgeSearchResponse knowledgeResponse;
+        try {
+            KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+            request.setQuery(normalizedContent);
+            request.setKbCodes(boundKbCodes);
+            request.setRetrievalMode("hybrid");
+            request.setTopK(5);
+            request.setGenerateAnswer(true);
+            knowledgeResponse = knowledgeService.searchKnowledge(userId, request);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "workflow.knowledge.route.search_failed sessionId={} kbCodes={} message={}",
+                    sessionId,
+                    boundKbCodes,
+                    exception.getMessage()
+            );
+            return null;
+        }
+
+        double knowledgeBestScore = knowledgeResponse == null || knowledgeResponse.getBestScore() == null
+                ? 0.0d
+                : knowledgeResponse.getBestScore();
+        KnowledgeRouteDecisionService.Decision routeDecision = knowledgeRouteDecisionService.decide(
+                modelIntent == null ? 0.0d : modelIntent.confidence(),
+                knowledgeBestScore
+        );
+        log.info(
+                "workflow.knowledge.route.decision sessionId={} finalRoute={} reason={} intentConfidence={} knowledgeBestScore={} kbCount={}",
+                sessionId,
+                routeDecision.finalRoute(),
+                routeDecision.routeReason(),
+                modelIntent == null ? 0.0d : modelIntent.confidence(),
+                knowledgeBestScore,
+                boundKbCodes.size()
+        );
+
+        if ("INTENT".equalsIgnoreCase(routeDecision.finalRoute())) {
+            return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
+        }
+        if ("KNOWLEDGE".equalsIgnoreCase(routeDecision.finalRoute())) {
+            return buildKnowledgeAnswerRoutingDecision(knowledgeResponse, knowledgeBestScore, routeDecision.routeReason());
+        }
+        if ("CLARIFY".equalsIgnoreCase(routeDecision.finalRoute())) {
+            return buildKnowledgeClarificationRoutingDecision(modelIntent, ragCandidates, knowledgeResponse, knowledgeBestScore, routeDecision.routeReason());
+        }
+        return null;
+    }
+
+    private List<String> boundKnowledgeBaseCodes(String sessionId, Execution activeExecution) {
+        List<KnowledgeBinding> bindings = new ArrayList<>(knowledgeBindingService.getBindings(KnowledgeBindingScope.SESSION, sessionId));
+        if (activeExecution != null
+                && activeExecution.getWorkflowCode() != null
+                && !activeExecution.getWorkflowCode().isBlank()) {
+            bindings.addAll(knowledgeBindingService.getBindings(KnowledgeBindingScope.WORKFLOW, activeExecution.getWorkflowCode()));
+        }
+        return bindings
+                .stream()
+                .filter(KnowledgeBinding::isEnabled)
+                .map(KnowledgeBinding::getKbCode)
+                .filter(code -> code != null && !code.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private RoutingDecision buildKnowledgeAnswerRoutingDecision(
+            KnowledgeSearchResponse knowledgeResponse,
+            double knowledgeBestScore,
+            String routeReason
+    ) {
+        return new RoutingDecision(
+                "knowledge_answer",
+                null,
+                null,
+                knowledgeBestScore,
+                knowledgeRouteDecisionService.knowledgePrimaryThreshold(),
+                "knowledge_primary_threshold",
+                routeReason,
+                List.of(),
+                0,
+                null,
+                "knowledge",
+                null,
+                firstNonBlank(knowledgeResponse == null ? null : knowledgeResponse.getAnswer(), topKnowledgeContent(knowledgeResponse)),
+                List.of()
+        );
+    }
+
+    private RoutingDecision buildKnowledgeClarificationRoutingDecision(
+            ModelIntent modelIntent,
+            List<RoutingDecision.IntentCandidate> ragCandidates,
+            KnowledgeSearchResponse knowledgeResponse,
+            double knowledgeBestScore,
+            String routeReason
+    ) {
+        return new RoutingDecision(
+                "clarification_required",
+                null,
+                null,
+                Math.max(modelIntent == null ? 0.0d : modelIntent.confidence(), knowledgeBestScore),
+                knowledgeRouteDecisionService.knowledgeClarifyThreshold(),
+                "knowledge_clarify_threshold",
+                routeReason,
+                topCandidateWorkflowCodes(ragCandidates, 3),
+                0,
+                modelIntent == null ? null : modelIntent.intentCode(),
+                modelIntent == null ? "knowledge" : modelIntent.targetType(),
+                modelIntent == null ? null : modelIntent.workflowCode(),
+                firstNonBlank(
+                        modelIntent == null ? null : modelIntent.clarificationQuestion(),
+                        knowledgeResponse == null ? null : knowledgeResponse.getAnswer(),
+                        "我还不确定你想办理业务流程，还是查询知识库内容，可以再具体说明一下吗？"
+                ),
+                ragCandidates
+        );
+    }
+
+    private String topKnowledgeContent(KnowledgeSearchResponse knowledgeResponse) {
+        if (knowledgeResponse == null || knowledgeResponse.getDocuments() == null || knowledgeResponse.getDocuments().isEmpty()) {
+            return null;
+        }
+        return knowledgeResponse.getDocuments().stream()
+                .map(KnowledgeSearchResponse.DocumentHit::getContent)
+                .filter(content -> content != null && !content.isBlank())
+                .findFirst()
+                .orElse(null);
     }
 
     private List<RoutingDecision.IntentCandidate> collectRegexCandidates(

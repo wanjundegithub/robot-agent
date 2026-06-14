@@ -7,6 +7,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.config.ChatFallbackProperties;
+import robot.agent.dto.request.SendMessageRequest;
+import robot.agent.dto.response.SendMessageResponse;
 import robot.agent.dto.response.SessionMessageResponse;
 import robot.agent.model.Execution;
 import robot.agent.model.ExecutionStatus;
@@ -22,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -163,6 +166,49 @@ class ExecutionServiceFallbackTest {
                         && saved.getInputVariables().contains("slot_user_messages")
                         && saved.getInputVariables().contains("iPhone 15")
         ));
+    }
+
+    @Test
+    void startExecutionReturnsKnowledgeAnswerWithoutCreatingWorkflowExecution() {
+        Session session = new Session();
+        session.setId("session-1");
+        session.setWorkspaceId(1L);
+        session.setUserId("session-user");
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setUserId("request-user");
+        request.setContent("保修期多久");
+
+        RoutingDecision routingDecision = new RoutingDecision(
+                "knowledge_answer",
+                null,
+                null,
+                0.92d,
+                0.65d,
+                "knowledge_primary_threshold",
+                "knowledge_primary",
+                List.of(),
+                0,
+                null,
+                "knowledge",
+                null,
+                "保修期为一年。",
+                List.of()
+        );
+
+        when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
+        when(workflowService.routeMessage("保修期多久", null, "session-1", "request-user")).thenReturn(routingDecision);
+
+        SendMessageResponse response = executionService.startExecution("session-1", request);
+
+        assertThat(response.getSessionId()).isEqualTo("session-1");
+        assertThat(response.getExecutionId()).isNull();
+        assertThat(response.getStatus()).isEqualTo("clarification_required");
+        assertThat(response.getRouteDecision()).isEqualTo("knowledge_answer");
+        assertThat(response.getRouteReason()).isEqualTo("knowledge_primary");
+        assertThat(response.getClarificationQuestion()).isEqualTo("保修期为一年。");
+        verify(executionRepository, never()).save(any(Execution.class));
+        verify(workflowService).routeMessage("保修期多久", null, "session-1", "request-user");
     }
 
     @Test

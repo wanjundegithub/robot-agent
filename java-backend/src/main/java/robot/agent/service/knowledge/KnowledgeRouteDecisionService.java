@@ -37,6 +37,18 @@ public class KnowledgeRouteDecisionService {
         return new Decision("FALLBACK", "boundary_fallback");
     }
 
+    public double knowledgePrimaryThreshold() {
+        return properties.getRoute().getKnowledgePrimaryThreshold();
+    }
+
+    public double intentPrimaryThreshold() {
+        return properties.getRoute().getIntentPrimaryThreshold();
+    }
+
+    public double knowledgeClarifyThreshold() {
+        return properties.getRoute().getKnowledgeClarifyThreshold();
+    }
+
     public record Decision(String finalRoute, String routeReason) {
     }
 }
