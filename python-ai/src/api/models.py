@@ -109,3 +109,31 @@ class FunctionFragmentValidateRequest(BaseModel):
 
 class FunctionFragmentTestRunRequest(FunctionFragmentValidateRequest):
     variables: Dict[str, Any] = Field(default_factory=lambda: {"global": {}, "local": {}})
+
+
+class KnowledgeIngestRequest(BaseModel):
+    task_id: str
+    doc_id: str
+    kb_code: str
+    index_version: int = 1
+    title: str = ""
+    source_type: str
+    filename: str = ""
+    raw_content: Optional[str] = None
+    raw_object_url: Optional[str] = None
+    legacy_doc_text: Optional[str] = None
+    embedding_model_code: str = "embedding-qwen3-8b"
+    provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
+    model_records: list[Dict[str, Any]] = Field(default_factory=list)
+
+
+class KnowledgeIngestResponse(BaseModel):
+    task_id: str
+    doc_id: str
+    kb_code: str
+    status: str
+    chunk_count: int = 0
+    generated_title: str = ""
+    generated_summary: str = ""
+    generated_keywords: list[str] = Field(default_factory=list)
+    error_message: Optional[str] = None

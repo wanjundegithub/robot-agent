@@ -10,9 +10,10 @@ class RuntimeSettings(BaseSettings):
     vector_dsn: str = "postgresql://robot:robot@localhost:5432/robot_vector"
     vector_enabled: bool = True
     vector_table: str = "knowledge_chunks"
-    vector_dimension: int = 1024
+    vector_dimension: int = 4096
 
-    knowledge_embedding_default_model_code: str = "embedding-bge-m3"
+    knowledge_embedding_default_model_code: str = "embedding-qwen3-8b"
+    knowledge_embedding_batch_size: int = 32
     knowledge_retrieval_vector_weight: float = 0.7
     knowledge_retrieval_keyword_weight: float = 0.3
     knowledge_retrieval_metadata_boost: float = 0.05

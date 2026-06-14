@@ -49,7 +49,7 @@ def test_initialize_creates_pgvector_hybrid_schema(monkeypatch):
     sql = "\n".join(statement for statement, _params in cursor.executed)
     assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
     assert "chunk_id TEXT PRIMARY KEY" in sql
-    assert "embedding VECTOR(1024) NOT NULL" in sql
+    assert "embedding VECTOR(4096) NOT NULL" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_search_terms" in sql
 
 
@@ -60,7 +60,7 @@ def test_search_many_merges_vector_and_keyword_scores(monkeypatch):
     ])
     store = PgVectorKnowledgeStore("postgresql://test", "knowledge_chunks")
     monkeypatch.setattr(store, "_connect", lambda: FakeConnection(cursor))
-    monkeypatch.setattr(store, "_embed_text", lambda _text: [0.1] * 1024)
+    monkeypatch.setattr(store, "_embed_text", lambda _text: [0.1] * 4096)
 
     results = store.search_many(["kb_product"], "保修政策", top_k=3, score_threshold=0.0)
 

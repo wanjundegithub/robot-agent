@@ -152,9 +152,18 @@ public class KnowledgeProperties {
     }
 
     public static class Embedding {
-        private String defaultModelCode = "embedding-bge-m3";
-        private String defaultUpstreamModel = "bge-m3";
-        private int dimension = 1024;
+        private String defaultModelCode = "embedding-qwen3-8b";
+        private String defaultUpstreamModel = "Qwen/Qwen3-Embedding-8B";
+        private String providerCode = "modelscope-embedding";
+        private String providerName = "ModelScope Embedding";
+        private String providerType = "openai_compatible";
+        private String baseUrl = "https://api-inference.modelscope.cn/v1";
+        private String apiKeySecretRef = "env:MODELSCOPE_API_KEY";
+        private String embeddingPath = "/embeddings";
+        private String encodingFormat = "float";
+        private boolean includeMessages = true;
+        private boolean singleInputAsString = true;
+        private int dimension = 4096;
         private int batchSize = 32;
         private int timeoutMs = 30000;
 
@@ -172,6 +181,78 @@ public class KnowledgeProperties {
 
         public void setDefaultUpstreamModel(String defaultUpstreamModel) {
             this.defaultUpstreamModel = defaultUpstreamModel;
+        }
+
+        public String getProviderCode() {
+            return providerCode;
+        }
+
+        public void setProviderCode(String providerCode) {
+            this.providerCode = providerCode;
+        }
+
+        public String getProviderName() {
+            return providerName;
+        }
+
+        public void setProviderName(String providerName) {
+            this.providerName = providerName;
+        }
+
+        public String getProviderType() {
+            return providerType;
+        }
+
+        public void setProviderType(String providerType) {
+            this.providerType = providerType;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getApiKeySecretRef() {
+            return apiKeySecretRef;
+        }
+
+        public void setApiKeySecretRef(String apiKeySecretRef) {
+            this.apiKeySecretRef = apiKeySecretRef;
+        }
+
+        public String getEmbeddingPath() {
+            return embeddingPath;
+        }
+
+        public void setEmbeddingPath(String embeddingPath) {
+            this.embeddingPath = embeddingPath;
+        }
+
+        public String getEncodingFormat() {
+            return encodingFormat;
+        }
+
+        public void setEncodingFormat(String encodingFormat) {
+            this.encodingFormat = encodingFormat;
+        }
+
+        public boolean isIncludeMessages() {
+            return includeMessages;
+        }
+
+        public void setIncludeMessages(boolean includeMessages) {
+            this.includeMessages = includeMessages;
+        }
+
+        public boolean isSingleInputAsString() {
+            return singleInputAsString;
+        }
+
+        public void setSingleInputAsString(boolean singleInputAsString) {
+            this.singleInputAsString = singleInputAsString;
         }
 
         public int getDimension() {

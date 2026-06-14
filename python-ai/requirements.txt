@@ -13,3 +13,5 @@ redis==5.0.7
 psycopg[binary]==3.2.13
 pgvector==0.3.4
 prometheus-client==0.20.0
+pypdf==6.4.0
+python-docx==1.1.2

@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.apicenter.repository.ApiItemRepository;
 import robot.agent.config.DefaultModelProperties;
+import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
@@ -50,11 +51,13 @@ class ModelConfigServiceTest {
     private UnifiedModelService unifiedModelService;
 
     private DefaultModelProperties defaultModelProperties;
+    private KnowledgeProperties knowledgeProperties;
     private ModelConfigService modelConfigService;
 
     @BeforeEach
     void setUp() {
         defaultModelProperties = new DefaultModelProperties();
+        knowledgeProperties = new KnowledgeProperties();
         modelConfigService = new ModelConfigService(
                 providerRepository,
                 modelRecordRepository,
@@ -64,7 +67,8 @@ class ModelConfigServiceTest {
                 accessControlService,
                 auditService,
                 unifiedModelService,
-                defaultModelProperties
+                defaultModelProperties,
+                knowledgeProperties
         );
     }
 
@@ -91,6 +95,41 @@ class ModelConfigServiceTest {
 
         assertThat(modelConfigService.resolveConfiguredPurposeModelCode("slot-extraction")).isEqualTo("slot-chat");
         assertThat(modelConfigService.resolveConfiguredPurposeModelCode("welcome")).isEqualTo("default-chat");
+    }
+
+    @Test
+    void buildRuntimeBundleForModelProvidesConfiguredQwenEmbeddingFallback() {
+        when(modelRecordRepository.findByModelCode("embedding-qwen3-8b")).thenReturn(Optional.empty());
+
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b");
+
+        assertThat(bundle.providerConfigs()).containsExactly(Map.of(
+                "provider_code", "modelscope-embedding",
+                "provider_name", "ModelScope Embedding",
+                "provider_type", "openai_compatible",
+                "base_url", "https://api-inference.modelscope.cn/v1",
+                "api_key_secret_ref", "env:MODELSCOPE_API_KEY",
+                "default_model_code", "embedding-qwen3-8b",
+                "enabled", true,
+                "extra_headers", Map.of("__meta__", Map.of("embedding_path", "/embeddings"))
+        ));
+        assertThat(bundle.modelRecords()).containsExactly(Map.of(
+                "model_code", "embedding-qwen3-8b",
+                "model_name", "Qwen/Qwen3-Embedding-8B",
+                "provider_code", "modelscope-embedding",
+                "provider_type", "openai_compatible",
+                "upstream_model_code", "Qwen/Qwen3-Embedding-8B",
+                "capabilities", Map.of("embedding", true),
+                "default_system_prompt", "",
+                "default_options", Map.of(
+                        "embedding_dimension", 4096,
+                        "encoding_format", "float",
+                        "include_messages", true,
+                        "single_input_as_string", true,
+                        "timeout_sec", 30
+                ),
+                "enabled", true
+        ));
     }
 
     @Test

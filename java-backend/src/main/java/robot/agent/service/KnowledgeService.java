@@ -1,5 +1,6 @@
 package robot.agent.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -10,17 +11,24 @@ import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
 import robot.agent.dto.request.CreateKnowledgeVersionRequest;
 import robot.agent.dto.response.KnowledgeBaseResponse;
 import robot.agent.dto.response.KnowledgeDocumentResponse;
+import robot.agent.dto.response.KnowledgeTaskResponse;
 import robot.agent.dto.response.KnowledgeVersionResponse;
 import robot.agent.model.KnowledgeBase;
 import robot.agent.model.KnowledgeBaseStatus;
 import robot.agent.model.KnowledgeDocument;
 import robot.agent.model.KnowledgeDocumentStatus;
+import robot.agent.model.KnowledgeTask;
+import robot.agent.model.KnowledgeTaskStage;
+import robot.agent.model.KnowledgeTaskStatus;
 import robot.agent.model.KnowledgeVersion;
 import robot.agent.model.KnowledgeVersionStatus;
 import robot.agent.repository.KnowledgeBaseRepository;
 import robot.agent.repository.KnowledgeDocumentRepository;
+import robot.agent.repository.KnowledgeTaskRepository;
 import robot.agent.repository.KnowledgeVersionRepository;
 import robot.agent.service.knowledge.KnowledgeObjectStorage;
+import robot.agent.service.knowledge.LegacyDocTextExtractor;
+import robot.agent.service.knowledge.PythonKnowledgeClient;
 import robot.agent.service.knowledge.SafeObjectKeyFactory;
 import robot.agent.service.knowledge.StoredKnowledgeObject;
 
@@ -31,8 +39,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -44,30 +54,43 @@ public class KnowledgeService {
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
+    private final KnowledgeTaskRepository knowledgeTaskRepository;
     private final AccessControlService accessControlService;
     private final AuditService auditService;
     private final KnowledgeObjectStorage knowledgeObjectStorage;
     private final SafeObjectKeyFactory safeObjectKeyFactory;
     private final KnowledgeProperties knowledgeProperties;
+    private final PythonKnowledgeClient pythonKnowledgeClient;
+    private final ModelConfigService modelConfigService;
+    private final LegacyDocTextExtractor legacyDocTextExtractor;
 
+    @Autowired
     public KnowledgeService(
             KnowledgeBaseRepository knowledgeBaseRepository,
             KnowledgeVersionRepository knowledgeVersionRepository,
             KnowledgeDocumentRepository knowledgeDocumentRepository,
+            KnowledgeTaskRepository knowledgeTaskRepository,
             AccessControlService accessControlService,
             AuditService auditService,
             KnowledgeObjectStorage knowledgeObjectStorage,
             SafeObjectKeyFactory safeObjectKeyFactory,
-            KnowledgeProperties knowledgeProperties
+            KnowledgeProperties knowledgeProperties,
+            PythonKnowledgeClient pythonKnowledgeClient,
+            ModelConfigService modelConfigService,
+            LegacyDocTextExtractor legacyDocTextExtractor
     ) {
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeVersionRepository = knowledgeVersionRepository;
         this.knowledgeDocumentRepository = knowledgeDocumentRepository;
+        this.knowledgeTaskRepository = knowledgeTaskRepository;
         this.accessControlService = accessControlService;
         this.auditService = auditService;
         this.knowledgeObjectStorage = knowledgeObjectStorage;
         this.safeObjectKeyFactory = safeObjectKeyFactory;
         this.knowledgeProperties = knowledgeProperties;
+        this.pythonKnowledgeClient = pythonKnowledgeClient;
+        this.modelConfigService = modelConfigService;
+        this.legacyDocTextExtractor = legacyDocTextExtractor;
     }
 
     public List<KnowledgeBaseResponse> getKnowledgeBases(Long workspaceId) {
@@ -189,6 +212,8 @@ public class KnowledgeService {
         }
 
         KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
+        KnowledgeTask task = createQueuedTask(saved);
+        runIngestion(knowledgeBase, saved, task, null);
         auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.create_text", "knowledge_document", saved.getDocId(), request, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeDocumentResponse.fromEntity(saved);
     }
@@ -232,6 +257,8 @@ public class KnowledgeService {
             document.setUploadedAt(LocalDateTime.now());
             document.setIndexVersion(1);
             KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
+            KnowledgeTask task = createQueuedTask(saved);
+            runIngestion(knowledgeBase, saved, task, extractLegacyDocTextIfNeeded(extension, file));
             auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.upload", "knowledge_document", saved.getDocId(), filename, ApplicationConstants.HTTP_STATUS_OK);
             return KnowledgeDocumentResponse.fromEntity(saved);
         } catch (IOException exc) {
@@ -239,8 +266,143 @@ public class KnowledgeService {
         }
     }
 
+    public KnowledgeTaskResponse getKnowledgeTask(String taskId) {
+        return KnowledgeTaskResponse.fromEntity(knowledgeTaskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new RuntimeException("Knowledge task not found: " + taskId)));
+    }
+
+    public List<KnowledgeTaskResponse> getDocumentTasks(String docId) {
+        return knowledgeTaskRepository.findByDocIdOrderByCreatedAtDesc(docId)
+                .stream()
+                .map(KnowledgeTaskResponse::fromEntity)
+                .collect(Collectors.toList());
+    }
+
+    public KnowledgeTaskResponse retryKnowledgeTask(String userId, String taskId) {
+        KnowledgeTask task = knowledgeTaskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new RuntimeException("Knowledge task not found: " + taskId));
+        KnowledgeDocument document = knowledgeDocumentRepository.findByDocId(task.getDocId())
+                .orElseThrow(() -> new RuntimeException("Knowledge document not found: " + task.getDocId()));
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(task.getKbCode())
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + task.getKbCode()));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+
+        task.setRetryCount((task.getRetryCount() == null ? 0 : task.getRetryCount()) + 1);
+        task.setStatus(KnowledgeTaskStatus.QUEUED);
+        task.setStage(KnowledgeTaskStage.RAW_SAVED);
+        task.setProgress(0);
+        task.setErrorMessage(null);
+        task.setUpdatedAt(LocalDateTime.now());
+        runIngestion(knowledgeBase, document, task, null);
+        return KnowledgeTaskResponse.fromEntity(task);
+    }
+
+    private KnowledgeTask createQueuedTask(KnowledgeDocument document) {
+        KnowledgeTask task = new KnowledgeTask();
+        task.setTaskId("task_" + UUID.randomUUID().toString().replace("-", ""));
+        task.setDocId(document.getDocId());
+        task.setKbCode(document.getKbCode());
+        task.setStage(KnowledgeTaskStage.RAW_SAVED);
+        task.setStatus(KnowledgeTaskStatus.QUEUED);
+        task.setProgress(0);
+        return knowledgeTaskRepository.save(task);
+    }
+
+    private void runIngestion(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {
+        task.setStatus(KnowledgeTaskStatus.RUNNING);
+        task.setStartedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+        knowledgeTaskRepository.save(task);
+        try {
+            Map<String, Object> response = pythonKnowledgeClient.ingest(buildIngestRequest(knowledgeBase, document, task, legacyDocText));
+            String status = String.valueOf(response == null ? "" : response.getOrDefault("status", ""));
+            if (!"SUCCEEDED".equalsIgnoreCase(status)) {
+                throw new IllegalStateException(String.valueOf(response == null ? "Python ingestion failed" : response.getOrDefault("error_message", "Python ingestion failed")));
+            }
+
+            task.setStatus(KnowledgeTaskStatus.SUCCEEDED);
+            task.setStage(KnowledgeTaskStage.INDEXED);
+            task.setProgress(100);
+            task.setCompletedAt(LocalDateTime.now());
+            task.setUpdatedAt(LocalDateTime.now());
+            document.setStatus(KnowledgeDocumentStatus.READY);
+            document.setChunkCount(intValue(response.get("chunk_count"), 0));
+            document.setGeneratedTitle(stringValue(response.get("generated_title")));
+            document.setGeneratedSummary(stringValue(response.get("generated_summary")));
+            document.setGeneratedKeywords(joinKeywords(response.get("generated_keywords")));
+            document.setProcessedAt(LocalDateTime.now());
+        } catch (Exception exc) {
+            task.setStatus(KnowledgeTaskStatus.FAILED);
+            task.setErrorMessage(exc.getMessage());
+            task.setCompletedAt(LocalDateTime.now());
+            task.setUpdatedAt(LocalDateTime.now());
+            document.setStatus(KnowledgeDocumentStatus.FAILED);
+            document.setErrorMessage(exc.getMessage());
+        }
+        knowledgeTaskRepository.save(task);
+        knowledgeDocumentRepository.save(document);
+    }
+
+    private Map<String, Object> buildIngestRequest(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {
+        String embeddingModelCode = firstNonBlank(knowledgeBase.getEmbeddingModel(), knowledgeProperties.getEmbedding().getDefaultModelCode());
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("task_id", task.getTaskId());
+        request.put("doc_id", document.getDocId());
+        request.put("kb_code", document.getKbCode());
+        request.put("index_version", document.getIndexVersion() == null ? 1 : document.getIndexVersion());
+        request.put("title", firstNonBlank(document.getGeneratedTitle(), stripTextExtension(document.getFilename())));
+        request.put("source_type", document.getSourceType());
+        request.put("filename", document.getFilename());
+        request.put("raw_content", document.getRawContent());
+        request.put("raw_object_url", document.getRawObjectKey() == null ? null : knowledgeObjectStorage.presignedGetUrl(document.getRawObjectKey()).toString());
+        request.put("legacy_doc_text", legacyDocText);
+        request.put("embedding_model_code", embeddingModelCode);
+        request.put("provider_configs", bundle.providerConfigs());
+        request.put("model_records", bundle.modelRecords());
+        return request;
+    }
+
+    private String extractLegacyDocTextIfNeeded(String extension, MultipartFile file) {
+        if (!"doc".equals(extension)) {
+            return null;
+        }
+        try (InputStream inputStream = file.getInputStream()) {
+            return legacyDocTextExtractor.extract(inputStream);
+        } catch (IOException exc) {
+            throw new IllegalStateException("Failed to extract legacy doc text", exc);
+        }
+    }
+
     private String firstNonBlank(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private String stripTextExtension(String filename) {
+        String value = firstNonBlank(filename, "");
+        return value.endsWith(".txt") ? value.substring(0, value.length() - 4) : value;
+    }
+
+    private int intValue(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? fallback : Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException exc) {
+            return fallback;
+        }
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private String joinKeywords(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).collect(Collectors.joining(","));
+        }
+        return value == null ? null : String.valueOf(value);
     }
 
     private String sha256Hex(byte[] bytes) {

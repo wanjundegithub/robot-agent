@@ -8,6 +8,7 @@ import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
 import robot.agent.dto.request.CreateKnowledgeVersionRequest;
 import robot.agent.dto.response.KnowledgeBaseResponse;
 import robot.agent.dto.response.KnowledgeDocumentResponse;
+import robot.agent.dto.response.KnowledgeTaskResponse;
 import robot.agent.dto.response.KnowledgeVersionResponse;
 import robot.agent.service.KnowledgeService;
 
@@ -82,5 +83,23 @@ public class KnowledgeController {
             @RequestParam("file") MultipartFile file
     ) {
         return ResponseEntity.ok(knowledgeService.uploadKnowledgeDocument(userId, kbCode, file));
+    }
+
+    @GetMapping("/tasks/{taskId}")
+    public ResponseEntity<KnowledgeTaskResponse> getKnowledgeTask(@PathVariable String taskId) {
+        return ResponseEntity.ok(knowledgeService.getKnowledgeTask(taskId));
+    }
+
+    @GetMapping("/documents/{docId}/tasks")
+    public ResponseEntity<List<KnowledgeTaskResponse>> getDocumentTasks(@PathVariable String docId) {
+        return ResponseEntity.ok(knowledgeService.getDocumentTasks(docId));
+    }
+
+    @PostMapping("/tasks/{taskId}/retry")
+    public ResponseEntity<KnowledgeTaskResponse> retryKnowledgeTask(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String taskId
+    ) {
+        return ResponseEntity.ok(knowledgeService.retryKnowledgeTask(userId, taskId));
     }
 }

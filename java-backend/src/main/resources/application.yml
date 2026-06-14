@@ -49,9 +49,18 @@ robot:
         - docx
         - md
     embedding:
-      default-model-code: embedding-bge-m3
-      default-upstream-model: bge-m3
-      dimension: 1024
+      default-model-code: embedding-qwen3-8b
+      default-upstream-model: Qwen/Qwen3-Embedding-8B
+      provider-code: modelscope-embedding
+      provider-name: ModelScope Embedding
+      provider-type: openai_compatible
+      base-url: https://api-inference.modelscope.cn/v1
+      api-key-secret-ref: env:MODELSCOPE_API_KEY
+      embedding-path: /embeddings
+      encoding-format: float
+      include-messages: true
+      single-input-as-string: true
+      dimension: 4096
       batch-size: 32
       timeout-ms: 30000
     retrieval:

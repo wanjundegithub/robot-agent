@@ -43,8 +43,15 @@ async def embed_texts_with_model(
         api_key = _resolve_secret(secret_ref)
         headers[auth_header] = api_key if auth_scheme.lower() == "raw" else f"{auth_scheme} {api_key}".strip()
 
-    timeout = float(_default_options(model_record).get("timeout_sec", 30))
-    body = {"model": upstream_model_code, "input": texts}
+    options = _default_options(model_record)
+    timeout = float(options.get("timeout_sec", 30))
+    body: Dict[str, Any] = {"model": upstream_model_code, "input": _request_input(texts, options)}
+    if options.get("include_messages"):
+        body["messages"] = [{"role": "user", "content": text} for text in texts]
+    if options.get("encoding_format"):
+        body["encoding_format"] = str(options["encoding_format"])
+    if options.get("dimensions"):
+        body["dimensions"] = int(options["dimensions"])
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(request_url, headers=headers, json=body)
         response.raise_for_status()
@@ -60,6 +67,12 @@ async def embed_texts_with_model(
 def _default_options(model_record: Dict[str, Any]) -> Dict[str, Any]:
     options = model_record.get("default_options")
     return options if isinstance(options, dict) else {}
+
+
+def _request_input(texts: List[str], options: Dict[str, Any]) -> str | List[str]:
+    if options.get("single_input_as_string") and len(texts) == 1:
+        return texts[0]
+    return texts
 
 
 def _extract_vectors(payload: Dict[str, Any]) -> List[List[float]]:

@@ -8,10 +8,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
+import robot.agent.dto.response.KnowledgeDocumentResponse;
+import robot.agent.dto.response.KnowledgeTaskResponse;
 import robot.agent.model.KnowledgeBase;
 import robot.agent.model.KnowledgeDocument;
 import robot.agent.model.KnowledgeDocumentStatus;
 import robot.agent.model.KnowledgeTask;
+import robot.agent.model.KnowledgeTaskStatus;
 import robot.agent.repository.KnowledgeBaseRepository;
 import robot.agent.repository.KnowledgeDocumentRepository;
 import robot.agent.repository.KnowledgeTaskRepository;
@@ -27,15 +30,13 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class KnowledgeServiceDocumentTest {
+class KnowledgeTaskServiceTest {
 
     @Mock
     private KnowledgeBaseRepository knowledgeBaseRepository;
@@ -88,11 +89,12 @@ class KnowledgeServiceDocumentTest {
     }
 
     @Test
-    void createTextKnowledgeDocumentStoresShortContentInMetadata() {
+    void createTextKnowledgeDocumentCreatesTaskAndMarksDocumentReadyAfterPythonIngest() {
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setCurrentVersion("v1");
+        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -100,28 +102,40 @@ class KnowledgeServiceDocumentTest {
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "modelscope-embedding")), List.of(Map.of("model_code", "embedding-qwen3-8b"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
                 "status", "SUCCEEDED",
-                "chunk_count", 1,
-                "generated_summary", "保修期为一年",
-                "generated_keywords", List.of("保修")
+                "chunk_count", 2,
+                "generated_summary", "Warranty lasts one year.",
+                "generated_keywords", List.of("warranty")
         ));
         CreateKnowledgeDocumentRequest request = new CreateKnowledgeDocumentRequest();
-        request.setTitle("产品保修");
-        request.setContent("保修期为一年");
+        request.setTitle("Product Manual");
+        request.setContent("Warranty lasts one year.");
 
-        knowledgeService.createTextKnowledgeDocument("demo-admin", "kb_product", request);
+        KnowledgeDocumentResponse response = knowledgeService.createTextKnowledgeDocument("demo-admin", "kb_product", request);
 
-        ArgumentCaptor<KnowledgeDocument> captor = ArgumentCaptor.forClass(KnowledgeDocument.class);
-        verify(knowledgeDocumentRepository, atLeastOnce()).save(captor.capture());
-        KnowledgeDocument savedDocument = captor.getAllValues().get(captor.getAllValues().size() - 1);
-        assertThat(savedDocument.getKbCode()).isEqualTo("kb_product");
-        assertThat(savedDocument.getVersion()).isEqualTo("v1");
-        assertThat(savedDocument.getSourceType()).isEqualTo("TEXT");
-        assertThat(savedDocument.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
-        assertThat(savedDocument.getRawContent()).isEqualTo("保修期为一年");
-        assertThat(savedDocument.getRawObjectKey()).isNull();
-        assertThat(savedDocument.getIndexVersion()).isEqualTo(1);
-        assertThat(savedDocument.getChunkCount()).isEqualTo(1);
-        verify(knowledgeObjectStorage, never()).put(any(), any(), anyLong(), any());
+        assertThat(response.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
+        assertThat(response.getChunkCount()).isEqualTo(2);
+        ArgumentCaptor<KnowledgeTask> taskCaptor = ArgumentCaptor.forClass(KnowledgeTask.class);
+        verify(knowledgeTaskRepository, atLeastOnce()).save(taskCaptor.capture());
+        assertThat(taskCaptor.getAllValues()).anySatisfy(task -> {
+            assertThat(task.getDocId()).startsWith("doc_");
+            assertThat(task.getKbCode()).isEqualTo("kb_product");
+            assertThat(task.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
+        });
         verify(pythonKnowledgeClient).ingest(anyMap());
+    }
+
+    @Test
+    void getKnowledgeTaskReturnsTaskResponse() {
+        KnowledgeTask task = new KnowledgeTask();
+        task.setTaskId("task_001");
+        task.setDocId("doc_001");
+        task.setKbCode("kb_product");
+        task.setStatus(KnowledgeTaskStatus.SUCCEEDED);
+        when(knowledgeTaskRepository.findByTaskId("task_001")).thenReturn(Optional.of(task));
+
+        KnowledgeTaskResponse response = knowledgeService.getKnowledgeTask("task_001");
+
+        assertThat(response.getTaskId()).isEqualTo("task_001");
+        assertThat(response.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
     }
 }

@@ -71,7 +71,7 @@ SELECT
   'flight_policy_kb',
   'Flight Policy KB',
   'Flight booking and change policy knowledge base.',
-  'demo-embedding-model',
+  'embedding-qwen3-8b',
   '1.0.0',
   'ACTIVE',
   'system',

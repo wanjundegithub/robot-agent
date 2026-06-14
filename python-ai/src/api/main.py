@@ -12,6 +12,8 @@ from .models import (
     FunctionFragmentTestRunRequest,
     FunctionFragmentValidateRequest,
     IntentClassificationRequest,
+    KnowledgeIngestRequest,
+    KnowledgeIngestResponse,
     RagEvaluationRequest,
     RecommendationRequest,
     ResumeExecutionResponse,
@@ -29,6 +31,7 @@ from src.core.idempotency import (
     initialize_idempotency_store,
 )
 from src.core.knowledge_store import get_knowledge_backend, initialize_knowledge_store
+from src.core.knowledge_ingestion import ingest_knowledge_document
 from src.core.logging_utils import configure_logging
 from src.core.model_runtime import classify_intent_with_model_code
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
@@ -297,6 +300,21 @@ async def decide_workflow_welcome_api(request: WelcomeDecisionRequest):
             system_prompts=request.system_prompts,
         )
     return WelcomeDecisionResponse(**result)
+
+
+@app.post("/api/knowledge/ingest", response_model=KnowledgeIngestResponse)
+async def ingest_knowledge(request: KnowledgeIngestRequest):
+    provider_configs = {
+        str(item.get("provider_code")): item
+        for item in request.provider_configs
+        if item.get("provider_code")
+    }
+    model_records = {
+        str(item.get("model_code")): item
+        for item in request.model_records
+        if item.get("model_code")
+    }
+    return await ingest_knowledge_document(request, provider_configs, model_records)
 
 
 @app.post("/api/phase4/route-thresholds/resolve")
