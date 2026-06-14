@@ -307,12 +307,15 @@ ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops);
 
 ### 7.3 聚合决策
 
-聚合器以配置阈值决定最终路由：
+聚合器以配置阈值决定最终路由。判定顺序必须固定，避免同一输入在不同分支中产生不一致结果：
 
-- 意图高置信命中，优先走意图。
-- 意图未命中或低置信时，若知识命中足够，则走知识。
-- 两边都处于模糊区间时，触发澄清。
-- 两边都低于最低阈值时，触发兜底话术。
+1. 如果 `intent.confidence >= knowledge.route.intent_primary_threshold`，最终路由为 `INTENT`。
+2. 如果 `intent.confidence < knowledge.route.intent_primary_threshold` 且 `knowledge.bestScore >= knowledge.route.knowledge_primary_threshold`，最终路由为 `KNOWLEDGE`。
+3. 如果 `intent.confidence >= knowledge.route.intent_clarify_threshold` 且 `intent.confidence < knowledge.route.intent_primary_threshold`，同时 `knowledge.bestScore >= knowledge.route.knowledge_clarify_threshold` 且 `knowledge.bestScore < knowledge.route.knowledge_primary_threshold`，最终路由为 `CLARIFY`。
+4. 如果 `intent.confidence < knowledge.route.intent_clarify_threshold` 且 `knowledge.bestScore < knowledge.route.knowledge_clarify_threshold`，最终路由为 `FALLBACK`。
+5. 其他边界情况按“意图优先、知识次之、无法确定则澄清”处理：
+   - 意图达到澄清阈值但知识低于澄清阈值时，输出意图澄清问题。
+   - 意图低于澄清阈值但知识达到澄清阈值时，输出知识澄清问题或低置信知识提示。
 
 推荐默认阈值写入配置，当前建议值如下：
 
