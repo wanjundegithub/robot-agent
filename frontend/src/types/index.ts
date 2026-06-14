@@ -262,6 +262,75 @@ export interface RagEvaluationResponse {
   results: Array<Record<string, unknown>>
 }
 
+export interface KnowledgeSpace {
+  id: number
+  workspaceId: number
+  kbCode: string
+  name: string
+  description?: string | null
+  embeddingModel?: string | null
+  currentVersion?: string | null
+  status: string
+  documentCount?: number
+  createdAt?: string | null
+}
+
+export interface KnowledgeDocument {
+  docId: string
+  kbCode: string
+  filename?: string | null
+  fileSize?: number | null
+  sourceType?: string | null
+  status: string
+  chunkCount?: number | null
+  errorMessage?: string | null
+  generatedTitle?: string | null
+  generatedSummary?: string | null
+  generatedKeywords?: string | null
+  indexVersion?: number | null
+  uploadedAt?: string | null
+  processedAt?: string | null
+  title?: string | null
+}
+
+export interface KnowledgeTask {
+  taskId: string
+  docId: string
+  kbCode: string
+  stage: string
+  status: string
+  progress?: number | null
+  errorMessage?: string | null
+  retryCount?: number | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  startedAt?: string | null
+  completedAt?: string | null
+}
+
+export interface KnowledgeDocumentHit {
+  chunkId: string
+  docId: string
+  kbCode: string
+  title?: string | null
+  content?: string | null
+  score: number
+}
+
+export interface KnowledgeCitation {
+  chunkId: string
+  docId: string
+  score: number
+}
+
+export interface KnowledgeSearchResult {
+  query: string
+  documents: KnowledgeDocumentHit[]
+  answer: string
+  citations: KnowledgeCitation[]
+  bestScore: number
+}
+
 export interface SubflowRecommendationResponse {
   workflow_code: string
   recommendations: Array<Record<string, unknown>>

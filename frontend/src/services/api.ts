@@ -8,6 +8,10 @@ import type {
   ExecutionDetail,
   FunctionFragmentTestRunResult,
   FunctionFragmentValidationResult,
+  KnowledgeDocument,
+  KnowledgeSearchResult,
+  KnowledgeSpace,
+  KnowledgeTask,
   Message,
   RagEvaluationResponse,
   ReplayResponse,
@@ -196,6 +200,138 @@ export async function runRagEvaluation(dataset?: Array<Record<string, unknown>>)
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dataset: dataset ?? null }),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getKnowledgeSpaces(workspaceId?: number): Promise<KnowledgeSpace[]> {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(String(workspaceId))}` : ''
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases${query}`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function createKnowledgeSpace(
+  payload: {
+    kbCode: string
+    name: string
+    description?: string
+    embeddingModel?: string
+  },
+  currentUserId: string
+): Promise<KnowledgeSpace> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getKnowledgeDocuments(kbCode: string): Promise<KnowledgeDocument[]> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/${encodeURIComponent(kbCode)}/documents`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function createTextKnowledgeDocument(
+  kbCode: string,
+  payload: { title: string; description?: string; content: string },
+  currentUserId: string
+): Promise<KnowledgeDocument> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/${encodeURIComponent(kbCode)}/documents/text`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function uploadKnowledgeDocument(
+  kbCode: string,
+  file: File,
+  currentUserId: string
+): Promise<KnowledgeDocument> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/${encodeURIComponent(kbCode)}/documents/files`, {
+    method: 'POST',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: formData,
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getKnowledgeTask(taskId: string): Promise<KnowledgeTask> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/tasks/${encodeURIComponent(taskId)}`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getKnowledgeDocumentTasks(docId: string): Promise<KnowledgeTask[]> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/documents/${encodeURIComponent(docId)}/tasks`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function retryKnowledgeTask(taskId: string, currentUserId: string): Promise<KnowledgeTask> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/tasks/${encodeURIComponent(taskId)}/retry`, {
+    method: 'POST',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function searchKnowledge(payload: {
+  query: string
+  kbCodes: string[]
+  retrievalMode?: 'hybrid' | 'keyword' | 'vector' | string
+  topK?: number
+  scoreThreshold?: number
+  generateAnswer?: boolean
+}): Promise<KnowledgeSearchResult> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      retrievalMode: 'hybrid',
+      topK: 5,
+      generateAnswer: true,
+      ...payload,
+    }),
   })
   if (!response.ok) {
     await parseApiError(response)

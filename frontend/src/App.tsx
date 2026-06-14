@@ -3,6 +3,7 @@ import ChatInput from './components/ChatInput'
 import ApiCenterPanel from './components/ApiCenterPanel'
 import ExecutionPanel from './components/ExecutionPanel'
 import FormDialog from './components/FormDialog'
+import KnowledgeCenterPanel from './components/KnowledgeCenterPanel'
 import MessageList from './components/MessageList'
 import ModelConfigPanel from './components/ModelConfigPanel'
 import Orchestrator from './components/Orchestrator'
@@ -42,7 +43,7 @@ import type {
 } from './types'
 import type { WorkflowVersionMutation } from './components/Orchestrator'
 
-type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'api-center'
+type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'api-center' | 'knowledge'
 type WorkflowPageMode = 'list' | 'editor'
 
 const WORKFLOW_LIST_PAGE_SIZE = 10
@@ -464,7 +465,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const syncPageFromHash = () => {
       const value = window.location.hash.replace('#', '')
-      if (value === 'workflow' || value === 'execution' || value === 'models' || value === 'chat' || value === 'api-center') {
+      if (
+        value === 'workflow' ||
+        value === 'execution' ||
+        value === 'models' ||
+        value === 'chat' ||
+        value === 'api-center' ||
+        value === 'knowledge'
+      ) {
         setActivePage(value)
         return
       }
@@ -2039,6 +2047,14 @@ const App: React.FC = () => {
       )
     }
 
+    if (activePage === 'knowledge') {
+      return (
+        <section className="page-knowledge-center">
+          <KnowledgeCenterPanel currentUserId={currentUserId} />
+        </section>
+      )
+    }
+
     return (
       <section className="page-grid page-grid-chat">
         <div className="page-stack">
@@ -2146,6 +2162,9 @@ const App: React.FC = () => {
             </button>
             <button className={`nav-tab ${activePage === 'api-center' ? 'active' : ''}`} onClick={() => navigateToPage('api-center')}>
               API中心
+            </button>
+            <button className={`nav-tab ${activePage === 'knowledge' ? 'active' : ''}`} onClick={() => navigateToPage('knowledge')}>
+              知识库
             </button>
           </nav>
           <label className="flex items-center gap-2">
