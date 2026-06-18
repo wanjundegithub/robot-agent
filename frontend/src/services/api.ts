@@ -218,10 +218,8 @@ export async function getKnowledgeSpaces(workspaceId?: number): Promise<Knowledg
 
 export async function createKnowledgeSpace(
   payload: {
-    kbCode: string
     name: string
     description?: string
-    embeddingModel?: string
   },
   currentUserId: string
 ): Promise<KnowledgeSpace> {
@@ -237,6 +235,40 @@ export async function createKnowledgeSpace(
     await parseApiError(response)
   }
   return await response.json()
+}
+
+export async function updateKnowledgeSpace(
+  kbCode: string,
+  payload: {
+    name: string
+    description?: string
+  },
+  currentUserId: string
+): Promise<KnowledgeSpace> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/${encodeURIComponent(kbCode)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function deleteKnowledgeSpace(kbCode: string, currentUserId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/${encodeURIComponent(kbCode)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
 }
 
 export async function getKnowledgeDocuments(kbCode: string): Promise<KnowledgeDocument[]> {
@@ -264,6 +296,37 @@ export async function createTextKnowledgeDocument(
     await parseApiError(response)
   }
   return await response.json()
+}
+
+export async function updateKnowledgeDocument(
+  docId: string,
+  payload: { title: string; description?: string; content?: string },
+  currentUserId: string
+): Promise<KnowledgeDocument> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/documents/${encodeURIComponent(docId)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function deleteKnowledgeDocument(docId: string, currentUserId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/documents/${encodeURIComponent(docId)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
 }
 
 export async function uploadKnowledgeDocument(

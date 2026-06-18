@@ -1,6 +1,58 @@
 import { expect, test } from '@playwright/test'
 
+type Space = {
+  id: number
+  workspaceId: number
+  kbCode: string
+  name: string
+  description: string
+  embeddingModel?: string | null
+  status: string
+  documentCount?: number
+  createdAt?: string
+}
+
+type DocumentItem = {
+  docId: string
+  kbCode: string
+  title?: string | null
+  description?: string | null
+  filename?: string | null
+  sourceType?: string | null
+  status: string
+  chunkCount?: number
+  fileSize?: number
+  generatedSummary?: string | null
+}
+
 test.beforeEach(async ({ page }) => {
+  let spaces: Space[] = [
+    {
+      id: 1,
+      workspaceId: 1,
+      kbCode: 'kb_product',
+      name: '产品知识',
+      description: '产品说明与售后政策',
+      embeddingModel: 'embedding-qwen3-8b',
+      status: 'ACTIVE',
+      documentCount: 1,
+      createdAt: '2026-06-14T00:00:00',
+    },
+  ]
+  let documents: DocumentItem[] = [
+    {
+      docId: 'doc_1',
+      kbCode: 'kb_product',
+      title: '产品手册',
+      description: '售后规则',
+      sourceType: 'TEXT',
+      status: 'READY',
+      chunkCount: 6,
+      fileSize: 128,
+      generatedSummary: '保修期为一年。',
+    },
+  ]
+
   await page.route('**/api/workflows/published', async (route) => route.fulfill({ json: [] }))
   await page.route('**/api/sessions**', async (route) => {
     if (route.request().method() === 'POST') {
@@ -21,51 +73,69 @@ test.beforeEach(async ({ page }) => {
   })
   await page.route('**/api/knowledge-bases', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({
-        json: [
-          {
-            id: 1,
-            workspaceId: 1,
-            kbCode: 'kb_product',
-            name: '产品知识',
-            description: '产品说明与售后政策',
-            embeddingModel: 'embedding-qwen3-8b',
-            status: 'ACTIVE',
-            documentCount: 3,
-            createdAt: '2026-06-14T00:00:00',
-          },
-        ],
-      })
+      await route.fulfill({ json: spaces })
       return
     }
-    await route.fulfill({
-      json: {
-        id: 2,
-        workspaceId: 1,
-        kbCode: 'kb_new',
-        name: '新知识空间',
-        description: '',
-        embeddingModel: 'embedding-qwen3-8b',
-        status: 'ACTIVE',
-      },
-    })
+    const body = JSON.parse(route.request().postData() || '{}')
+    expect(body).not.toHaveProperty('embeddingModel')
+    expect(body).not.toHaveProperty('kbCode')
+    const created: Space = {
+      id: 2,
+      workspaceId: 1,
+      kbCode: 'kb_generated',
+      name: body.name,
+      description: body.description ?? '',
+      status: 'ACTIVE',
+      documentCount: 0,
+    }
+    spaces = [created, ...spaces]
+    await route.fulfill({ json: created })
+  })
+  await page.route('**/api/knowledge-bases/kb_product', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = JSON.parse(route.request().postData() || '{}')
+      expect(body).not.toHaveProperty('embeddingModel')
+      spaces = spaces.map((space) =>
+        space.kbCode === 'kb_product' ? { ...space, name: body.name, description: body.description ?? '' } : space
+      )
+      await route.fulfill({ json: spaces.find((space) => space.kbCode === 'kb_product') })
+      return
+    }
+    if (route.request().method() === 'DELETE') {
+      spaces = spaces.filter((space) => space.kbCode !== 'kb_product')
+      await route.fulfill({ status: 204, body: '' })
+      return
+    }
+    await route.continue()
   })
   await page.route('**/api/knowledge-bases/kb_product/documents', async (route) =>
-    route.fulfill({
-      json: [
-        {
-          id: 1,
-          kbCode: 'kb_product',
-          docId: 'doc_1',
-          title: '产品手册',
-          sourceType: 'TEXT',
-          status: 'READY',
-          chunkCount: 6,
-          createdAt: '2026-06-14T00:00:00',
-        },
-      ],
-    })
+    route.fulfill({ json: documents })
   )
+  await page.route('**/api/knowledge-bases/documents/doc_1', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = JSON.parse(route.request().postData() || '{}')
+      documents = documents.map((document) =>
+        document.docId === 'doc_1'
+          ? {
+              ...document,
+              title: body.title,
+              description: body.description ?? '',
+              generatedSummary: body.content,
+              status: 'READY',
+            }
+          : document
+      )
+      await route.fulfill({ json: documents.find((document) => document.docId === 'doc_1') })
+      return
+    }
+    if (route.request().method() === 'DELETE') {
+      documents = documents.filter((document) => document.docId !== 'doc_1')
+      await route.fulfill({ status: 204, body: '' })
+      return
+    }
+    await route.continue()
+  })
+  await page.route('**/api/knowledge-bases/documents/doc_1/tasks', async (route) => route.fulfill({ json: [] }))
   await page.route('**/api/knowledge-bases/search', async (route) =>
     route.fulfill({
       json: {
@@ -76,7 +146,7 @@ test.beforeEach(async ({ page }) => {
             docId: 'doc_1',
             kbCode: 'kb_product',
             title: '产品手册',
-            content: '保修期为一年',
+            content: '保修期为一年。',
             score: 0.92,
           },
         ],
@@ -88,7 +158,7 @@ test.beforeEach(async ({ page }) => {
   )
 })
 
-test('knowledge center uses full screen layout and required entries', async ({ page }) => {
+test('knowledge center uses Chinese UI without refresh or embedding model controls', async ({ page }) => {
   await page.goto('/#knowledge')
   const panel = page.getByTestId('knowledge-center-panel')
   await expect(panel).toBeVisible()
@@ -96,9 +166,65 @@ test('knowledge center uses full screen layout and required entries', async ({ p
   const viewport = page.viewportSize()
   expect(box?.width).toBeGreaterThan((viewport?.width ?? 0) * 0.9)
   expect(box?.height).toBeGreaterThan((viewport?.height ?? 0) * 0.75)
+
   await expect(page.getByTestId('knowledge-space-create')).toBeVisible()
   await expect(page.getByTestId('knowledge-space-list')).toContainText('产品知识')
   await expect(page.getByTestId('knowledge-subnav-spaces')).toHaveText('知识空间')
   await expect(page.getByTestId('knowledge-subnav-tasks')).toHaveText('采集任务')
   await expect(page.getByTestId('knowledge-subnav-search')).toHaveText('知识检索')
+  await expect(panel).not.toContainText('刷新')
+  await expect(panel).not.toContainText('向量模型')
+  await expect(panel).not.toContainText('embedding')
+  await expect(panel).not.toContainText('kb_product')
+  await expect(panel).not.toContainText('No knowledge')
+
+  await page.getByTestId('knowledge-space-create').click()
+  await expect(page.getByRole('dialog')).toContainText('新增知识空间')
+  await expect(page.getByRole('dialog')).not.toContainText('空间编码')
+  await expect(page.getByRole('dialog')).not.toContainText('向量模型')
+})
+
+test('knowledge spaces can be edited and soft deleted from the page', async ({ page }) => {
+  await page.goto('/#knowledge')
+  await page.getByTestId('knowledge-space-edit-kb_product').click()
+  await page.getByLabel('空间名称').fill('产品知识库')
+  await page.getByLabel('描述').fill('产品说明、售后政策与常见问题')
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByTestId('knowledge-space-list')).toContainText('产品知识库')
+
+  await page.getByTestId('knowledge-space-delete-kb_product').click()
+  await expect(page.getByRole('dialog')).toContainText('删除知识空间')
+  await page.getByRole('button', { name: '确认删除' }).click()
+  await expect(page.getByTestId('knowledge-space-list')).not.toContainText('产品知识库')
+})
+
+test('text knowledge can be edited and soft deleted from the page', async ({ page }) => {
+  await page.goto('/#knowledge')
+  await page.getByTestId('knowledge-document-edit-doc_1').click()
+  await page.getByLabel('标题').fill('产品保修政策')
+  await page.getByLabel('描述').fill('售后保修规则')
+  await page.getByLabel('正文').fill('产品保修期为一年。')
+  await page.getByRole('button', { name: '提交采集' }).click()
+  await expect(page.getByText('产品保修政策')).toBeVisible()
+
+  await page.getByTestId('knowledge-document-delete-doc_1').click()
+  await expect(page.getByRole('dialog')).toContainText('删除知识')
+  await page.getByRole('button', { name: '确认删除' }).click()
+  await expect(page.locator('.knowledge-document-list')).not.toContainText('产品保修政策')
+})
+
+test('knowledge page keeps backend errors in Chinese', async ({ page }) => {
+  await page.unroute('**/api/knowledge-bases')
+  await page.route('**/api/knowledge-bases', async (route) => {
+    await route.fulfill({
+      status: 500,
+      json: { message: 'Server Error' },
+    })
+  })
+
+  await page.goto('/#knowledge')
+  const panel = page.getByTestId('knowledge-center-panel')
+
+  await expect(panel).toContainText('加载知识空间失败。')
+  await expect(panel).not.toContainText('Server Error')
 })

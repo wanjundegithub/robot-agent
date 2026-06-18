@@ -279,6 +279,7 @@ export interface KnowledgeDocument {
   docId: string
   kbCode: string
   filename?: string | null
+  description?: string | null
   fileSize?: number | null
   sourceType?: string | null
   status: string

@@ -41,6 +41,24 @@ public class KnowledgeController {
         return ResponseEntity.ok(knowledgeService.createKnowledgeBase(userId, request));
     }
 
+    @PutMapping("/{kbCode}")
+    public ResponseEntity<KnowledgeBaseResponse> updateKnowledgeBase(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String kbCode,
+            @RequestBody CreateKnowledgeBaseRequest request
+    ) {
+        return ResponseEntity.ok(knowledgeService.updateKnowledgeBase(userId, kbCode, request));
+    }
+
+    @DeleteMapping("/{kbCode}")
+    public ResponseEntity<Void> deleteKnowledgeBase(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String kbCode
+    ) {
+        knowledgeService.deleteKnowledgeBase(userId, kbCode);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/{kbCode}/versions")
     public ResponseEntity<List<KnowledgeVersionResponse>> getKnowledgeVersions(@PathVariable String kbCode) {
         return ResponseEntity.ok(knowledgeService.getKnowledgeVersions(kbCode));
@@ -85,6 +103,24 @@ public class KnowledgeController {
             @RequestParam("file") MultipartFile file
     ) {
         return ResponseEntity.ok(knowledgeService.uploadKnowledgeDocument(userId, kbCode, file));
+    }
+
+    @PutMapping("/documents/{docId}")
+    public ResponseEntity<KnowledgeDocumentResponse> updateKnowledgeDocument(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String docId,
+            @RequestBody CreateKnowledgeDocumentRequest request
+    ) {
+        return ResponseEntity.ok(knowledgeService.updateKnowledgeDocument(userId, docId, request));
+    }
+
+    @DeleteMapping("/documents/{docId}")
+    public ResponseEntity<Void> deleteKnowledgeDocument(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String docId
+    ) {
+        knowledgeService.deleteKnowledgeDocument(userId, docId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/tasks/{taskId}")

@@ -99,6 +99,7 @@ public class KnowledgeService {
         Long effectiveWorkspaceId = workspaceId == null ? ApplicationConstants.DEFAULT_WORKSPACE_ID : workspaceId;
         return knowledgeBaseRepository.findByWorkspaceIdOrderByCreatedAtDesc(effectiveWorkspaceId)
                 .stream()
+                .filter(knowledgeBase -> knowledgeBase.getStatus() != KnowledgeBaseStatus.DELETED)
                 .map(KnowledgeBaseResponse::fromEntity)
                 .collect(Collectors.toList());
     }
@@ -109,10 +110,10 @@ public class KnowledgeService {
 
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setWorkspaceId(workspaceId);
-        knowledgeBase.setKbCode(request.getKbCode());
+        knowledgeBase.setKbCode(generateKnowledgeBaseCode(request.getKbCode()));
         knowledgeBase.setName(request.getName());
-        knowledgeBase.setDescription(request.getDescription());
-        knowledgeBase.setEmbeddingModel(request.getEmbeddingModel());
+        knowledgeBase.setDescription(blankToNull(request.getDescription()));
+        knowledgeBase.setEmbeddingModel(firstNonBlank(request.getEmbeddingModel(), knowledgeProperties.getEmbedding().getDefaultModelCode()));
         knowledgeBase.setStatus(KnowledgeBaseStatus.ACTIVE);
         knowledgeBase.setCreatedBy(userId);
         knowledgeBase.setCreatedAt(LocalDateTime.now());
@@ -120,6 +121,39 @@ public class KnowledgeService {
         KnowledgeBase saved = knowledgeBaseRepository.save(knowledgeBase);
         auditService.logAction(workspaceId, userId, "knowledge.create", "knowledge_base", saved.getKbCode(), request, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeBaseResponse.fromEntity(saved);
+    }
+
+    public KnowledgeBaseResponse updateKnowledgeBase(String userId, String kbCode, CreateKnowledgeBaseRequest request) {
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(kbCode)
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + kbCode));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+        if (knowledgeBase.getStatus() == KnowledgeBaseStatus.DELETED) {
+            throw new IllegalStateException("Knowledge base has been deleted: " + kbCode);
+        }
+        String name = request.getName() == null ? "" : request.getName().trim();
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("Knowledge base name must not be empty");
+        }
+        knowledgeBase.setName(name);
+        knowledgeBase.setDescription(blankToNull(request.getDescription()));
+        KnowledgeBase saved = knowledgeBaseRepository.save(knowledgeBase);
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.update", "knowledge_base", saved.getKbCode(), request, ApplicationConstants.HTTP_STATUS_OK);
+        return KnowledgeBaseResponse.fromEntity(saved);
+    }
+
+    public void deleteKnowledgeBase(String userId, String kbCode) {
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(kbCode)
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + kbCode));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+        knowledgeBase.setStatus(KnowledgeBaseStatus.DELETED);
+        knowledgeBaseRepository.save(knowledgeBase);
+        knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc(kbCode).forEach(document -> {
+            if (document.getStatus() != KnowledgeDocumentStatus.DELETED) {
+                document.setStatus(KnowledgeDocumentStatus.DELETED);
+                knowledgeDocumentRepository.save(document);
+            }
+        });
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.delete", "knowledge_base", kbCode, null, ApplicationConstants.HTTP_STATUS_OK);
     }
 
     public List<KnowledgeVersionResponse> getKnowledgeVersions(String kbCode) {
@@ -188,7 +222,10 @@ public class KnowledgeService {
         document.setKbCode(kbCode);
         document.setVersion(firstNonBlank(knowledgeBase.getCurrentVersion(), "1"));
         document.setDocId(docId);
-        document.setFilename(firstNonBlank(request.getTitle(), "文本知识") + ".txt");
+        String title = firstNonBlank(request.getTitle(), "文本知识");
+        document.setTitle(title);
+        document.setDescription(blankToNull(request.getDescription()));
+        document.setFilename(title + ".txt");
         document.setSourceType("TEXT");
         document.setRawContentType("text/plain; charset=utf-8");
         document.setStatus(KnowledgeDocumentStatus.PENDING);
@@ -248,6 +285,7 @@ public class KnowledgeService {
             document.setKbCode(kbCode);
             document.setVersion(firstNonBlank(knowledgeBase.getCurrentVersion(), "1"));
             document.setDocId(docId);
+            document.setTitle(stripTextExtension(filename));
             document.setFilename(filename);
             document.setFileSize(file.getSize());
             document.setSourceType("FILE");
@@ -266,6 +304,61 @@ public class KnowledgeService {
         } catch (IOException exc) {
             throw new IllegalStateException("Failed to read uploaded knowledge file", exc);
         }
+    }
+
+    public KnowledgeDocumentResponse updateKnowledgeDocument(String userId, String docId, CreateKnowledgeDocumentRequest request) {
+        KnowledgeDocument document = knowledgeDocumentRepository.findByDocId(docId)
+                .orElseThrow(() -> new RuntimeException("Knowledge document not found: " + docId));
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(document.getKbCode())
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + document.getKbCode()));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+        if (document.getStatus() == KnowledgeDocumentStatus.DELETED) {
+            throw new IllegalStateException("Knowledge document has been deleted: " + docId);
+        }
+
+        String title = firstNonBlank(request.getTitle(), stripTextExtension(document.getFilename()));
+        document.setTitle(title);
+        document.setDescription(blankToNull(request.getDescription()));
+
+        String content = request.getContent() == null ? null : request.getContent().trim();
+        if ("TEXT".equalsIgnoreCase(document.getSourceType()) && content != null) {
+            if (content.isBlank()) {
+                throw new IllegalArgumentException("Knowledge text content must not be empty");
+            }
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            document.setFilename(title + ".txt");
+            document.setRawContent(content);
+            document.setFileSize((long) bytes.length);
+            document.setContentHash(sha256Hex(bytes));
+            document.setRawContentType("text/plain; charset=utf-8");
+            document.setRawBucket(null);
+            document.setRawObjectKey(null);
+            document.setRawEtag(null);
+            document.setStatus(KnowledgeDocumentStatus.PENDING);
+            document.setErrorMessage(null);
+            document.setIndexVersion((document.getIndexVersion() == null ? 0 : document.getIndexVersion()) + 1);
+            KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
+            KnowledgeTask task = createQueuedTask(saved);
+            runIngestion(knowledgeBase, saved, task, null);
+            auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.update_text", "knowledge_document", saved.getDocId(), request, ApplicationConstants.HTTP_STATUS_OK);
+            return KnowledgeDocumentResponse.fromEntity(saved);
+        }
+
+        KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.update", "knowledge_document", saved.getDocId(), request, ApplicationConstants.HTTP_STATUS_OK);
+        return KnowledgeDocumentResponse.fromEntity(saved);
+    }
+
+    public void deleteKnowledgeDocument(String userId, String docId) {
+        KnowledgeDocument document = knowledgeDocumentRepository.findByDocId(docId)
+                .orElseThrow(() -> new RuntimeException("Knowledge document not found: " + docId));
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(document.getKbCode())
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + document.getKbCode()));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+        document.setStatus(KnowledgeDocumentStatus.DELETED);
+        document.setErrorMessage(null);
+        knowledgeDocumentRepository.save(document);
+        auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.delete", "knowledge_document", docId, null, ApplicationConstants.HTTP_STATUS_OK);
     }
 
     public KnowledgeTaskResponse getKnowledgeTask(String taskId) {
@@ -335,7 +428,28 @@ public class KnowledgeService {
         pythonRequest.put("provider_configs", bundle.providerConfigs());
         pythonRequest.put("model_records", bundle.modelRecords());
         pythonRequest.put("generate_answer", request.getGenerateAnswer() == null ? Boolean.TRUE : request.getGenerateAnswer());
-        return KnowledgeSearchResponse.fromMap(pythonKnowledgeClient.search(pythonRequest));
+        KnowledgeSearchResponse response = KnowledgeSearchResponse.fromMap(pythonKnowledgeClient.search(pythonRequest));
+        int originalDocumentCount = response.getDocuments().size();
+        Set<String> activeDocIds = kbCodes.stream()
+                .flatMap(kbCode -> knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc(kbCode).stream())
+                .filter(document -> document.getStatus() != KnowledgeDocumentStatus.DELETED)
+                .map(KnowledgeDocument::getDocId)
+                .collect(Collectors.toSet());
+        response.setDocuments(response.getDocuments().stream()
+                .filter(hit -> activeDocIds.contains(hit.getDocId()))
+                .collect(Collectors.toList()));
+        response.setCitations(response.getCitations().stream()
+                .filter(citation -> activeDocIds.contains(citation.getDocId()))
+                .collect(Collectors.toList()));
+        response.setBestScore(response.getDocuments().stream()
+                .map(KnowledgeSearchResponse.DocumentHit::getScore)
+                .mapToDouble(value -> value == null ? 0.0d : value)
+                .max()
+                .orElse(0.0d));
+        if (response.getDocuments().size() != originalDocumentCount) {
+            response.setAnswer("");
+        }
+        return response;
     }
 
     private KnowledgeTask createQueuedTask(KnowledgeDocument document) {
@@ -417,6 +531,14 @@ public class KnowledgeService {
 
     private String firstNonBlank(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private String generateKnowledgeBaseCode(String requestedCode) {
+        return firstNonBlank(requestedCode, "kb_" + UUID.randomUUID().toString().replace("-", ""));
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private String stripTextExtension(String filename) {

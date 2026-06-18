@@ -10,6 +10,8 @@ import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.KnowledgeSearchRequest;
 import robot.agent.dto.response.KnowledgeSearchResponse;
 import robot.agent.model.KnowledgeBase;
+import robot.agent.model.KnowledgeDocument;
+import robot.agent.model.KnowledgeDocumentStatus;
 import robot.agent.repository.KnowledgeBaseRepository;
 import robot.agent.repository.KnowledgeDocumentRepository;
 import robot.agent.repository.KnowledgeTaskRepository;
@@ -87,7 +89,9 @@ class KnowledgeSearchServiceTest {
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        KnowledgeDocument document = document("doc_1", KnowledgeDocumentStatus.READY);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
+        when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product")).thenReturn(List.of(document));
         when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(
                         List.of(Map.of("provider_code", "modelscope-embedding")),
@@ -124,5 +128,66 @@ class KnowledgeSearchServiceTest {
         assertThat(captor.getValue()).containsEntry("top_k", 3);
         assertThat((List<?>) captor.getValue().get("provider_configs")).hasSize(1);
         assertThat((List<?>) captor.getValue().get("model_records")).hasSize(1);
+    }
+
+    @Test
+    void searchKnowledgeFiltersSoftDeletedDocumentHits() {
+        KnowledgeBase knowledgeBase = new KnowledgeBase();
+        knowledgeBase.setWorkspaceId(1L);
+        knowledgeBase.setKbCode("kb_product");
+        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        KnowledgeDocument activeDocument = document("doc_active", KnowledgeDocumentStatus.READY);
+        KnowledgeDocument deletedDocument = document("doc_deleted", KnowledgeDocumentStatus.DELETED);
+        when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
+        when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product"))
+                .thenReturn(List.of(deletedDocument, activeDocument));
+        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
+        when(pythonKnowledgeClient.search(anyMap())).thenReturn(Map.of(
+                "query", "保修期多久",
+                "documents", List.of(
+                        Map.of(
+                                "chunk_id", "chunk_deleted",
+                                "doc_id", "doc_deleted",
+                                "kb_code", "kb_product",
+                                "title", "已删除知识",
+                                "content", "旧保修规则",
+                                "score", 0.99
+                        ),
+                        Map.of(
+                                "chunk_id", "chunk_active",
+                                "doc_id", "doc_active",
+                                "kb_code", "kb_product",
+                                "title", "产品手册",
+                                "content", "保修期为一年",
+                                "score", 0.92
+                        )
+                ),
+                "answer", "",
+                "citations", List.of(
+                        Map.of("chunkId", "chunk_deleted", "docId", "doc_deleted", "score", 0.99),
+                        Map.of("chunkId", "chunk_active", "docId", "doc_active", "score", 0.92)
+                ),
+                "bestScore", 0.99
+        ));
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("保修期多久");
+        request.setKbCodes(List.of("kb_product"));
+
+        KnowledgeSearchResponse response = knowledgeService.searchKnowledge("demo-admin", request);
+
+        assertThat(response.getDocuments()).extracting(KnowledgeSearchResponse.DocumentHit::getDocId)
+                .containsExactly("doc_active");
+        assertThat(response.getCitations()).extracting(KnowledgeSearchResponse.Citation::getDocId)
+                .containsExactly("doc_active");
+        assertThat(response.getBestScore()).isEqualTo(0.92d);
+    }
+
+    private KnowledgeDocument document(String docId, KnowledgeDocumentStatus status) {
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocId(docId);
+        document.setKbCode("kb_product");
+        document.setStatus(status);
+        return document;
     }
 }

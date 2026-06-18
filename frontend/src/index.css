@@ -610,6 +610,10 @@ body {
   transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
+.knowledge-space-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .knowledge-space-row:hover,
 .knowledge-space-row.active {
   border-color: rgba(14, 165, 233, 0.45);
@@ -682,8 +686,27 @@ body {
 
 .knowledge-document-row,
 .knowledge-task-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
+}
+
+.knowledge-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.knowledge-danger-action {
+  border-color: rgba(248, 113, 113, 0.42);
+  color: #dc2626;
+}
+
+.knowledge-danger-action:hover {
+  border-color: rgba(220, 38, 38, 0.55);
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 .knowledge-task-meta {

@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 public class KnowledgeDocumentResponse {
     private String docId;
     private String kbCode;
+    private String title;
+    private String description;
     private String filename;
     private Long fileSize;
     private String sourceType;
@@ -25,6 +27,8 @@ public class KnowledgeDocumentResponse {
         KnowledgeDocumentResponse response = new KnowledgeDocumentResponse();
         response.setDocId(entity.getDocId());
         response.setKbCode(entity.getKbCode());
+        response.setTitle(entity.getTitle());
+        response.setDescription(entity.getDescription());
         response.setFilename(entity.getFilename());
         response.setFileSize(entity.getFileSize());
         response.setSourceType(entity.getSourceType());
@@ -54,6 +58,22 @@ public class KnowledgeDocumentResponse {
 
     public void setKbCode(String kbCode) {
         this.kbCode = kbCode;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
     }
 
     public String getFilename() {

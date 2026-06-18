@@ -33,7 +33,7 @@ public class KnowledgeBase {
     private String currentVersion;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", length = 20, nullable = false)
+    @Column(name = "status", columnDefinition = "VARCHAR(20)", nullable = false)
     private KnowledgeBaseStatus status = KnowledgeBaseStatus.ACTIVE;
 
     @Column(name = "created_by", length = 64)
