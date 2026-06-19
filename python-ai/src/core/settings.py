@@ -12,7 +12,7 @@ class RuntimeSettings(BaseSettings):
     vector_table: str = "knowledge_chunks"
     vector_dimension: int = 4096
 
-    knowledge_embedding_default_model_code: str = "embedding-qwen3-8b"
+    knowledge_embedding_default_model_code: str = "model-431c4581ab84"
     knowledge_embedding_batch_size: int = 32
     knowledge_retrieval_vector_weight: float = 0.7
     knowledge_retrieval_keyword_weight: float = 0.3

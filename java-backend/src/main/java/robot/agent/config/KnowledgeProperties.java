@@ -152,13 +152,13 @@ public class KnowledgeProperties {
     }
 
     public static class Embedding {
-        private String defaultModelCode = "embedding-qwen3-8b";
+        private String defaultModelCode = "model-431c4581ab84";
         private String defaultUpstreamModel = "Qwen/Qwen3-Embedding-8B";
-        private String providerCode = "modelscope-embedding";
+        private String providerCode = "model-431c4581ab84-provider";
         private String providerName = "ModelScope Embedding";
         private String providerType = "openai_compatible";
-        private String baseUrl = "https://api-inference.modelscope.cn/v1";
-        private String apiKeySecretRef = "env:MODELSCOPE_API_KEY";
+        private String baseUrl = "https://api-inference.modelscope.cn/v1/embeddings";
+        private String apiKeySecretRef = "";
         private String embeddingPath = "/embeddings";
         private String encodingFormat = "float";
         private boolean includeMessages = true;

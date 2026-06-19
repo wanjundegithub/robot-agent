@@ -280,6 +280,7 @@ export interface KnowledgeDocument {
   kbCode: string
   filename?: string | null
   description?: string | null
+  content?: string | null
   fileSize?: number | null
   sourceType?: string | null
   status: string

@@ -4,6 +4,7 @@ import {
   createTextKnowledgeDocument,
   deleteKnowledgeDocument,
   deleteKnowledgeSpace,
+  deleteKnowledgeTask,
   getKnowledgeDocumentTasks,
   getKnowledgeDocuments,
   getKnowledgeSpaces,
@@ -196,7 +197,7 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
       mode: String(document.sourceType).toUpperCase() === 'FILE' ? 'file' : 'text',
       title: getDocumentTitle(document),
       description: document.description ?? '',
-      content: document.generatedSummary ?? '',
+      content: document.content ?? document.generatedSummary ?? '',
       file: null,
     })
     setEditingDocument(document)
@@ -333,6 +334,7 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
         retrievalMode: 'hybrid',
         topK: searchTopK,
         generateAnswer: true,
+        currentUserId,
       })
       setSearchResult(result)
       setStatusMessage(null)
@@ -356,6 +358,17 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
       await loadTasks()
     } catch {
       setError('重试采集任务失败。')
+    }
+  }
+
+  const deleteTask = async (taskId: string) => {
+    try {
+      await deleteKnowledgeTask(taskId, currentUserId)
+      setTasks((current) => current.filter((task) => task.taskId !== taskId))
+      setStatusMessage('已删除采集任务。')
+      setError(null)
+    } catch {
+      setError('删除采集任务失败。')
     }
   }
 
@@ -565,6 +578,14 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
                             重试
                           </button>
                         )}
+                        <button
+                          className="prompt-secondary knowledge-danger-action"
+                          type="button"
+                          onClick={() => void deleteTask(task.taskId)}
+                          data-testid={`knowledge-task-delete-${task.taskId}`}
+                        >
+                          删除
+                        </button>
                       </div>
                     </article>
                   ))}
@@ -824,9 +845,13 @@ function displayStatus(status?: string | null) {
       return '已就绪'
     case 'PENDING':
       return '待处理'
+    case 'QUEUED':
+      return '排队中'
     case 'RUNNING':
     case 'PROCESSING':
       return '处理中'
+    case 'SUCCEEDED':
+      return '成功'
     case 'FAILED':
       return '失败'
     case 'DISABLED':

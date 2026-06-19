@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.CreateKnowledgeDocumentRequest;
+import robot.agent.dto.response.KnowledgeDocumentResponse;
 import robot.agent.model.KnowledgeBase;
 import robot.agent.model.KnowledgeDocument;
 import robot.agent.model.KnowledgeDocumentStatus;
@@ -96,8 +97,8 @@ class KnowledgeServiceDocumentTest {
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
-                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "modelscope-embedding")), List.of(Map.of("model_code", "embedding-qwen3-8b"))));
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
                 "status", "SUCCEEDED",
                 "chunk_count", 1,
@@ -122,6 +123,25 @@ class KnowledgeServiceDocumentTest {
         assertThat(savedDocument.getIndexVersion()).isEqualTo(1);
         assertThat(savedDocument.getChunkCount()).isEqualTo(1);
         verify(knowledgeObjectStorage, never()).put(any(), any(), anyLong(), any());
-        verify(pythonKnowledgeClient).ingest(anyMap());
+        ArgumentCaptor<Map<String, Object>> requestCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonKnowledgeClient).ingest(requestCaptor.capture());
+        assertThat(requestCaptor.getValue()).containsEntry("embedding_model_code", "model-431c4581ab84");
+    }
+
+    @Test
+    void documentResponseIncludesRawTextContentForTextDocumentEditing() {
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocId("doc_text");
+        document.setKbCode("kb_product");
+        document.setSourceType("TEXT");
+        document.setTitle("产品保修");
+        document.setRawContent("完整正文：产品保修期为一年，电池保修期为六个月。");
+        document.setGeneratedSummary("摘要：保修期为一年。");
+        document.setStatus(KnowledgeDocumentStatus.READY);
+
+        KnowledgeDocumentResponse response = KnowledgeDocumentResponse.fromEntity(document);
+
+        assertThat(response.getContent()).isEqualTo("完整正文：产品保修期为一年，电池保修期为六个月。");
+        assertThat(response.getGeneratedSummary()).isEqualTo("摘要：保修期为一年。");
     }
 }

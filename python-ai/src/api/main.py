@@ -34,6 +34,8 @@ from src.core.idempotency import (
 from src.core.knowledge_store import get_knowledge_backend, get_knowledge_store, initialize_knowledge_store
 from src.core.knowledge_ingestion import ingest_knowledge_document
 from src.core.logging_utils import configure_logging
+from src.core.embedding_runtime import embed_texts_with_model
+from src.core.settings import settings
 from src.core.model_runtime import classify_intent_with_model_code
 from src.core.optimization import dynamic_threshold_manager, subflow_recommendation_service
 from src.core.protection import ProtectionError, runtime_protection_manager
@@ -330,12 +332,23 @@ async def search_knowledge(request: KnowledgeSearchRequest):
         for item in request.model_records
         if item.get("model_code")
     }
+    query_embedding = None
+    if request.retrieval_mode in {"vector", "hybrid"}:
+        vectors = await embed_texts_with_model(
+            texts=[request.query],
+            model_code=request.embedding_model_code,
+            provider_configs=provider_configs,
+            model_records=model_records,
+            expected_dimension=settings.vector_dimension,
+        )
+        query_embedding = vectors[0] if vectors else None
     documents = get_knowledge_store().search_many(
         kb_codes=request.kb_codes,
         query=request.query,
         retrieval_mode=request.retrieval_mode,
         top_k=request.top_k,
         score_threshold=request.score_threshold,
+        embedding=query_embedding,
         embedding_model_code=request.embedding_model_code,
         provider_configs=provider_configs,
         model_records=model_records,

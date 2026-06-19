@@ -98,38 +98,36 @@ class ModelConfigServiceTest {
     }
 
     @Test
-    void buildRuntimeBundleForModelProvidesConfiguredQwenEmbeddingFallback() {
-        when(modelRecordRepository.findByModelCode("embedding-qwen3-8b")).thenReturn(Optional.empty());
+    void buildRuntimeBundleForModelUsesConfiguredDatabaseEmbeddingModel() {
+        LlmModelRecord modelRecord = modelRecord("model-431c4581ab84", "model-431c4581ab84-provider");
+        modelRecord.setModelName("Qwen/Qwen3-Embedding-8B");
+        modelRecord.setUpstreamModelCode("Qwen/Qwen3-Embedding-8B");
+        modelRecord.setDefaultOptionsJson("{\"input\":\"hello\",\"encoding_format\":\"float\"}");
+        LlmProviderConfig provider = provider("model-431c4581ab84-provider");
+        provider.setProviderType("openai_compatible");
+        provider.setBaseUrl("https://api-inference.modelscope.cn/v1/embeddings");
+        provider.setApiKeySecretRef("ms-db-secret");
 
-        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b");
+        when(modelRecordRepository.findByModelCode("model-431c4581ab84")).thenReturn(Optional.of(modelRecord));
+        when(providerRepository.findByProviderCode("model-431c4581ab84-provider")).thenReturn(Optional.of(provider));
 
-        assertThat(bundle.providerConfigs()).containsExactly(Map.of(
-                "provider_code", "modelscope-embedding",
-                "provider_name", "ModelScope Embedding",
-                "provider_type", "openai_compatible",
-                "base_url", "https://api-inference.modelscope.cn/v1",
-                "api_key_secret_ref", "env:MODELSCOPE_API_KEY",
-                "default_model_code", "embedding-qwen3-8b",
-                "enabled", true,
-                "extra_headers", Map.of("__meta__", Map.of("embedding_path", "/embeddings"))
-        ));
-        assertThat(bundle.modelRecords()).containsExactly(Map.of(
-                "model_code", "embedding-qwen3-8b",
-                "model_name", "Qwen/Qwen3-Embedding-8B",
-                "provider_code", "modelscope-embedding",
-                "provider_type", "openai_compatible",
-                "upstream_model_code", "Qwen/Qwen3-Embedding-8B",
-                "capabilities", Map.of("embedding", true),
-                "default_system_prompt", "",
-                "default_options", Map.of(
-                        "embedding_dimension", 4096,
-                        "encoding_format", "float",
-                        "include_messages", true,
-                        "single_input_as_string", true,
-                        "timeout_sec", 30
-                ),
-                "enabled", true
-        ));
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84");
+
+        assertThat(bundle.providerConfigs()).extracting(item -> item.get("provider_code")).containsExactly("model-431c4581ab84-provider");
+        assertThat(bundle.providerConfigs().get(0)).containsEntry("api_key_secret_ref", "ms-db-secret");
+        assertThat(bundle.modelRecords()).extracting(item -> item.get("model_code")).containsExactly("model-431c4581ab84");
+        assertThat(bundle.modelRecords().get(0)).containsEntry("upstream_model_code", "Qwen/Qwen3-Embedding-8B");
+    }
+
+    @Test
+    void buildRuntimeBundleForModelDoesNotSynthesizeEmbeddingFallbackWhenDatabaseModelMissing() {
+        knowledgeProperties.getEmbedding().setDefaultModelCode("model-431c4581ab84");
+        when(modelRecordRepository.findByModelCode("model-431c4581ab84")).thenReturn(Optional.empty());
+
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84");
+
+        assertThat(bundle.providerConfigs()).isEmpty();
+        assertThat(bundle.modelRecords()).isEmpty();
     }
 
     @Test

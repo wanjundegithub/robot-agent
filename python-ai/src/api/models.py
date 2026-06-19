@@ -122,7 +122,7 @@ class KnowledgeIngestRequest(BaseModel):
     raw_content: Optional[str] = None
     raw_object_url: Optional[str] = None
     legacy_doc_text: Optional[str] = None
-    embedding_model_code: str = "embedding-qwen3-8b"
+    embedding_model_code: str = "model-431c4581ab84"
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
 
@@ -145,7 +145,7 @@ class KnowledgeSearchRequest(BaseModel):
     retrieval_mode: str = "hybrid"
     top_k: int = 5
     score_threshold: float = 0.65
-    embedding_model_code: str = "embedding-qwen3-8b"
+    embedding_model_code: str = "model-431c4581ab84"
     provider_configs: list[Dict[str, Any]] = Field(default_factory=list)
     model_records: list[Dict[str, Any]] = Field(default_factory=list)
     answer_model_code: Optional[str] = None

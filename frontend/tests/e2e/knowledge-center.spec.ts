@@ -17,12 +17,24 @@ type DocumentItem = {
   kbCode: string
   title?: string | null
   description?: string | null
+  content?: string | null
   filename?: string | null
   sourceType?: string | null
   status: string
   chunkCount?: number
   fileSize?: number
   generatedSummary?: string | null
+}
+
+type TaskItem = {
+  taskId: string
+  docId: string
+  kbCode: string
+  stage: string
+  status: string
+  progress: number
+  errorMessage?: string | null
+  retryCount?: number | null
 }
 
 test.beforeEach(async ({ page }) => {
@@ -45,11 +57,24 @@ test.beforeEach(async ({ page }) => {
       kbCode: 'kb_product',
       title: '产品手册',
       description: '售后规则',
+      content: '完整正文：产品保修期为一年，电池保修期为六个月。',
       sourceType: 'TEXT',
       status: 'READY',
       chunkCount: 6,
       fileSize: 128,
-      generatedSummary: '保修期为一年。',
+      generatedSummary: '摘要：保修期为一年。',
+    },
+  ]
+  let tasks: TaskItem[] = [
+    {
+      taskId: 'task_1',
+      docId: 'doc_1',
+      kbCode: 'kb_product',
+      stage: 'INDEXED',
+      status: 'SUCCEEDED',
+      progress: 100,
+      errorMessage: null,
+      retryCount: 1,
     },
   ]
 
@@ -120,6 +145,7 @@ test.beforeEach(async ({ page }) => {
               ...document,
               title: body.title,
               description: body.description ?? '',
+              content: body.content,
               generatedSummary: body.content,
               status: 'READY',
             }
@@ -135,9 +161,19 @@ test.beforeEach(async ({ page }) => {
     }
     await route.continue()
   })
-  await page.route('**/api/knowledge-bases/documents/doc_1/tasks', async (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/knowledge-bases/search', async (route) =>
-    route.fulfill({
+  await page.route('**/api/knowledge-bases/documents/doc_1/tasks', async (route) => route.fulfill({ json: tasks }))
+  await page.route('**/api/knowledge-bases/tasks/task_1', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      expect(route.request().headers()['x-user-id']).toBe('demo-user')
+      tasks = tasks.filter((task) => task.taskId !== 'task_1')
+      await route.fulfill({ status: 204, body: '' })
+      return
+    }
+    await route.continue()
+  })
+  await page.route('**/api/knowledge-bases/search', async (route) => {
+    expect(route.request().headers()['x-user-id']).toBe('demo-user')
+    await route.fulfill({
       json: {
         query: '保修期',
         documents: [
@@ -155,7 +191,7 @@ test.beforeEach(async ({ page }) => {
         bestScore: 0.92,
       },
     })
-  )
+  })
 })
 
 test('knowledge center uses Chinese UI without refresh or embedding model controls', async ({ page }) => {
@@ -201,6 +237,7 @@ test('knowledge spaces can be edited and soft deleted from the page', async ({ p
 test('text knowledge can be edited and soft deleted from the page', async ({ page }) => {
   await page.goto('/#knowledge')
   await page.getByTestId('knowledge-document-edit-doc_1').click()
+  await expect(page.getByLabel('正文')).toHaveValue('完整正文：产品保修期为一年，电池保修期为六个月。')
   await page.getByLabel('标题').fill('产品保修政策')
   await page.getByLabel('描述').fill('售后保修规则')
   await page.getByLabel('正文').fill('产品保修期为一年。')
@@ -211,6 +248,28 @@ test('text knowledge can be edited and soft deleted from the page', async ({ pag
   await expect(page.getByRole('dialog')).toContainText('删除知识')
   await page.getByRole('button', { name: '确认删除' }).click()
   await expect(page.locator('.knowledge-document-list')).not.toContainText('产品保修政策')
+})
+
+test('tasks show successful status and can be deleted from the page', async ({ page }) => {
+  await page.goto('/#knowledge')
+  await page.getByTestId('knowledge-subnav-tasks').click()
+
+  await expect(page.locator('.knowledge-task-list')).toContainText('已入库')
+  await expect(page.locator('.knowledge-task-list')).toContainText('成功')
+  await expect(page.locator('.knowledge-task-list')).not.toContainText('未知状态')
+
+  await page.getByTestId('knowledge-task-delete-task_1').click()
+  await expect(page.locator('.knowledge-task-list')).not.toContainText('task_1')
+  await expect(page.locator('.knowledge-task-list')).toContainText('暂无采集任务')
+})
+
+test('knowledge search sends current user id for permission checks', async ({ page }) => {
+  await page.goto('/#knowledge')
+  await page.getByTestId('knowledge-subnav-search').click()
+  await page.getByPlaceholder('输入要查询的知识问题').fill('保修期')
+  await page.getByRole('button', { name: '开始检索' }).click()
+
+  await expect(page.locator('.knowledge-search-results')).toContainText('保修期为一年')
 })
 
 test('knowledge page keeps backend errors in Chinese', async ({ page }) => {

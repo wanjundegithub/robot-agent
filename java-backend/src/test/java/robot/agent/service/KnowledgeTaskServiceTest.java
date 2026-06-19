@@ -27,6 +27,7 @@ import robot.agent.service.knowledge.SafeObjectKeyFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -98,8 +99,8 @@ class KnowledgeTaskServiceTest {
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
-                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "modelscope-embedding")), List.of(Map.of("model_code", "embedding-qwen3-8b"))));
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
                 "status", "SUCCEEDED",
                 "chunk_count", 2,
@@ -121,7 +122,9 @@ class KnowledgeTaskServiceTest {
             assertThat(task.getKbCode()).isEqualTo("kb_product");
             assertThat(task.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
         });
-        verify(pythonKnowledgeClient).ingest(anyMap());
+        ArgumentCaptor<Map<String, Object>> ingestRequestCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonKnowledgeClient).ingest(ingestRequestCaptor.capture());
+        assertThat(ingestRequestCaptor.getValue()).containsEntry("embedding_model_code", "model-431c4581ab84");
     }
 
     @Test
@@ -137,5 +140,73 @@ class KnowledgeTaskServiceTest {
 
         assertThat(response.getTaskId()).isEqualTo("task_001");
         assertThat(response.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
+    }
+
+    @Test
+    void retryKnowledgeTaskClearsPreviousDocumentErrorAfterSuccessfulIngest() {
+        KnowledgeBase knowledgeBase = new KnowledgeBase();
+        knowledgeBase.setWorkspaceId(1L);
+        knowledgeBase.setKbCode("kb_product");
+
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocId("doc_failed");
+        document.setKbCode("kb_product");
+        document.setFilename("manual.txt");
+        document.setSourceType("TEXT");
+        document.setRawContent("Warranty lasts one year.");
+        document.setIndexVersion(1);
+        document.setStatus(KnowledgeDocumentStatus.FAILED);
+        document.setErrorMessage("'InMemoryKnowledgeStore' object has no attribute 'upsert_chunks'");
+
+        KnowledgeTask task = new KnowledgeTask();
+        task.setTaskId("task_failed");
+        task.setDocId("doc_failed");
+        task.setKbCode("kb_product");
+        task.setStatus(KnowledgeTaskStatus.FAILED);
+        task.setErrorMessage(document.getErrorMessage());
+
+        when(knowledgeTaskRepository.findByTaskId("task_failed")).thenReturn(Optional.of(task));
+        when(knowledgeDocumentRepository.findByDocId("doc_failed")).thenReturn(Optional.of(document));
+        when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
+        when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
+        when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
+                "status", "SUCCEEDED",
+                "chunk_count", 1,
+                "generated_summary", "Warranty lasts one year.",
+                "generated_keywords", List.of("warranty")
+        ));
+
+        KnowledgeTaskResponse response = knowledgeService.retryKnowledgeTask("demo-admin", "task_failed");
+
+        assertThat(response.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
+        ArgumentCaptor<KnowledgeDocument> documentCaptor = ArgumentCaptor.forClass(KnowledgeDocument.class);
+        verify(knowledgeDocumentRepository).save(documentCaptor.capture());
+        KnowledgeDocument savedDocument = documentCaptor.getValue();
+        assertThat(savedDocument.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
+        assertThat(savedDocument.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void deleteKnowledgeTaskRemovesOnlyTaskAfterPermissionCheck() {
+        KnowledgeBase knowledgeBase = new KnowledgeBase();
+        knowledgeBase.setWorkspaceId(1L);
+        knowledgeBase.setKbCode("kb_product");
+
+        KnowledgeTask task = new KnowledgeTask();
+        task.setTaskId("task_001");
+        task.setDocId("doc_001");
+        task.setKbCode("kb_product");
+        task.setStatus(KnowledgeTaskStatus.SUCCEEDED);
+
+        when(knowledgeTaskRepository.findByTaskId("task_001")).thenReturn(Optional.of(task));
+        when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
+
+        knowledgeService.deleteKnowledgeTask("demo-admin", "task_001");
+
+        verify(accessControlService).requireAnyRole("demo-admin", 1L, Set.of("workflow_admin", "knowledge_admin"));
+        verify(knowledgeTaskRepository).delete(task);
     }
 }

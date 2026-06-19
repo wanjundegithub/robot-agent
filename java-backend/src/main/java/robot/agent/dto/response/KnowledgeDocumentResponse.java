@@ -10,6 +10,7 @@ public class KnowledgeDocumentResponse {
     private String kbCode;
     private String title;
     private String description;
+    private String content;
     private String filename;
     private Long fileSize;
     private String sourceType;
@@ -29,6 +30,9 @@ public class KnowledgeDocumentResponse {
         response.setKbCode(entity.getKbCode());
         response.setTitle(entity.getTitle());
         response.setDescription(entity.getDescription());
+        if ("TEXT".equalsIgnoreCase(entity.getSourceType())) {
+            response.setContent(entity.getRawContent());
+        }
         response.setFilename(entity.getFilename());
         response.setFileSize(entity.getFileSize());
         response.setSourceType(entity.getSourceType());
@@ -74,6 +78,14 @@ public class KnowledgeDocumentResponse {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public String getContent() {
+        return content;
+    }
+
+    public void setContent(String content) {
+        this.content = content;
     }
 
     public String getFilename() {

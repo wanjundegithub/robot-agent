@@ -141,6 +141,15 @@ public class KnowledgeController {
         return ResponseEntity.ok(knowledgeService.retryKnowledgeTask(userId, taskId));
     }
 
+    @DeleteMapping("/tasks/{taskId}")
+    public ResponseEntity<Void> deleteKnowledgeTask(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String taskId
+    ) {
+        knowledgeService.deleteKnowledgeTask(userId, taskId);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/search")
     public ResponseEntity<KnowledgeSearchResponse> searchKnowledge(
             @RequestHeader(value = "X-User-Id", required = false) String userId,

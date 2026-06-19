@@ -49,13 +49,13 @@ robot:
         - docx
         - md
     embedding:
-      default-model-code: embedding-qwen3-8b
+      default-model-code: model-431c4581ab84
       default-upstream-model: Qwen/Qwen3-Embedding-8B
-      provider-code: modelscope-embedding
+      provider-code: model-431c4581ab84-provider
       provider-name: ModelScope Embedding
       provider-type: openai_compatible
-      base-url: https://api-inference.modelscope.cn/v1
-      api-key-secret-ref: env:MODELSCOPE_API_KEY
+      base-url: https://api-inference.modelscope.cn/v1/embeddings
+      api-key-secret-ref: ""
       embedding-path: /embeddings
       encoding-format: float
       include-messages: true

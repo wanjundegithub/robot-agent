@@ -378,6 +378,18 @@ export async function retryKnowledgeTask(taskId: string, currentUserId: string):
   return await response.json()
 }
 
+export async function deleteKnowledgeTask(taskId: string, currentUserId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+}
+
 export async function searchKnowledge(payload: {
   query: string
   kbCodes: string[]
@@ -385,15 +397,20 @@ export async function searchKnowledge(payload: {
   topK?: number
   scoreThreshold?: number
   generateAnswer?: boolean
+  currentUserId?: string
 }): Promise<KnowledgeSearchResult> {
+  const { currentUserId, ...requestPayload } = payload
   const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/search`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
     body: JSON.stringify({
       retrievalMode: 'hybrid',
       topK: 5,
       generateAnswer: true,
-      ...payload,
+      ...requestPayload,
     }),
   })
   if (!response.ok) {

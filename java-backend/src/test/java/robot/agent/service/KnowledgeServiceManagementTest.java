@@ -120,7 +120,7 @@ class KnowledgeServiceManagementTest {
 
         KnowledgeBaseResponse response = knowledgeService.createKnowledgeBase("demo-admin", request);
 
-        assertThat(response.getEmbeddingModel()).isEqualTo("embedding-qwen3-8b");
+        assertThat(response.getEmbeddingModel()).isEqualTo("model-431c4581ab84");
     }
 
     @Test
@@ -191,8 +191,8 @@ class KnowledgeServiceManagementTest {
         when(knowledgeDocumentRepository.findByDocId("doc_1")).thenReturn(Optional.of(document));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
-                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "modelscope-embedding")), List.of(Map.of("model_code", "embedding-qwen3-8b"))));
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
                 "status", "SUCCEEDED",
                 "chunk_count", 1,
@@ -216,6 +216,7 @@ class KnowledgeServiceManagementTest {
         verify(pythonKnowledgeClient).ingest(requestCaptor.capture());
         assertThat(requestCaptor.getValue()).containsEntry("index_version", 2);
         assertThat(requestCaptor.getValue()).containsEntry("raw_content", "新正文");
+        assertThat(requestCaptor.getValue()).containsEntry("embedding_model_code", "model-431c4581ab84");
     }
 
     @Test

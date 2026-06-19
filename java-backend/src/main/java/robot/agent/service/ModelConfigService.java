@@ -214,15 +214,7 @@ public class ModelConfigService {
     }
 
     public RuntimeModelBundle buildRuntimeBundleForModel(String modelCode) {
-        RuntimeModelBundle configuredBundle = runtimeBundleForConfiguredDefaultModel(modelCode);
-        if (!configuredBundle.modelRecords().isEmpty()) {
-            return configuredBundle;
-        }
-        RuntimeModelBundle embeddingBundle = runtimeBundleForConfiguredEmbeddingFallback(modelCode);
-        if (!embeddingBundle.modelRecords().isEmpty()) {
-            return embeddingBundle;
-        }
-        return buildDefaultRuntimeBundle();
+        return runtimeBundleForConfiguredDefaultModel(modelCode);
     }
 
     public String resolveConfiguredPurposeModelCode(String purpose) {
@@ -791,43 +783,6 @@ public class ModelConfigService {
         }
         log.info("model.runtime.default.configured_ready providerCode={} modelCode={}", provider.getProviderCode(), normalizedModelCode);
         return runtimeBundleForDefaultModel(provider, modelRecord);
-    }
-
-    private RuntimeModelBundle runtimeBundleForConfiguredEmbeddingFallback(String modelCode) {
-        KnowledgeProperties.Embedding embedding = knowledgeProperties.getEmbedding();
-        String normalizedModelCode = blankToNull(modelCode);
-        if (normalizedModelCode == null || !normalizedModelCode.equals(embedding.getDefaultModelCode())) {
-            return new RuntimeModelBundle(List.of(), List.of());
-        }
-
-        Map<String, Object> provider = new LinkedHashMap<>();
-        provider.put("provider_code", embedding.getProviderCode());
-        provider.put("provider_name", embedding.getProviderName());
-        provider.put("provider_type", embedding.getProviderType());
-        provider.put("base_url", embedding.getBaseUrl());
-        provider.put("api_key_secret_ref", embedding.getApiKeySecretRef());
-        provider.put("default_model_code", embedding.getDefaultModelCode());
-        provider.put("enabled", true);
-        provider.put("extra_headers", Map.of("__meta__", Map.of("embedding_path", embedding.getEmbeddingPath())));
-
-        Map<String, Object> defaultOptions = new LinkedHashMap<>();
-        defaultOptions.put("embedding_dimension", embedding.getDimension());
-        defaultOptions.put("encoding_format", embedding.getEncodingFormat());
-        defaultOptions.put("include_messages", embedding.isIncludeMessages());
-        defaultOptions.put("single_input_as_string", embedding.isSingleInputAsString());
-        defaultOptions.put("timeout_sec", embedding.getTimeoutMs() / 1000);
-
-        Map<String, Object> modelRecord = new LinkedHashMap<>();
-        modelRecord.put("model_code", embedding.getDefaultModelCode());
-        modelRecord.put("model_name", embedding.getDefaultUpstreamModel());
-        modelRecord.put("provider_code", embedding.getProviderCode());
-        modelRecord.put("provider_type", embedding.getProviderType());
-        modelRecord.put("upstream_model_code", embedding.getDefaultUpstreamModel());
-        modelRecord.put("capabilities", Map.of("embedding", true));
-        modelRecord.put("default_system_prompt", "");
-        modelRecord.put("default_options", defaultOptions);
-        modelRecord.put("enabled", true);
-        return new RuntimeModelBundle(List.of(provider), List.of(modelRecord));
     }
 
     private Map<String, Object> validationResponse(boolean valid, String providerCode, String modelCode, int statusCode) {

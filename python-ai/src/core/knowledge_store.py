@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
 import psycopg
@@ -12,20 +11,10 @@ from .chunking import normalize_search_terms
 from .settings import settings
 
 
-@dataclass
-class KnowledgeDocument:
-    doc_id: str
-    kb_code: str
-    kb_version: str
-    title: str
-    content: str
-    keywords: List[str]
-
-
-DEFAULT_KNOWLEDGE_BASES: Dict[str, Dict[str, List[KnowledgeDocument]]] = {}
-
-
 class KnowledgeStore(Protocol):
+    def upsert_chunks(self, chunks: List[Dict[str, Any]]) -> int:
+        ...
+
     def search(
         self,
         kb_code: str,
@@ -48,136 +37,111 @@ class KnowledgeStore(Protocol):
         **_kwargs: Any,
     ) -> List[Dict[str, Any]]:
         ...
-
-
-class InMemoryKnowledgeStore:
-    def __init__(self, documents: Dict[str, Dict[str, List[KnowledgeDocument]]] | None = None) -> None:
-        self._documents = documents or DEFAULT_KNOWLEDGE_BASES
-
-    def search(
-        self,
-        kb_code: str,
-        kb_version: str | None,
-        query: str,
-        retrieval_mode: str = "hybrid",
-        top_k: int = 5,
-        score_threshold: float = 0.0,
-    ) -> List[Dict[str, Any]]:
-        versions = self._documents.get(kb_code, {})
-        if not versions:
-            return []
-
-        effective_version = kb_version or sorted(versions.keys())[-1]
-        documents = versions.get(effective_version, [])
-        tokens = self._tokenize(query)
-        scored_documents: List[tuple[float, KnowledgeDocument]] = []
-
-        for document in documents:
-            keyword_hits = sum(1 for token in tokens if token in self._tokenize(document.content) or token in document.keywords)
-            semantic_hits = sum(1 for token in tokens if token in self._tokenize(document.title))
-            if retrieval_mode == "keyword":
-                score = float(keyword_hits)
-            elif retrieval_mode == "vector":
-                score = float(semantic_hits + keyword_hits * 0.5)
-            else:
-                score = float(keyword_hits + semantic_hits)
-            if score >= score_threshold:
-                scored_documents.append((score, document))
-
-        scored_documents.sort(key=lambda item: item[0], reverse=True)
-        return [
-            {
-                "doc_id": document.doc_id,
-                "kb_code": document.kb_code,
-                "kb_version": document.kb_version,
-                "title": document.title,
-                "content": document.content,
-                "score": score,
-            }
-            for score, document in scored_documents[:top_k]
-        ]
-
-    def search_many(
-        self,
-        kb_codes: List[str],
-        query: str,
-        retrieval_mode: str = "hybrid",
-        top_k: int = 5,
-        score_threshold: float = 0.0,
-        embedding: List[float] | None = None,
-        **_kwargs: Any,
-    ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-        for kb_code in kb_codes:
-            results.extend(self.search(kb_code, None, query, retrieval_mode, top_k, score_threshold))
-        return sorted(results, key=lambda item: float(item.get("score", 0.0)), reverse=True)[:top_k]
-
-    def _tokenize(self, text: str) -> List[str]:
-        normalized = (text or "").lower()
-        return [token for token in normalized.replace("，", " ").replace(",", " ").split() if token]
 
 
 class PgVectorKnowledgeStore:
+    REQUIRED_COLUMNS = {
+        "chunk_id",
+        "kb_code",
+        "doc_id",
+        "index_version",
+        "chunk_index",
+        "title",
+        "content",
+        "search_text",
+        "keywords",
+        "search_terms",
+        "content_hash",
+        "embedding",
+        "metadata",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+
     def __init__(self, dsn: str, table_name: str) -> None:
         self._dsn = dsn
         self._table_name = table_name
 
     def initialize(self) -> bool:
-        try:
-            with psycopg.connect(self._dsn, connect_timeout=1) as connection:
-                register_vector(connection)
-                with connection.cursor() as cursor:
-                    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                    cursor.execute(
-                        f"""
-                        CREATE TABLE IF NOT EXISTS {self._table_name} (
-                            chunk_id TEXT PRIMARY KEY,
-                            kb_code TEXT NOT NULL,
-                            doc_id TEXT NOT NULL,
-                            index_version INT NOT NULL,
-                            chunk_index INT NOT NULL,
-                            title TEXT,
-                            content TEXT NOT NULL,
-                            search_text TEXT,
-                            keywords TEXT[],
-                            search_terms TEXT[],
-                            content_hash TEXT,
-                            embedding VECTOR({settings.vector_dimension}) NOT NULL,
-                            metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-                            status TEXT NOT NULL DEFAULT 'ACTIVE',
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                        """
+        with psycopg.connect(self._dsn, connect_timeout=1) as connection:
+            register_vector(connection)
+            with connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._table_name} (
+                        chunk_id TEXT PRIMARY KEY,
+                        kb_code TEXT NOT NULL,
+                        doc_id TEXT NOT NULL,
+                        index_version INT NOT NULL,
+                        chunk_index INT NOT NULL,
+                        title TEXT,
+                        content TEXT NOT NULL,
+                        search_text TEXT,
+                        keywords TEXT[],
+                        search_terms TEXT[],
+                        content_hash TEXT,
+                        embedding VECTOR({settings.vector_dimension}) NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                        status TEXT NOT NULL DEFAULT 'ACTIVE',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_kb_status_version "
-                        f"ON {self._table_name} (kb_code, status, index_version)"
-                    )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_doc_version "
-                        f"ON {self._table_name} (doc_id, index_version)"
-                    )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_metadata "
-                        f"ON {self._table_name} USING GIN (metadata)"
-                    )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_keywords "
-                        f"ON {self._table_name} USING GIN (keywords)"
-                    )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_search_terms "
-                        f"ON {self._table_name} USING GIN (search_terms)"
-                    )
-                    cursor.execute(
-                        f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_embedding "
-                        f"ON {self._table_name} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
-                    )
-                connection.commit()
-            return True
-        except Exception:
-            return False
+                    """
+                )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_kb_status_version "
+                    f"ON {self._table_name} (kb_code, status, index_version)"
+                )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_doc_version "
+                    f"ON {self._table_name} (doc_id, index_version)"
+                )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_metadata "
+                    f"ON {self._table_name} USING GIN (metadata)"
+                )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_keywords "
+                    f"ON {self._table_name} USING GIN (keywords)"
+                )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_search_terms "
+                    f"ON {self._table_name} USING GIN (search_terms)"
+                )
+                self._validate_schema(cursor)
+            connection.commit()
+        return True
+
+    def _validate_schema(self, cursor: Any) -> None:
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            """,
+            (self._table_name,),
+        )
+        columns = {str(row[0]) for row in cursor.fetchall()}
+        missing_columns = sorted(self.REQUIRED_COLUMNS - columns)
+        if missing_columns:
+            raise RuntimeError(
+                f"Knowledge vector table {self._table_name} is incompatible; missing columns: "
+                + ", ".join(missing_columns)
+            )
+
+        cursor.execute(
+            "SELECT atttypmod FROM pg_attribute WHERE attrelid = %s::regclass AND attname = 'embedding'",
+            (self._table_name,),
+        )
+        row = cursor.fetchone()
+        dimension = int(row[0]) if row else 0
+        if dimension != settings.vector_dimension:
+            raise RuntimeError(
+                f"Knowledge vector table {self._table_name} has embedding dimension {dimension}; "
+                f"expected {settings.vector_dimension}"
+            )
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]]) -> int:
         if not chunks:
@@ -268,10 +232,10 @@ class PgVectorKnowledgeStore:
                     cursor.execute(
                         f"""
                         SELECT chunk_id, doc_id, kb_code, title, content, metadata,
-                               CAST(1 - (embedding <=> %s) AS DOUBLE PRECISION) AS vector_score
+                               CAST(1 - (embedding <=> %s::vector) AS DOUBLE PRECISION) AS vector_score
                         FROM {self._table_name}
                         WHERE kb_code = ANY(%s) AND status = 'ACTIVE'
-                        ORDER BY embedding <=> %s
+                        ORDER BY embedding <=> %s::vector
                         LIMIT %s
                         """,
                         (query_embedding, kb_codes, query_embedding, settings.knowledge_retrieval_vector_top_k),
@@ -316,12 +280,20 @@ class PgVectorKnowledgeStore:
             current["keyword_score"] = item.get("keyword_score", 0.0)
 
         for item in merged.values():
-            item["score"] = round(
-                float(item.get("vector_score", 0.0)) * settings.knowledge_retrieval_vector_weight
-                + float(item.get("keyword_score", 0.0)) * settings.knowledge_retrieval_keyword_weight
-                + settings.knowledge_retrieval_metadata_boost,
-                6,
+            vector_score = float(item.get("vector_score", 0.0))
+            keyword_score = float(item.get("keyword_score", 0.0))
+            weighted_score = (
+                vector_score * settings.knowledge_retrieval_vector_weight
+                + keyword_score * settings.knowledge_retrieval_keyword_weight
+                + settings.knowledge_retrieval_metadata_boost
             )
+            if retrieval_mode == "vector":
+                score = vector_score
+            elif retrieval_mode == "keyword":
+                score = keyword_score
+            else:
+                score = max(weighted_score, vector_score, keyword_score)
+            item["score"] = round(score, 6)
         return sorted(
             [item for item in merged.values() if float(item["score"]) >= score_threshold],
             key=lambda value: float(value["score"]),
@@ -352,24 +324,24 @@ def _row_to_hit(row: Any, score_key: str) -> Dict[str, Any]:
     }
 
 
-_knowledge_store: KnowledgeStore = InMemoryKnowledgeStore()
-_knowledge_backend = "memory"
+_knowledge_store: KnowledgeStore | None = None
+_knowledge_backend = "uninitialized"
 
 
 def initialize_knowledge_store() -> KnowledgeStore:
     global _knowledge_store, _knowledge_backend
-    if settings.vector_enabled:
-        pgvector_store = PgVectorKnowledgeStore(settings.vector_dsn, settings.vector_table)
-        if pgvector_store.initialize():
-            _knowledge_store = pgvector_store
-            _knowledge_backend = "pgvector"
-            return _knowledge_store
-    _knowledge_store = InMemoryKnowledgeStore()
-    _knowledge_backend = "memory"
+    if not settings.vector_enabled:
+        raise RuntimeError("ROBOT_VECTOR_ENABLED must be true; in-memory knowledge store is not supported")
+    pgvector_store = PgVectorKnowledgeStore(settings.vector_dsn, settings.vector_table)
+    pgvector_store.initialize()
+    _knowledge_store = pgvector_store
+    _knowledge_backend = "pgvector"
     return _knowledge_store
 
 
 def get_knowledge_store() -> KnowledgeStore:
+    if _knowledge_store is None:
+        raise RuntimeError("Knowledge store is not initialized")
     return _knowledge_store
 
 

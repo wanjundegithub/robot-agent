@@ -52,6 +52,7 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class KnowledgeService {
+    private static final String LEGACY_EMBEDDING_MODEL_CODE = "embedding-qwen3-8b";
 
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
@@ -113,7 +114,7 @@ public class KnowledgeService {
         knowledgeBase.setKbCode(generateKnowledgeBaseCode(request.getKbCode()));
         knowledgeBase.setName(request.getName());
         knowledgeBase.setDescription(blankToNull(request.getDescription()));
-        knowledgeBase.setEmbeddingModel(firstNonBlank(request.getEmbeddingModel(), knowledgeProperties.getEmbedding().getDefaultModelCode()));
+        knowledgeBase.setEmbeddingModel(resolveEmbeddingModelCode(request.getEmbeddingModel()));
         knowledgeBase.setStatus(KnowledgeBaseStatus.ACTIVE);
         knowledgeBase.setCreatedBy(userId);
         knowledgeBase.setCreatedAt(LocalDateTime.now());
@@ -392,6 +393,15 @@ public class KnowledgeService {
         return KnowledgeTaskResponse.fromEntity(task);
     }
 
+    public void deleteKnowledgeTask(String userId, String taskId) {
+        KnowledgeTask task = knowledgeTaskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new RuntimeException("Knowledge task not found: " + taskId));
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(task.getKbCode())
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + task.getKbCode()));
+        accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin"));
+        knowledgeTaskRepository.delete(task);
+    }
+
     public KnowledgeSearchResponse searchKnowledge(String userId, KnowledgeSearchRequest request) {
         if (request == null || request.getQuery() == null || request.getQuery().isBlank()) {
             throw new IllegalArgumentException("Knowledge search query must not be empty");
@@ -409,13 +419,12 @@ public class KnowledgeService {
             accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin", "viewer"));
         }
 
-        String embeddingModelCode = firstNonBlank(
+        String embeddingModelCode = resolveEmbeddingModelCode(
                 knowledgeBases.stream()
                         .map(KnowledgeBase::getEmbeddingModel)
                         .filter(value -> value != null && !value.isBlank())
                         .findFirst()
-                        .orElse(null),
-                knowledgeProperties.getEmbedding().getDefaultModelCode()
+                        .orElse(null)
         );
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
         Map<String, Object> pythonRequest = new LinkedHashMap<>();
@@ -485,6 +494,7 @@ public class KnowledgeService {
             document.setGeneratedTitle(stringValue(response.get("generated_title")));
             document.setGeneratedSummary(stringValue(response.get("generated_summary")));
             document.setGeneratedKeywords(joinKeywords(response.get("generated_keywords")));
+            document.setErrorMessage(null);
             document.setProcessedAt(LocalDateTime.now());
         } catch (Exception exc) {
             task.setStatus(KnowledgeTaskStatus.FAILED);
@@ -499,7 +509,7 @@ public class KnowledgeService {
     }
 
     private Map<String, Object> buildIngestRequest(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {
-        String embeddingModelCode = firstNonBlank(knowledgeBase.getEmbeddingModel(), knowledgeProperties.getEmbedding().getDefaultModelCode());
+        String embeddingModelCode = resolveEmbeddingModelCode(knowledgeBase.getEmbeddingModel());
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("task_id", task.getTaskId());
@@ -531,6 +541,14 @@ public class KnowledgeService {
 
     private String firstNonBlank(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private String resolveEmbeddingModelCode(String configuredModelCode) {
+        String modelCode = firstNonBlank(configuredModelCode, knowledgeProperties.getEmbedding().getDefaultModelCode());
+        if (LEGACY_EMBEDDING_MODEL_CODE.equals(modelCode)) {
+            return knowledgeProperties.getEmbedding().getDefaultModelCode();
+        }
+        return modelCode;
     }
 
     private String generateKnowledgeBaseCode(String requestedCode) {

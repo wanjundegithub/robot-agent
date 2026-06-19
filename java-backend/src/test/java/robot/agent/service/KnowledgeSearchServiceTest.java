@@ -92,10 +92,10 @@ class KnowledgeSearchServiceTest {
         KnowledgeDocument document = document("doc_1", KnowledgeDocumentStatus.READY);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product")).thenReturn(List.of(document));
-        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(
-                        List.of(Map.of("provider_code", "modelscope-embedding")),
-                        List.of(Map.of("model_code", "embedding-qwen3-8b"))
+                        List.of(Map.of("provider_code", "model-431c4581ab84-provider")),
+                        List.of(Map.of("model_code", "model-431c4581ab84"))
                 ));
         when(pythonKnowledgeClient.search(anyMap())).thenReturn(Map.of(
                 "query", "保修期多久",
@@ -124,7 +124,7 @@ class KnowledgeSearchServiceTest {
         assertThat(response.getCitations().get(0).getDocId()).isEqualTo("doc_1");
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(pythonKnowledgeClient).search(captor.capture());
-        assertThat(captor.getValue()).containsEntry("embedding_model_code", "embedding-qwen3-8b");
+        assertThat(captor.getValue()).containsEntry("embedding_model_code", "model-431c4581ab84");
         assertThat(captor.getValue()).containsEntry("top_k", 3);
         assertThat((List<?>) captor.getValue().get("provider_configs")).hasSize(1);
         assertThat((List<?>) captor.getValue().get("model_records")).hasSize(1);
@@ -141,7 +141,7 @@ class KnowledgeSearchServiceTest {
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product"))
                 .thenReturn(List.of(deletedDocument, activeDocument));
-        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
+        when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(), List.of()));
         when(pythonKnowledgeClient.search(anyMap())).thenReturn(Map.of(
                 "query", "保修期多久",

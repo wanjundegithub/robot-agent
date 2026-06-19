@@ -1,8 +1,14 @@
-from src.core.evaluation import rag_evaluator
+from src.core import evaluation
 
 
-def test_rag_evaluator_returns_aggregate_metrics():
-    result = rag_evaluator.evaluate_dataset([
+def test_rag_evaluator_returns_aggregate_metrics(monkeypatch):
+    class StubKnowledgeStore:
+        def search(self, **_kwargs):
+            return [{"content": "产品保修期为一年"}]
+
+    monkeypatch.setattr(evaluation, "get_knowledge_store", lambda: StubKnowledgeStore())
+
+    result = evaluation.rag_evaluator.evaluate_dataset([
         {
             "query": "产品保修期是什么",
             "expected_terms": ["保修"],
