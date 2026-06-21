@@ -2,10 +2,13 @@ import { expect, test } from '@playwright/test'
 
 type ModelConfig = {
   id: number
+  model_code: string
   custom_model_name: string
   provider: string
   model_name: string
   api_key: string
+  api_key_configured?: boolean
+  api_key_masked?: string
   base_url: string
   default_options?: Record<string, unknown>
   updated_at: string
@@ -25,19 +28,25 @@ test.describe('简化后的模型配置页', () => {
     let models: ModelConfig[] = [
       {
         id: 1,
+        model_code: 'general-chat-v1',
         custom_model_name: '通用对话模型',
         provider: 'openai',
         model_name: 'gpt-4o-mini',
         api_key: 'sk-openai-demo',
+        api_key_configured: true,
+        api_key_masked: 'sk-o****demo',
         base_url: 'https://api.openai.example/v1',
         updated_at: '2026-04-27T09:00:00',
       },
       {
         id: 2,
+        model_code: 'intent-router-v1',
         custom_model_name: '意图路由模型',
         provider: 'doubao',
         model_name: 'doubao-seed-2-0-pro-260215',
         api_key: 'sk-doubao-demo',
+        api_key_configured: true,
+        api_key_masked: 'sk-d****demo',
         base_url: 'https://ark.example.com/api/v3',
         updated_at: '2026-04-27T08:00:00',
       },
@@ -136,6 +145,7 @@ test.describe('简化后的模型配置页', () => {
             return true
           }
           return (
+            item.model_code.toLowerCase().includes(keyword) ||
             item.custom_model_name.toLowerCase().includes(keyword) ||
             item.model_name.toLowerCase().includes(keyword)
           )
@@ -144,7 +154,7 @@ test.describe('简化后的模型配置页', () => {
         const end = start + pageSize
         await route.fulfill({
           json: {
-            items: filtered.slice(start, end),
+            items: filtered.slice(start, end).map(({ api_key, ...item }) => item),
             page: pageIndex,
             page_size: pageSize,
             total: filtered.length,
@@ -158,11 +168,20 @@ test.describe('简化后的模型配置页', () => {
         const created: ModelConfig = {
           id: nextModelId,
           updated_at: '2026-04-27T10:00:00',
+          api_key_configured: true,
+          api_key_masked: 'ms-m****demo',
           ...payload,
         }
         nextModelId += 1
         models = [created, ...models]
         await route.fulfill({ json: created })
+        return
+      }
+
+      if (/^\/api\/model-config\/models\/[^/]+$/.test(pathname) && request.method() === 'GET') {
+        const modelCode = decodeURIComponent(pathname.split('/').pop() || '')
+        const model = models.find((item) => item.model_code === modelCode)
+        await route.fulfill({ json: model })
         return
       }
 
@@ -180,25 +199,26 @@ test.describe('简化后的模型配置页', () => {
         return
       }
 
-      if (/^\/api\/model-config\/models\/\d+$/.test(pathname) && request.method() === 'PUT') {
-        const id = Number(pathname.split('/').pop())
+      if (/^\/api\/model-config\/models\/[^/]+$/.test(pathname) && request.method() === 'PUT') {
+        const modelCode = decodeURIComponent(pathname.split('/').pop() || '')
         const payload = request.postDataJSON() as Omit<ModelConfig, 'id' | 'updated_at'>
         models = models.map((item) =>
-          item.id === id
+          item.model_code === modelCode
             ? {
                 ...item,
                 ...payload,
+                model_code: modelCode,
                 updated_at: '2026-04-27T10:30:00',
               }
             : item
         )
-        await route.fulfill({ json: models.find((item) => item.id === id) })
+        await route.fulfill({ json: models.find((item) => item.model_code === modelCode) })
         return
       }
 
-      if (/^\/api\/model-config\/models\/\d+$/.test(pathname) && request.method() === 'DELETE') {
-        const id = Number(pathname.split('/').pop())
-        models = models.filter((item) => item.id !== id)
+      if (/^\/api\/model-config\/models\/[^/]+$/.test(pathname) && request.method() === 'DELETE') {
+        const modelCode = decodeURIComponent(pathname.split('/').pop() || '')
+        models = models.filter((item) => item.model_code !== modelCode)
         await route.fulfill({ status: 204, body: '' })
         return
       }
@@ -219,6 +239,7 @@ test.describe('简化后的模型配置页', () => {
     await expect(page.getByText('服务商配置')).toHaveCount(0)
     await expect(page.getByText('新建模型记录')).toHaveCount(0)
 
+    await expect(page.getByLabel('模型编码')).toHaveAttribute('required', '')
     await expect(page.getByLabel('自定义模型名')).toHaveAttribute('required', '')
     await expect(page.getByLabel('供应商')).toHaveAttribute('required', '')
     await expect(page.getByLabel('Model 名称（实际调用模型）')).toHaveAttribute('required', '')
@@ -236,17 +257,24 @@ test.describe('简化后的模型配置页', () => {
     expect(sidebarBox?.height || 0).toBeGreaterThan(500)
     expect(listBox?.height || 0).toBeGreaterThan(500)
 
-    await page.getByTestId('model-config-search-input').fill('gpt-4o')
+    await page.getByTestId('model-config-search-input').fill('general-chat-v1')
     await page.getByTestId('model-config-search-apply').click()
-    await expect(page.getByTestId('model-config-row-1')).toBeVisible()
+    await expect(page.getByTestId('model-config-row-general-chat-v1')).toBeVisible()
     await expect(page.getByText('通用对话模型')).toBeVisible()
-    expect(lastModelListQuery).toContain('keyword=gpt-4o')
+    expect(lastModelListQuery).toContain('keyword=general-chat-v1')
 
-    await page.getByTestId('model-config-row-1').click()
+    await page.getByTestId('model-config-row-general-chat-v1').click()
+    await expect(page.getByLabel('模型编码')).toHaveValue('general-chat-v1')
+    await expect(page.getByLabel('模型编码')).toBeDisabled()
     await expect(page.getByLabel('自定义模型名')).toHaveValue('通用对话模型')
     await expect(page.getByLabel('供应商')).toHaveValue('openai')
     await expect(page.getByLabel('Model 名称（实际调用模型）')).toHaveValue('gpt-4o-mini')
     await expect(page.getByLabel('API Key（接口密钥）')).toHaveValue('sk-openai-demo')
+    await expect(page.getByLabel('API Key（接口密钥）')).toHaveAttribute('type', 'password')
+    await page.getByRole('button', { name: '显示 API Key' }).click()
+    await expect(page.getByLabel('API Key（接口密钥）')).toHaveAttribute('type', 'text')
+    await page.getByRole('button', { name: '隐藏 API Key' }).click()
+    await expect(page.getByLabel('API Key（接口密钥）')).toHaveAttribute('type', 'password')
     await expect(page.getByLabel('Base URL（接口地址）')).toHaveValue('https://api.openai.example/v1')
     await expect(page.getByText(/^已加载模型/)).toHaveCount(0)
     await expect(page.getByText(/^ID\s+\d+$/)).toHaveCount(0)
@@ -268,15 +296,17 @@ test.describe('简化后的模型配置页', () => {
 
     await page.getByTestId('model-config-create').click()
     lastTestPayload = null
+    await expect(page.getByLabel('模型编码')).toBeEnabled()
     await page.getByLabel('供应商').selectOption('custom')
     await page.getByLabel('Model 名称（实际调用模型）').fill('Qwen/Qwen3-8B')
     await page.getByLabel('API Key（接口密钥）').fill('ms-modelscope-demo')
     await page.getByLabel('Base URL（接口地址）').fill('https://api-inference.modelscope.cn/v1/chat/completions')
     await page.getByLabel('请求参数 JSON').fill('{"stream":true,"enable_thinking":true}')
     await page.getByTestId('model-config-test-call').click()
-    await expect(page.getByText('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')).toBeVisible()
+    await expect(page.getByText('请完整填写模型编码、自定义模型名、供应商、Model 名称、API Key 和 Base URL')).toBeVisible()
     expect(lastTestPayload).toBeNull()
 
+    await page.getByLabel('模型编码').fill('modelscope-qwen3-8b')
     await page.getByLabel('自定义模型名').fill('ModelScope Qwen3')
     await page.getByTestId('model-config-test-call').click()
     await expect(page.getByText('测试返回：connectivity ok')).toBeVisible()
@@ -284,6 +314,7 @@ test.describe('简化后的模型配置页', () => {
 
     await page.getByTestId('model-config-save').click()
     await expect(page.getByText('ModelScope Qwen3')).toBeVisible()
+    expect(models[0].model_code).toBe('modelscope-qwen3-8b')
     expect(models[0].default_options).toEqual({ stream: true, enable_thinking: true })
   })
 })

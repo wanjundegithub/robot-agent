@@ -20,8 +20,10 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
@@ -169,6 +171,113 @@ class ModelConfigServiceTest {
     }
 
     @Test
+    void saveModelRecordRequiresUserProvidedModelCodeAndPersistsIt() {
+        UpsertModelRecordRequest request = upsertRequest("general-chat-v1");
+        when(modelRecordRepository.findByModelCode("general-chat-v1")).thenReturn(Optional.empty());
+        when(providerRepository.findByProviderCode("general-chat-v1-provider")).thenReturn(Optional.empty());
+        when(modelRecordRepository.save(any(LlmModelRecord.class))).thenAnswer(invocation -> {
+            LlmModelRecord saved = invocation.getArgument(0);
+            saved.setId(7L);
+            return saved;
+        });
+
+        Map<String, Object> response = modelConfigService.saveModelRecord("demo-admin", request);
+
+        assertThat(response).containsEntry("model_code", "general-chat-v1");
+        verify(modelRecordRepository).save(argThat(record ->
+                "general-chat-v1".equals(record.getModelCode())
+                        && "general-chat-v1-provider".equals(record.getProviderCode())
+        ));
+    }
+
+    @Test
+    void saveModelRecordRejectsMissingModelCode() {
+        UpsertModelRecordRequest request = upsertRequest(null);
+
+        assertThatThrownBy(() -> modelConfigService.saveModelRecord("demo-admin", request))
+                .hasMessageContaining("model_code is required");
+
+        verify(modelRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void saveModelRecordRejectsDuplicateModelCode() {
+        UpsertModelRecordRequest request = upsertRequest("general-chat-v1");
+        when(modelRecordRepository.findByModelCode("general-chat-v1"))
+                .thenReturn(Optional.of(modelRecord("general-chat-v1", "general-chat-v1-provider")));
+
+        assertThatThrownBy(() -> modelConfigService.saveModelRecord("demo-admin", request))
+                .hasMessageContaining("Model record already exists: general-chat-v1");
+
+        verify(modelRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void updateModelRecordFindsByModelCodeAndRejectsBodyCodeMismatch() {
+        UpsertModelRecordRequest request = upsertRequest("other-chat-v1");
+
+        assertThatThrownBy(() -> modelConfigService.updateModelRecord("demo-admin", "general-chat-v1", request))
+                .hasMessageContaining("model_code cannot be changed");
+
+        verify(modelRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void updateModelRecordFindsByModelCodeAndKeepsCodeStable() {
+        UpsertModelRecordRequest request = upsertRequest("general-chat-v1");
+        request.setCustomModelName("通用对话模型-已编辑");
+        LlmModelRecord existing = modelRecord("general-chat-v1", "general-chat-v1-provider");
+        existing.setApiKey("old-secret");
+        existing.setBaseUrl("https://old.example.com/v1");
+        when(modelRecordRepository.findByModelCode("general-chat-v1")).thenReturn(Optional.of(existing));
+        when(providerRepository.findByProviderCode("general-chat-v1-provider")).thenReturn(Optional.empty());
+        when(modelRecordRepository.save(any(LlmModelRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> response = modelConfigService.updateModelRecord("demo-admin", "general-chat-v1", request);
+
+        assertThat(response).containsEntry("model_code", "general-chat-v1");
+        assertThat(response).containsEntry("custom_model_name", "通用对话模型-已编辑");
+        verify(modelRecordRepository).findByModelCode("general-chat-v1");
+        verify(modelRecordRepository).save(argThat(record -> "general-chat-v1".equals(record.getModelCode())));
+    }
+
+    @Test
+    void deleteModelRecordFindsByModelCode() {
+        LlmModelRecord existing = modelRecord("general-chat-v1", "general-chat-v1-provider");
+        when(modelRecordRepository.findByModelCode("general-chat-v1")).thenReturn(Optional.of(existing));
+        when(workflowVersionRepository.findAll()).thenReturn(java.util.List.of());
+        when(apiItemRepository.findAll()).thenReturn(java.util.List.of());
+
+        modelConfigService.deleteModelRecord("demo-admin", "general-chat-v1");
+
+        verify(modelRecordRepository).delete(existing);
+    }
+
+    @Test
+    void listModelRecordsDoesNotExposeFullApiKeyButDetailDoes() {
+        LlmModelRecord record = modelRecord("general-chat-v1", "general-chat-v1-provider");
+        record.setId(7L);
+        record.setApiKey("sk-secret-value");
+        org.springframework.data.domain.PageRequest pageRequest = org.springframework.data.domain.PageRequest.of(0, 20, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Order.desc("updatedAt")));
+        when(modelRecordRepository.search(null, null, null, pageRequest))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(record), pageRequest, 1));
+        when(providerRepository.findByProviderCodeIn(java.util.Set.of("general-chat-v1-provider")))
+                .thenReturn(java.util.List.of());
+        when(modelRecordRepository.findByModelCode("general-chat-v1")).thenReturn(Optional.of(record));
+
+        Map<String, Object> page = modelConfigService.getModelRecords(null, null, null, 0, 20);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> listItem = (Map<String, Object>) ((java.util.List<?>) page.get("items")).get(0);
+        Map<String, Object> detail = modelConfigService.getModelRecord("general-chat-v1");
+
+        assertThat(listItem).containsEntry("model_code", "general-chat-v1");
+        assertThat(listItem).doesNotContainKey("api_key");
+        assertThat(listItem).containsEntry("api_key_configured", true);
+        assertThat(listItem).containsEntry("api_key_masked", "sk-s****alue");
+        assertThat(detail).containsEntry("api_key", "sk-secret-value");
+    }
+
+    @Test
     void testSimpleModelConnectionRoutesEmbeddingDraftToDirectEmbedding() {
         UpsertModelRecordRequest request = new UpsertModelRecordRequest();
         request.setCustomModelName("Qwen/Qwen3-Embedding-8B");
@@ -226,5 +335,17 @@ class ModelConfigServiceTest {
         provider.setApiKeySecretRef("env:ARK_API_KEY");
         provider.setEnabled(true);
         return provider;
+    }
+
+    private UpsertModelRecordRequest upsertRequest(String modelCode) {
+        UpsertModelRecordRequest request = new UpsertModelRecordRequest();
+        request.setModelCode(modelCode);
+        request.setCustomModelName("通用对话模型");
+        request.setProvider("openai_compatible");
+        request.setModelName("gpt-4o-mini");
+        request.setApiKey("sk-secret-value");
+        request.setBaseUrl("https://api.example.com/v1");
+        request.setDefaultOptions(Map.of("temperature", 0.2));
+        return request;
     }
 }

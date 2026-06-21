@@ -187,7 +187,7 @@
 
 更新 payload 不允许修改 `model_code`。如果请求体包含 `model_code`，必须与路径 `{modelCode}` 一致；不一致返回 400。
 
-为降低前端切换成本，可短期保留 `/models/id/{id}` 或旧 `/models/{id}` 的兼容接口，但不作为新文档和新前端使用路径。若保留旧路径，需要在后续清理任务中删除。
+本次不保留旧 `/models/{id}` 兼容接口，也不新增 `/models/id/{id}` 降级路径。所有管理端详情、更新、删除、测试入口都必须使用 `model_code` 作为资源标识，数字 `id` 只保留为数据库内部主键。
 
 ### 三、后端服务调整
 
@@ -440,9 +440,9 @@ pytest python-ai/tests/test_core/test_model_runtime.py python-ai/tests/test_node
    - 如果允许编辑态修改 `model_code`，已有 workflow config、knowledge config、application.yml 中的引用会立刻失效。
    - 正确做法是创建后锁定，必要时通过“复制新模型记录”实现改名。
 
-4. 旧 `id` 路径兼容策略要有明确期限。
-   - 长期同时支持 `/models/{id}` 和 `/models/{modelCode}` 会产生路径歧义，尤其模型编码可能是纯数字。
-   - 推荐新接口直接使用 `{modelCode}`，旧接口如需保留应改成 `/models/id/{id}` 并标记废弃。
+4. 不应保留旧 `id` 管理路径。
+   - 同时支持 `/models/{id}` 和 `/models/{modelCode}` 会产生路径歧义，尤其模型编码可能是纯数字。
+   - 本次要求不兼容旧设计，因此实现必须直接切到 `{modelCode}`，数字 `id` 不能继续作为前端或后台配置入口。
 
 ### Minor Suggestions
 

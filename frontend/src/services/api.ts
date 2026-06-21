@@ -573,8 +573,8 @@ export async function getModelRecords(params: {
   return await response.json()
 }
 
-export async function getModelRecord(id: number): Promise<ModelRecordConfig> {
-  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${id}`)
+export async function getModelRecord(modelCode: string): Promise<ModelRecordConfig> {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`)
   if (!response.ok) {
     await parseApiError(response)
   }
@@ -583,6 +583,7 @@ export async function getModelRecord(id: number): Promise<ModelRecordConfig> {
 
 export async function saveModelRecord(
   payload: {
+    model_code: string
     custom_model_name: string
     provider: string
     model_name: string
@@ -591,11 +592,13 @@ export async function saveModelRecord(
     default_options?: Record<string, unknown>
   },
   currentUserId: string,
-  existingId?: number
+  existingModelCode?: string
 ): Promise<ModelRecordConfig> {
-  const isUpdate = typeof existingId === 'number'
+  const isUpdate = Boolean(existingModelCode)
   const response = await apiFetch(
-    isUpdate ? `${API_BASE_URL}/model-config/models/${existingId}` : `${API_BASE_URL}/model-config/models`,
+    isUpdate
+      ? `${API_BASE_URL}/model-config/models/${encodeURIComponent(existingModelCode || '')}`
+      : `${API_BASE_URL}/model-config/models`,
     {
       method: isUpdate ? 'PUT' : 'POST',
       headers: {
@@ -611,8 +614,8 @@ export async function saveModelRecord(
   return await response.json()
 }
 
-export async function deleteModelRecord(id: number, currentUserId: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${id}`, {
+export async function deleteModelRecord(modelCode: string, currentUserId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/model-config/models/${encodeURIComponent(modelCode)}`, {
     method: 'DELETE',
     headers: {
       'X-User-Id': currentUserId,
@@ -625,6 +628,7 @@ export async function deleteModelRecord(id: number, currentUserId: string): Prom
 
 export async function testModelRecordConnection(
   payload: {
+    model_code: string
     custom_model_name: string
     provider: string
     model_name: string

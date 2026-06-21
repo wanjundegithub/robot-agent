@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.dto.request.ValidateModelProviderRequest;
@@ -86,11 +87,11 @@ public class ModelConfigController {
         return ResponseEntity.ok(modelConfigService.getModelRecords(keyword, null, null, page, pageSize));
     }
 
-    @GetMapping("/models/{id}")
+    @GetMapping("/models/{modelCode}")
     public ResponseEntity<Map<String, Object>> getModel(
-            @PathVariable Long id
+            @PathVariable String modelCode
     ) {
-        return ResponseEntity.ok(modelConfigService.getModelRecord(id));
+        return ResponseEntity.ok(modelConfigService.getModelRecord(modelCode));
     }
 
     @PostMapping("/models")
@@ -109,21 +110,30 @@ public class ModelConfigController {
         return ResponseEntity.ok(modelConfigService.testSimpleModelConnection(userId, request));
     }
 
-    @PutMapping("/models/{id}")
-    public ResponseEntity<Map<String, Object>> updateModelRecord(
+    @PostMapping("/models/{modelCode}/test")
+    public ResponseEntity<Map<String, Object>> testModelRecord(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable Long id,
-            @RequestBody UpsertModelRecordRequest request
+            @PathVariable String modelCode,
+            @RequestBody TestModelRecordRequest request
     ) {
-        return ResponseEntity.ok(modelConfigService.updateModelRecord(userId, id, request));
+        return ResponseEntity.ok(modelConfigService.testModelRecordChat(userId, modelCode, request));
     }
 
-    @DeleteMapping("/models/{id}")
+    @PutMapping("/models/{modelCode}")
+    public ResponseEntity<Map<String, Object>> updateModelRecord(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @PathVariable String modelCode,
+            @RequestBody UpsertModelRecordRequest request
+    ) {
+        return ResponseEntity.ok(modelConfigService.updateModelRecord(userId, modelCode, request));
+    }
+
+    @DeleteMapping("/models/{modelCode}")
     public ResponseEntity<Void> deleteModelRecord(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @PathVariable Long id
+            @PathVariable String modelCode
     ) {
-        modelConfigService.deleteModelRecord(userId, id);
+        modelConfigService.deleteModelRecord(userId, modelCode);
         return ResponseEntity.noContent().build();
     }
 }

@@ -477,10 +477,13 @@ export interface ModelProviderConfig {
 
 export interface ModelRecordConfig {
   id: number
+  model_code: string
   custom_model_name: string
   provider: string
   model_name: string
-  api_key: string
+  api_key?: string
+  api_key_configured?: boolean
+  api_key_masked?: string
   base_url: string
   default_options?: Record<string, unknown>
   created_at?: string

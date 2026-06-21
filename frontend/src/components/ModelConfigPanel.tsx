@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { deleteModelRecord, getModelRecords, saveModelRecord, testModelRecordConnection } from '../services/api'
+import { deleteModelRecord, getModelRecord, getModelRecords, saveModelRecord, testModelRecordConnection } from '../services/api'
 import type { ModelRecordConfig } from '../types'
 
 interface ModelConfigPanelProps {
@@ -8,6 +8,7 @@ interface ModelConfigPanelProps {
 
 type ModelFormState = {
   id?: number
+  model_code: string
   custom_model_name: string
   provider: string
   model_name: string
@@ -19,6 +20,7 @@ type ModelFormState = {
 const providerOptions = ['openai', 'openai_compatible', 'doubao', 'gemini', 'claude', 'qwen', 'deepseek', 'custom']
 
 const createEmptyForm = (): ModelFormState => ({
+  model_code: '',
   custom_model_name: '',
   provider: 'openai',
   model_name: '',
@@ -29,10 +31,11 @@ const createEmptyForm = (): ModelFormState => ({
 
 const recordToForm = (record: ModelRecordConfig): ModelFormState => ({
   id: record.id,
+  model_code: record.model_code,
   custom_model_name: record.custom_model_name,
   provider: record.provider,
   model_name: record.model_name,
-  api_key: record.api_key,
+  api_key: record.api_key || '',
   base_url: record.base_url,
   default_options: record.default_options && Object.keys(record.default_options).length > 0
     ? JSON.stringify(record.default_options, null, 2)
@@ -51,6 +54,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
   const [isSaving, setIsSaving] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showApiKey, setShowApiKey] = useState(false)
   const pageSize = 20
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [pageSize, total])
@@ -78,17 +82,25 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
   const handleCreate = () => {
     setForm(createEmptyForm())
+    setShowApiKey(false)
     setStatus('已切换到新建模型表单')
   }
 
-  const handleSelect = (record: ModelRecordConfig) => {
-    setForm(recordToForm(record))
-    setStatus('')
+  const handleSelect = async (record: ModelRecordConfig) => {
+    setShowApiKey(false)
+    try {
+      const detail = await getModelRecord(record.model_code)
+      setForm(recordToForm(detail))
+      setStatus('')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '加载模型详情失败')
+    }
   }
 
   const isFormComplete = () =>
     Boolean(
-      form.custom_model_name.trim() &&
+      form.model_code.trim() &&
+        form.custom_model_name.trim() &&
         form.provider.trim() &&
         form.model_name.trim() &&
         form.api_key.trim() &&
@@ -113,7 +125,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
   const handleSave = async () => {
     if (!isFormComplete()) {
-      setStatus('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')
+      setStatus('请完整填写模型编码、自定义模型名、供应商、Model 名称、API Key 和 Base URL')
       return
     }
 
@@ -122,6 +134,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       const defaultOptions = parseDefaultOptions()
       const saved = await saveModelRecord(
         {
+          model_code: form.model_code.trim(),
           custom_model_name: form.custom_model_name.trim(),
           provider: form.provider.trim(),
           model_name: form.model_name.trim(),
@@ -130,9 +143,9 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
           ...(defaultOptions ? { default_options: defaultOptions } : {}),
         },
         currentUserId,
-        form.id
+        typeof form.id === 'number' ? form.model_code.trim() : undefined
       )
-      const created = !form.id
+      const created = typeof form.id !== 'number'
       setForm(recordToForm(saved))
       setStatus(created ? '已新建模型配置' : '已保存模型配置')
       if (created) {
@@ -155,8 +168,9 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
     }
     try {
       setIsDeleting(true)
-      await deleteModelRecord(form.id, currentUserId)
+      await deleteModelRecord(form.model_code.trim(), currentUserId)
       setForm(createEmptyForm())
+      setShowApiKey(false)
       setStatus('已删除模型配置')
       await loadRecords()
     } catch (error) {
@@ -168,7 +182,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
   const handleTest = async () => {
     if (!isFormComplete()) {
-      setStatus('请完整填写自定义模型名、供应商、Model 名称、API Key 和 Base URL')
+      setStatus('请完整填写模型编码、自定义模型名、供应商、Model 名称、API Key 和 Base URL')
       return
     }
     try {
@@ -176,6 +190,7 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       const defaultOptions = parseDefaultOptions()
       const result = await testModelRecordConnection(
         {
+          model_code: form.model_code.trim(),
           custom_model_name: form.custom_model_name.trim(),
           provider: form.provider.trim(),
           model_name: form.model_name.trim(),
@@ -233,6 +248,21 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
 
           <div className="space-y-4">
             <div className="space-y-1.5">
+              <label htmlFor="model-code" className="block text-sm font-medium text-slate-700">
+                模型编码
+              </label>
+              <div className="text-xs text-slate-500">用于后台配置和工作流引用，创建后不可修改。</div>
+              <input
+                id="model-code"
+                value={form.model_code}
+                onChange={(event) => setForm((current) => ({ ...current, model_code: event.target.value }))}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                required
+                disabled={typeof form.id === 'number'}
+              />
+            </div>
+
+            <div className="space-y-1.5">
               <label htmlFor="custom-model-name" className="block text-sm font-medium text-slate-700">
                 自定义模型名
               </label>
@@ -285,14 +315,36 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
                 API Key（接口密钥）
               </label>
               <div className="text-xs text-slate-500">调用上游模型接口使用的密钥。</div>
-              <input
-                id="api-key"
-                type="password"
-                value={form.api_key}
-                onChange={(event) => setForm((current) => ({ ...current, api_key: event.target.value }))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                required
-              />
+              <div className="flex overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <input
+                  id="api-key"
+                  type={showApiKey ? 'text' : 'password'}
+                  value={form.api_key}
+                  onChange={(event) => setForm((current) => ({ ...current, api_key: event.target.value }))}
+                  className="min-w-0 flex-1 border-0 px-3 py-2 text-sm outline-none"
+                  required
+                />
+                <button
+                  type="button"
+                  className="flex w-10 items-center justify-center border-l border-slate-200 text-slate-500 hover:bg-slate-50"
+                  aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+                  onClick={() => setShowApiKey((current) => !current)}
+                >
+                  {showApiKey ? (
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                      <path d="M9.9 4.2A9.7 9.7 0 0 1 12 4c5 0 8.5 4 10 8a15.8 15.8 0 0 1-3.1 4.7" />
+                      <path d="M6.5 6.5A15.4 15.4 0 0 0 2 12c1.5 4 5 8 10 8a9.7 9.7 0 0 0 4.1-.9" />
+                    </svg>
+                  ) : (
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2">
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -358,14 +410,14 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
       <section className="flex h-full min-h-0 min-w-0 flex-[0_0_70%] flex-col bg-white" data-testid="model-config-list">
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="text-sm font-semibold text-slate-800">模型记录列表</div>
-          <div className="mt-1 text-xs text-slate-500">支持按自定义模型名和 Model 名称模糊查找。</div>
+          <div className="mt-1 text-xs text-slate-500">支持按模型编码、自定义模型名和 Model 名称模糊查找。</div>
           <div className="mt-4 flex flex-wrap gap-2">
             <input
               data-testid="model-config-search-input"
               value={keywordInput}
               onChange={(event) => setKeywordInput(event.target.value)}
               className="min-w-[240px] flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-              placeholder="输入自定义模型名或 Model 名称"
+              placeholder="输入模型编码、自定义模型名或 Model 名称"
             />
             <button
               type="button"
@@ -384,14 +436,15 @@ const ModelConfigPanel: React.FC<ModelConfigPanelProps> = ({ currentUserId }) =>
           {!isLoading &&
             records.map((record) => (
               <button
-                key={record.id}
+                key={record.model_code}
                 type="button"
                 className="flex w-full items-start justify-between border-b border-slate-100 px-5 py-4 text-left transition hover:bg-slate-50"
-                data-testid={`model-config-row-${record.id}`}
-                onClick={() => handleSelect(record)}
+                data-testid={`model-config-row-${record.model_code}`}
+                onClick={() => void handleSelect(record)}
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-slate-800">{record.custom_model_name}</div>
+                  <div className="mt-1 truncate font-mono text-xs text-slate-500">{record.model_code}</div>
                   <div className="mt-1 truncate text-xs text-slate-500">
                     {record.provider} · {record.model_name}
                   </div>
