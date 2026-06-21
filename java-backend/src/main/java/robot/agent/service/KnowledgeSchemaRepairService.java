@@ -52,6 +52,7 @@ public class KnowledgeSchemaRepairService implements ApplicationRunner {
 
         ensureVarcharStatusColumn("knowledge_base", "ACTIVE");
         ensureVarcharStatusColumn("knowledge_document", "PENDING");
+        dropColumnIfExists("knowledge_base", "embedding_model");
     }
 
     private void ensureVarcharStatusColumn(String tableName, String defaultValue) {
@@ -75,6 +76,22 @@ public class KnowledgeSchemaRepairService implements ApplicationRunner {
         String sql = "ALTER TABLE `" + tableName + "` MODIFY COLUMN `status` VARCHAR(20) NOT NULL DEFAULT '" + defaultValue + "'";
         jdbcTemplate.execute(sql);
         logger.info("Repaired {}.status column to VARCHAR(20)", tableName);
+    }
+
+    private void dropColumnIfExists(String tableName, String columnName) {
+        List<Map<String, Object>> columns;
+        try {
+            columns = jdbcTemplate.queryForList("SHOW COLUMNS FROM `" + tableName + "` LIKE '" + columnName + "'");
+        } catch (DataAccessException exception) {
+            logger.debug("Skipped {}.{} schema repair because the table is not available", tableName, columnName, exception);
+            return;
+        }
+        if (columns.isEmpty()) {
+            return;
+        }
+
+        jdbcTemplate.execute("ALTER TABLE `" + tableName + "` DROP COLUMN `" + columnName + "`");
+        logger.info("Dropped obsolete {}.{} column", tableName, columnName);
     }
 
     private boolean isMysqlFamily(String databaseProductName) {

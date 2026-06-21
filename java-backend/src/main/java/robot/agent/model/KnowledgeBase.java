@@ -26,9 +26,6 @@ public class KnowledgeBase {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "embedding_model", length = 64)
-    private String embeddingModel;
-
     @Column(name = "current_version", length = 32)
     private String currentVersion;
 
@@ -80,14 +77,6 @@ public class KnowledgeBase {
 
     public void setDescription(String description) {
         this.description = description;
-    }
-
-    public String getEmbeddingModel() {
-        return embeddingModel;
-    }
-
-    public void setEmbeddingModel(String embeddingModel) {
-        this.embeddingModel = embeddingModel;
     }
 
     public String getCurrentVersion() {

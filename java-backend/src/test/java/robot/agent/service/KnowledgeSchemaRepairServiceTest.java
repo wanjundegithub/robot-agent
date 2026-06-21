@@ -32,6 +32,29 @@ class KnowledgeSchemaRepairServiceTest {
     }
 
     @Test
+    void knowledgeBaseEntityDoesNotDeclareEmbeddingModelColumn() {
+        assertThat(List.of(KnowledgeBase.class.getDeclaredFields()))
+                .extracting(Field::getName)
+                .doesNotContain("embeddingModel");
+    }
+
+    @Test
+    void dropsObsoleteKnowledgeBaseEmbeddingModelColumn() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        KnowledgeSchemaRepairService service = new KnowledgeSchemaRepairService(jdbcTemplate);
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `knowledge_base` LIKE 'status'"))
+                .thenReturn(List.of(Map.of("Type", "varchar(20)")));
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `knowledge_document` LIKE 'status'"))
+                .thenReturn(List.of(Map.of("Type", "varchar(20)")));
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `knowledge_base` LIKE 'embedding_model'"))
+                .thenReturn(List.of(Map.of("Field", "embedding_model")));
+
+        service.repairKnowledgeStatusColumns("MySQL");
+
+        verify(jdbcTemplate).execute("ALTER TABLE `knowledge_base` DROP COLUMN `embedding_model`");
+    }
+
+    @Test
     void convertsLegacyMysqlKnowledgeStatusEnumsToVarcharColumns() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         KnowledgeSchemaRepairService service = new KnowledgeSchemaRepairService(jdbcTemplate);

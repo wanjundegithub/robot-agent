@@ -994,7 +994,7 @@ public class WorkflowService {
             request.setKbCodes(boundKbCodes);
             request.setRetrievalMode("hybrid");
             request.setTopK(5);
-            request.setGenerateAnswer(true);
+            request.setGenerateAnswer(false);
             knowledgeResponse = knowledgeService.searchKnowledge(userId, request);
         } catch (RuntimeException exception) {
             log.warn(

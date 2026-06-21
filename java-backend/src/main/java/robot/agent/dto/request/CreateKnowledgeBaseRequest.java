@@ -5,7 +5,6 @@ public class CreateKnowledgeBaseRequest {
     private String kbCode;
     private String name;
     private String description;
-    private String embeddingModel;
 
     public Long getWorkspaceId() {
         return workspaceId;
@@ -39,11 +38,4 @@ public class CreateKnowledgeBaseRequest {
         this.description = description;
     }
 
-    public String getEmbeddingModel() {
-        return embeddingModel;
-    }
-
-    public void setEmbeddingModel(String embeddingModel) {
-        this.embeddingModel = embeddingModel;
-    }
 }

@@ -11,7 +11,6 @@ public class KnowledgeBaseResponse {
     private String kbCode;
     private String name;
     private String description;
-    private String embeddingModel;
     private String currentVersion;
     private KnowledgeBaseStatus status;
     private LocalDateTime createdAt;
@@ -23,7 +22,6 @@ public class KnowledgeBaseResponse {
         response.setKbCode(knowledgeBase.getKbCode());
         response.setName(knowledgeBase.getName());
         response.setDescription(knowledgeBase.getDescription());
-        response.setEmbeddingModel(knowledgeBase.getEmbeddingModel());
         response.setCurrentVersion(knowledgeBase.getCurrentVersion());
         response.setStatus(knowledgeBase.getStatus());
         response.setCreatedAt(knowledgeBase.getCreatedAt());
@@ -68,14 +66,6 @@ public class KnowledgeBaseResponse {
 
     public void setDescription(String description) {
         this.description = description;
-    }
-
-    public String getEmbeddingModel() {
-        return embeddingModel;
-    }
-
-    public void setEmbeddingModel(String embeddingModel) {
-        this.embeddingModel = embeddingModel;
     }
 
     public String getCurrentVersion() {

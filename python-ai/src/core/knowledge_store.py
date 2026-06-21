@@ -68,51 +68,66 @@ class PgVectorKnowledgeStore:
             register_vector(connection)
             with connection.cursor() as cursor:
                 cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {self._table_name} (
-                        chunk_id TEXT PRIMARY KEY,
-                        kb_code TEXT NOT NULL,
-                        doc_id TEXT NOT NULL,
-                        index_version INT NOT NULL,
-                        chunk_index INT NOT NULL,
-                        title TEXT,
-                        content TEXT NOT NULL,
-                        search_text TEXT,
-                        keywords TEXT[],
-                        search_terms TEXT[],
-                        content_hash TEXT,
-                        embedding VECTOR({settings.vector_dimension}) NOT NULL,
-                        metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-                        status TEXT NOT NULL DEFAULT 'ACTIVE',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-                cursor.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_kb_status_version "
-                    f"ON {self._table_name} (kb_code, status, index_version)"
-                )
-                cursor.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_doc_version "
-                    f"ON {self._table_name} (doc_id, index_version)"
-                )
-                cursor.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_metadata "
-                    f"ON {self._table_name} USING GIN (metadata)"
-                )
-                cursor.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_keywords "
-                    f"ON {self._table_name} USING GIN (keywords)"
-                )
-                cursor.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_search_terms "
-                    f"ON {self._table_name} USING GIN (search_terms)"
-                )
-                self._validate_schema(cursor)
+                self._create_schema(cursor)
+                if not self._schema_matches(cursor):
+                    cursor.execute(f"DROP TABLE IF EXISTS {self._table_name}")
+                    self._create_schema(cursor)
+                    self._validate_schema(cursor)
             connection.commit()
         return True
+
+    def _create_schema(self, cursor: Any) -> None:
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self._table_name} (
+                chunk_id TEXT PRIMARY KEY,
+                kb_code TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                index_version INT NOT NULL,
+                chunk_index INT NOT NULL,
+                title TEXT,
+                content TEXT NOT NULL,
+                search_text TEXT,
+                keywords TEXT[],
+                search_terms TEXT[],
+                content_hash TEXT,
+                embedding VECTOR({settings.vector_dimension}) NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                status TEXT NOT NULL DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_kb_status_version "
+            f"ON {self._table_name} (kb_code, status, index_version)"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_doc_version "
+            f"ON {self._table_name} (doc_id, index_version)"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_metadata "
+            f"ON {self._table_name} USING GIN (metadata)"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_keywords "
+            f"ON {self._table_name} USING GIN (keywords)"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_search_terms "
+            f"ON {self._table_name} USING GIN (search_terms)"
+        )
+
+    def _schema_matches(self, cursor: Any) -> bool:
+        try:
+            self._validate_schema(cursor)
+            return True
+        except RuntimeError as exc:
+            if "embedding dimension" not in str(exc):
+                raise
+            return False
 
     def _validate_schema(self, cursor: Any) -> None:
         cursor.execute(

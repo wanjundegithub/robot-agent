@@ -15,8 +15,8 @@ async def test_ingest_raw_text_chunks_embeds_and_upserts(monkeypatch):
 
     async def fake_embed_texts_with_model(**kwargs):
         assert kwargs["model_code"] == "model-431c4581ab84"
-        assert kwargs["expected_dimension"] == 4096
-        return [[0.1] * 4096 for _text in kwargs["texts"]]
+        assert kwargs["expected_dimension"] == 1024
+        return [[0.1] * 1024 for _text in kwargs["texts"]]
 
     monkeypatch.setattr("src.core.knowledge_ingestion.get_knowledge_store", lambda: StubKnowledgeStore())
     monkeypatch.setattr("src.core.knowledge_ingestion.embed_texts_with_model", fake_embed_texts_with_model)

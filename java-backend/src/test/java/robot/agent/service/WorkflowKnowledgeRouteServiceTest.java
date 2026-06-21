@@ -126,6 +126,7 @@ class WorkflowKnowledgeRouteServiceTest {
         ArgumentCaptor<KnowledgeSearchRequest> requestCaptor = ArgumentCaptor.forClass(KnowledgeSearchRequest.class);
         verify(knowledgeService).searchKnowledge(eq("demo-user"), requestCaptor.capture());
         assertThat(requestCaptor.getValue().getKbCodes()).containsExactly("kb_product");
+        assertThat(requestCaptor.getValue().getGenerateAnswer()).isFalse();
     }
 
     @Test

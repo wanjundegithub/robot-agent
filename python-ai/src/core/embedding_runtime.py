@@ -50,8 +50,9 @@ async def embed_texts_with_model(
         body["messages"] = [{"role": "user", "content": text} for text in texts]
     if options.get("encoding_format"):
         body["encoding_format"] = str(options["encoding_format"])
-    if options.get("dimensions"):
-        body["dimensions"] = int(options["dimensions"])
+    dimensions = options.get("dimensions", options.get("embedding_dimension"))
+    if dimensions:
+        body["dimensions"] = int(dimensions)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(request_url, headers=headers, json=body)
         response.raise_for_status()

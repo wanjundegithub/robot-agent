@@ -112,7 +112,6 @@ public class KnowledgeService {
         knowledgeBase.setKbCode(generateKnowledgeBaseCode(request.getKbCode()));
         knowledgeBase.setName(request.getName());
         knowledgeBase.setDescription(blankToNull(request.getDescription()));
-        knowledgeBase.setEmbeddingModel(resolveEmbeddingModelCode(request.getEmbeddingModel()));
         knowledgeBase.setStatus(KnowledgeBaseStatus.ACTIVE);
         knowledgeBase.setCreatedBy(userId);
         knowledgeBase.setCreatedAt(LocalDateTime.now());
@@ -417,13 +416,7 @@ public class KnowledgeService {
             accessControlService.requireAnyRole(userId, knowledgeBase.getWorkspaceId(), Set.of("workflow_admin", "knowledge_admin", "viewer"));
         }
 
-        String embeddingModelCode = resolveEmbeddingModelCode(
-                knowledgeBases.stream()
-                        .map(KnowledgeBase::getEmbeddingModel)
-                        .filter(value -> value != null && !value.isBlank())
-                        .findFirst()
-                        .orElse(null)
-        );
+        String embeddingModelCode = resolveEmbeddingModelCode();
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
         Map<String, Object> pythonRequest = new LinkedHashMap<>();
         pythonRequest.put("query", request.getQuery());
@@ -507,7 +500,7 @@ public class KnowledgeService {
     }
 
     private Map<String, Object> buildIngestRequest(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {
-        String embeddingModelCode = resolveEmbeddingModelCode(knowledgeBase.getEmbeddingModel());
+        String embeddingModelCode = resolveEmbeddingModelCode();
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel(embeddingModelCode);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("task_id", task.getTaskId());
@@ -541,8 +534,8 @@ public class KnowledgeService {
         return value == null || value.isBlank() ? fallback : value.trim();
     }
 
-    private String resolveEmbeddingModelCode(String configuredModelCode) {
-        return firstNonBlank(configuredModelCode, knowledgeProperties.getEmbedding().getDefaultModelCode());
+    private String resolveEmbeddingModelCode() {
+        return firstNonBlank(knowledgeProperties.getEmbedding().getDefaultModelCode(), "");
     }
 
     private String generateKnowledgeBaseCode(String requestedCode) {

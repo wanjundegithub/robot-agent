@@ -24,7 +24,7 @@ async def test_knowledge_search_api_returns_hits_and_citations(monkeypatch):
 
     async def fake_embed_texts_with_model(**kwargs):
         embedded.update(kwargs)
-        return [[0.2] * 4096]
+        return [[0.2] * 1024]
 
     monkeypatch.setattr(main, "get_knowledge_store", lambda: StubKnowledgeStore())
     monkeypatch.setattr(main, "embed_texts_with_model", fake_embed_texts_with_model)
@@ -48,4 +48,4 @@ async def test_knowledge_search_api_returns_hits_and_citations(monkeypatch):
     assert embedded["model_code"] == "model-431c4581ab84"
     assert captured["kb_codes"] == ["kb_product"]
     assert captured["embedding_model_code"] == "model-431c4581ab84"
-    assert captured["embedding"] == [0.2] * 4096
+    assert captured["embedding"] == [0.2] * 1024

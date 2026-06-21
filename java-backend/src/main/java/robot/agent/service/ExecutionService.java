@@ -1250,10 +1250,38 @@ public class ExecutionService {
             RoutingDecision routingDecision
     ) {
         SendMessageResponse response = buildRouteDecisionResponse(session, activeExecution, routingDecision);
-        response.setExecutionId(null);
-        response.setStatus("clarification_required");
+        String knowledgeExecutionId = "knowledge_" + UUID.randomUUID().toString().replace("-", "");
+        response.setExecutionId(knowledgeExecutionId);
+        response.setStatus("knowledge_answer_streaming");
         response.setRouteDecision("knowledge_answer");
+        streamKnowledgeAnswer(knowledgeExecutionId, session.getId(), routingDecision.clarificationQuestion());
         return response;
+    }
+
+    private void streamKnowledgeAnswer(String executionId, String sessionId, String answer) {
+        sendMessageDeltaFrame(executionId, sessionId, "", false);
+        for (String chunk : splitKnowledgeAnswer(answer)) {
+            sendMessageDeltaFrame(executionId, sessionId, chunk, false);
+        }
+        sendMessageDeltaFrame(executionId, sessionId, "", true);
+    }
+
+    private List<String> splitKnowledgeAnswer(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return List.of();
+        }
+        String normalized = answer.trim();
+        if (normalized.length() <= 120) {
+            return List.of(normalized);
+        }
+        List<String> chunks = new ArrayList<>();
+        int offset = 0;
+        while (offset < normalized.length()) {
+            int end = Math.min(offset + 120, normalized.length());
+            chunks.add(normalized.substring(offset, end));
+            offset = end;
+        }
+        return chunks;
     }
 
     private SendMessageResponse buildCandidateConfirmationResponse(
