@@ -45,7 +45,7 @@ test.beforeEach(async ({ page }) => {
       kbCode: 'kb_product',
       name: '产品知识',
       description: '产品说明与售后政策',
-      embeddingModel: 'embedding-qwen3-8b',
+      embeddingModel: 'model-431c4581ab84',
       status: 'ACTIVE',
       documentCount: 1,
       createdAt: '2026-06-14T00:00:00',

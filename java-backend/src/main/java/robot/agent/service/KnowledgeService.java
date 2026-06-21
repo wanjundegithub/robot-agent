@@ -52,8 +52,6 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class KnowledgeService {
-    private static final String LEGACY_EMBEDDING_MODEL_CODE = "embedding-qwen3-8b";
-
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
@@ -544,11 +542,7 @@ public class KnowledgeService {
     }
 
     private String resolveEmbeddingModelCode(String configuredModelCode) {
-        String modelCode = firstNonBlank(configuredModelCode, knowledgeProperties.getEmbedding().getDefaultModelCode());
-        if (LEGACY_EMBEDDING_MODEL_CODE.equals(modelCode)) {
-            return knowledgeProperties.getEmbedding().getDefaultModelCode();
-        }
-        return modelCode;
+        return firstNonBlank(configuredModelCode, knowledgeProperties.getEmbedding().getDefaultModelCode());
     }
 
     private String generateKnowledgeBaseCode(String requestedCode) {

@@ -50,19 +50,6 @@ robot:
         - md
     embedding:
       default-model-code: model-431c4581ab84
-      default-upstream-model: Qwen/Qwen3-Embedding-8B
-      provider-code: model-431c4581ab84-provider
-      provider-name: ModelScope Embedding
-      provider-type: openai_compatible
-      base-url: https://api-inference.modelscope.cn/v1/embeddings
-      api-key-secret-ref: ""
-      embedding-path: /embeddings
-      encoding-format: float
-      include-messages: true
-      single-input-as-string: true
-      dimension: 4096
-      batch-size: 32
-      timeout-ms: 30000
     retrieval:
       mode: hybrid
       top-k: 5

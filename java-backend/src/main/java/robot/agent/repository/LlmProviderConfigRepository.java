@@ -10,6 +10,5 @@ import java.util.Optional;
 public interface LlmProviderConfigRepository extends JpaRepository<LlmProviderConfig, Long> {
     Optional<LlmProviderConfig> findByProviderCode(String providerCode);
     List<LlmProviderConfig> findByProviderCodeIn(Collection<String> providerCodes);
-    List<LlmProviderConfig> findByEnabledTrueOrderByProviderCodeAsc();
     List<LlmProviderConfig> findAllByOrderByProviderCodeAsc();
 }

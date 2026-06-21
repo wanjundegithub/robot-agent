@@ -16,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import robot.agent.common.ApplicationConstants;
 import robot.agent.config.DefaultModelProperties;
-import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.TestModelRecordRequest;
 import robot.agent.dto.request.UpsertModelProviderRequest;
 import robot.agent.dto.request.UpsertModelRecordRequest;
@@ -59,7 +58,6 @@ public class ModelConfigService {
     private final AuditService auditService;
     private final UnifiedModelService unifiedModelService;
     private final DefaultModelProperties defaultModelProperties;
-    private final KnowledgeProperties knowledgeProperties;
 
     @Autowired
     public ModelConfigService(
@@ -71,8 +69,7 @@ public class ModelConfigService {
             AccessControlService accessControlService,
             AuditService auditService,
             UnifiedModelService unifiedModelService,
-            DefaultModelProperties defaultModelProperties,
-            KnowledgeProperties knowledgeProperties
+            DefaultModelProperties defaultModelProperties
     ) {
         this.providerRepository = providerRepository;
         this.modelRecordRepository = modelRecordRepository;
@@ -83,32 +80,6 @@ public class ModelConfigService {
         this.auditService = auditService;
         this.unifiedModelService = unifiedModelService;
         this.defaultModelProperties = defaultModelProperties;
-        this.knowledgeProperties = knowledgeProperties;
-    }
-
-    public ModelConfigService(
-            LlmProviderConfigRepository providerRepository,
-            LlmModelRecordRepository modelRecordRepository,
-            WorkflowVersionRepository workflowVersionRepository,
-            ApiItemRepository apiItemRepository,
-            ObjectMapper objectMapper,
-            AccessControlService accessControlService,
-            AuditService auditService,
-            UnifiedModelService unifiedModelService,
-            DefaultModelProperties defaultModelProperties
-    ) {
-        this(
-                providerRepository,
-                modelRecordRepository,
-                workflowVersionRepository,
-                apiItemRepository,
-                objectMapper,
-                accessControlService,
-                auditService,
-                unifiedModelService,
-                defaultModelProperties,
-                new KnowledgeProperties()
-        );
     }
 
     public ModelConfigService(
@@ -129,8 +100,7 @@ public class ModelConfigService {
                 accessControlService,
                 auditService,
                 new UnifiedModelService(modelRecordRepository, providerRepository, objectMapper),
-                new DefaultModelProperties(),
-                new KnowledgeProperties()
+                new DefaultModelProperties()
         );
     }
 
@@ -177,41 +147,7 @@ public class ModelConfigService {
 
     public RuntimeModelBundle buildDefaultRuntimeBundle() {
         String configuredModelCode = defaultModelProperties.resolveModelCode("default");
-        RuntimeModelBundle configuredBundle = runtimeBundleForConfiguredDefaultModel(configuredModelCode);
-        if (!configuredBundle.modelRecords().isEmpty()) {
-            return configuredBundle;
-        }
-
-        List<LlmProviderConfig> enabledProviders = providerRepository.findByEnabledTrueOrderByProviderCodeAsc();
-        for (LlmProviderConfig provider : enabledProviders) {
-            String defaultModelCode = blankToNull(provider.getDefaultModelCode());
-            if (defaultModelCode == null) {
-                continue;
-            }
-            LlmModelRecord modelRecord = modelRecordRepository.findByModelCode(defaultModelCode)
-                    .filter(LlmModelRecord::isEnabled)
-                    .orElse(null);
-            if (modelRecord != null) {
-                return runtimeBundleForDefaultModel(provider, modelRecord);
-            }
-        }
-
-        List<LlmModelRecord> enabledModels = modelRecordRepository.search(null, null, true, PageRequest.of(0, 1)).getContent();
-        if (enabledModels.isEmpty()) {
-            log.info("model.runtime.default.missing reason=no_enabled_models");
-            return new RuntimeModelBundle(List.of(), List.of());
-        }
-        LlmModelRecord modelRecord = enabledModels.get(0);
-        LlmProviderConfig provider = providerRepository.findByProviderCode(modelRecord.getProviderCode()).orElse(null);
-        if (provider == null || !provider.isEnabled()) {
-            log.info(
-                    "model.runtime.default.missing reason=provider_unavailable modelCode={} providerCode={}",
-                    modelRecord.getModelCode(),
-                    modelRecord.getProviderCode()
-            );
-            return new RuntimeModelBundle(List.of(), List.of());
-        }
-        return runtimeBundleForDefaultModel(provider, modelRecord);
+        return runtimeBundleForConfiguredDefaultModel(configuredModelCode);
     }
 
     public RuntimeModelBundle buildRuntimeBundleForModel(String modelCode) {

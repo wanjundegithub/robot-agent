@@ -143,7 +143,7 @@ class KnowledgeServiceManagementTest {
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setName("旧名称");
         knowledgeBase.setDescription("旧描述");
-        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        knowledgeBase.setEmbeddingModel("model-431c4581ab84");
         knowledgeBase.setStatus(KnowledgeBaseStatus.ACTIVE);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeBaseRepository.save(any(KnowledgeBase.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -157,7 +157,7 @@ class KnowledgeServiceManagementTest {
 
         assertThat(response.getName()).isEqualTo("产品知识");
         assertThat(response.getDescription()).isEqualTo("产品说明与售后政策");
-        assertThat(response.getEmbeddingModel()).isEqualTo("embedding-qwen3-8b");
+        assertThat(response.getEmbeddingModel()).isEqualTo("model-431c4581ab84");
     }
 
     @Test
@@ -184,7 +184,7 @@ class KnowledgeServiceManagementTest {
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setCurrentVersion("v1");
-        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        knowledgeBase.setEmbeddingModel("model-431c4581ab84");
         KnowledgeDocument document = textDocument("doc_1", "kb_product", "旧标题", "旧正文");
         document.setIndexVersion(1);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));

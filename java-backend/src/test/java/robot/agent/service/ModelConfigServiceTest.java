@@ -8,7 +8,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import robot.agent.apicenter.repository.ApiItemRepository;
 import robot.agent.config.DefaultModelProperties;
-import robot.agent.config.KnowledgeProperties;
 import robot.agent.dto.request.UpsertModelRecordRequest;
 import robot.agent.model.LlmModelRecord;
 import robot.agent.model.LlmProviderConfig;
@@ -53,13 +52,11 @@ class ModelConfigServiceTest {
     private UnifiedModelService unifiedModelService;
 
     private DefaultModelProperties defaultModelProperties;
-    private KnowledgeProperties knowledgeProperties;
     private ModelConfigService modelConfigService;
 
     @BeforeEach
     void setUp() {
         defaultModelProperties = new DefaultModelProperties();
-        knowledgeProperties = new KnowledgeProperties();
         modelConfigService = new ModelConfigService(
                 providerRepository,
                 modelRecordRepository,
@@ -69,8 +66,7 @@ class ModelConfigServiceTest {
                 accessControlService,
                 auditService,
                 unifiedModelService,
-                defaultModelProperties,
-                knowledgeProperties
+                defaultModelProperties
         );
     }
 
@@ -87,7 +83,19 @@ class ModelConfigServiceTest {
 
         assertThat(bundle.modelRecords()).extracting(item -> item.get("model_code")).containsExactly("local-default-chat");
         assertThat(bundle.providerConfigs()).extracting(item -> item.get("provider_code")).containsExactly("doubao-provider");
-        verify(providerRepository, never()).findByEnabledTrueOrderByProviderCodeAsc();
+        verify(modelRecordRepository, never()).search(any(), any(), any(), any());
+    }
+
+    @Test
+    void buildDefaultRuntimeBundleDoesNotFallbackWhenConfiguredModelMissing() {
+        defaultModelProperties.setModelCode("missing-default-chat");
+        when(modelRecordRepository.findByModelCode("missing-default-chat")).thenReturn(Optional.empty());
+
+        ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildDefaultRuntimeBundle();
+
+        assertThat(bundle.modelRecords()).isEmpty();
+        assertThat(bundle.providerConfigs()).isEmpty();
+        verify(modelRecordRepository, never()).search(any(), any(), any(), any());
     }
 
     @Test
@@ -123,7 +131,6 @@ class ModelConfigServiceTest {
 
     @Test
     void buildRuntimeBundleForModelDoesNotSynthesizeEmbeddingFallbackWhenDatabaseModelMissing() {
-        knowledgeProperties.getEmbedding().setDefaultModelCode("model-431c4581ab84");
         when(modelRecordRepository.findByModelCode("model-431c4581ab84")).thenReturn(Optional.empty());
 
         ModelConfigService.RuntimeModelBundle bundle = modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84");

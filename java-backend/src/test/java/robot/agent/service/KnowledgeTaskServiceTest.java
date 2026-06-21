@@ -95,7 +95,7 @@ class KnowledgeTaskServiceTest {
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setCurrentVersion("v1");
-        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        knowledgeBase.setEmbeddingModel("model-431c4581ab84");
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));

@@ -153,19 +153,6 @@ public class KnowledgeProperties {
 
     public static class Embedding {
         private String defaultModelCode = "model-431c4581ab84";
-        private String defaultUpstreamModel = "Qwen/Qwen3-Embedding-8B";
-        private String providerCode = "model-431c4581ab84-provider";
-        private String providerName = "ModelScope Embedding";
-        private String providerType = "openai_compatible";
-        private String baseUrl = "https://api-inference.modelscope.cn/v1/embeddings";
-        private String apiKeySecretRef = "";
-        private String embeddingPath = "/embeddings";
-        private String encodingFormat = "float";
-        private boolean includeMessages = true;
-        private boolean singleInputAsString = true;
-        private int dimension = 4096;
-        private int batchSize = 32;
-        private int timeoutMs = 30000;
 
         public String getDefaultModelCode() {
             return defaultModelCode;
@@ -173,110 +160,6 @@ public class KnowledgeProperties {
 
         public void setDefaultModelCode(String defaultModelCode) {
             this.defaultModelCode = defaultModelCode;
-        }
-
-        public String getDefaultUpstreamModel() {
-            return defaultUpstreamModel;
-        }
-
-        public void setDefaultUpstreamModel(String defaultUpstreamModel) {
-            this.defaultUpstreamModel = defaultUpstreamModel;
-        }
-
-        public String getProviderCode() {
-            return providerCode;
-        }
-
-        public void setProviderCode(String providerCode) {
-            this.providerCode = providerCode;
-        }
-
-        public String getProviderName() {
-            return providerName;
-        }
-
-        public void setProviderName(String providerName) {
-            this.providerName = providerName;
-        }
-
-        public String getProviderType() {
-            return providerType;
-        }
-
-        public void setProviderType(String providerType) {
-            this.providerType = providerType;
-        }
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-
-        public String getApiKeySecretRef() {
-            return apiKeySecretRef;
-        }
-
-        public void setApiKeySecretRef(String apiKeySecretRef) {
-            this.apiKeySecretRef = apiKeySecretRef;
-        }
-
-        public String getEmbeddingPath() {
-            return embeddingPath;
-        }
-
-        public void setEmbeddingPath(String embeddingPath) {
-            this.embeddingPath = embeddingPath;
-        }
-
-        public String getEncodingFormat() {
-            return encodingFormat;
-        }
-
-        public void setEncodingFormat(String encodingFormat) {
-            this.encodingFormat = encodingFormat;
-        }
-
-        public boolean isIncludeMessages() {
-            return includeMessages;
-        }
-
-        public void setIncludeMessages(boolean includeMessages) {
-            this.includeMessages = includeMessages;
-        }
-
-        public boolean isSingleInputAsString() {
-            return singleInputAsString;
-        }
-
-        public void setSingleInputAsString(boolean singleInputAsString) {
-            this.singleInputAsString = singleInputAsString;
-        }
-
-        public int getDimension() {
-            return dimension;
-        }
-
-        public void setDimension(int dimension) {
-            this.dimension = dimension;
-        }
-
-        public int getBatchSize() {
-            return batchSize;
-        }
-
-        public void setBatchSize(int batchSize) {
-            this.batchSize = batchSize;
-        }
-
-        public int getTimeoutMs() {
-            return timeoutMs;
-        }
-
-        public void setTimeoutMs(int timeoutMs) {
-            this.timeoutMs = timeoutMs;
         }
     }
 

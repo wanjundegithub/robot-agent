@@ -88,7 +88,7 @@ class KnowledgeSearchServiceTest {
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
-        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        knowledgeBase.setEmbeddingModel("model-431c4581ab84");
         KnowledgeDocument document = document("doc_1", KnowledgeDocumentStatus.READY);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product")).thenReturn(List.of(document));
@@ -135,7 +135,7 @@ class KnowledgeSearchServiceTest {
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
-        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        knowledgeBase.setEmbeddingModel("model-431c4581ab84");
         KnowledgeDocument activeDocument = document("doc_active", KnowledgeDocumentStatus.READY);
         KnowledgeDocument deletedDocument = document("doc_deleted", KnowledgeDocumentStatus.DELETED);
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
@@ -181,6 +181,46 @@ class KnowledgeSearchServiceTest {
         assertThat(response.getCitations()).extracting(KnowledgeSearchResponse.Citation::getDocId)
                 .containsExactly("doc_active");
         assertThat(response.getBestScore()).isEqualTo(0.92d);
+    }
+
+    @Test
+    void searchKnowledgeUsesStoredEmbeddingModelCodeWithoutLegacyMapping() {
+        KnowledgeBase knowledgeBase = new KnowledgeBase();
+        knowledgeBase.setWorkspaceId(1L);
+        knowledgeBase.setKbCode("kb_product");
+        knowledgeBase.setEmbeddingModel("embedding-qwen3-8b");
+        KnowledgeDocument document = document("doc_1", KnowledgeDocumentStatus.READY);
+        when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
+        when(knowledgeDocumentRepository.findByKbCodeOrderByCreatedAtDesc("kb_product")).thenReturn(List.of(document));
+        when(modelConfigService.buildRuntimeBundleForModel("embedding-qwen3-8b"))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(Map.of("provider_code", "embedding-qwen3-8b-provider")),
+                        List.of(Map.of("model_code", "embedding-qwen3-8b"))
+                ));
+        when(pythonKnowledgeClient.search(anyMap())).thenReturn(Map.of(
+                "query", "保修期多久",
+                "documents", List.of(Map.of(
+                        "chunk_id", "chunk_1",
+                        "doc_id", "doc_1",
+                        "kb_code", "kb_product",
+                        "title", "产品手册",
+                        "content", "保修期为一年",
+                        "score", 0.92
+                )),
+                "answer", "",
+                "citations", List.of(),
+                "bestScore", 0.92
+        ));
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("保修期多久");
+        request.setKbCodes(List.of("kb_product"));
+
+        knowledgeService.searchKnowledge("demo-admin", request);
+
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(pythonKnowledgeClient).search(captor.capture());
+        assertThat(captor.getValue()).containsEntry("embedding_model_code", "embedding-qwen3-8b");
+        verify(modelConfigService).buildRuntimeBundleForModel("embedding-qwen3-8b");
     }
 
     private KnowledgeDocument document(String docId, KnowledgeDocumentStatus status) {
