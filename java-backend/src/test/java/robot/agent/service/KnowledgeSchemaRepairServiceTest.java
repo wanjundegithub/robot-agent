@@ -1,6 +1,7 @@
 package robot.agent.service;
 
 import jakarta.persistence.Column;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -97,6 +98,29 @@ class KnowledgeSchemaRepairServiceTest {
         service.repairKnowledgeStatusColumns("H2");
 
         verifyNoInteractions(jdbcTemplate);
+    }
+
+    @Test
+    void repairsWorkflowSpaceSchemaWhenTablesExist() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        KnowledgeSchemaRepairService service = new KnowledgeSchemaRepairService(jdbcTemplate);
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `knowledge_base` LIKE 'status'"))
+                .thenReturn(List.of(Map.of("Type", "varchar(20)")));
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `knowledge_document` LIKE 'status'"))
+                .thenReturn(List.of(Map.of("Type", "varchar(20)")));
+        when(jdbcTemplate.queryForList("SHOW TABLES LIKE 'workflow_definition'"))
+                .thenReturn(List.of(Map.of("Table", "workflow_definition")));
+        when(jdbcTemplate.queryForList("SHOW COLUMNS FROM `workflow_definition` LIKE 'workflow_space_code'"))
+                .thenReturn(List.of());
+        when(jdbcTemplate.queryForList("SHOW TABLES LIKE 'workflow_space'"))
+                .thenReturn(List.of(Map.of("Table", "workflow_space")));
+
+        service.repairKnowledgeStatusColumns("MySQL");
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, org.mockito.Mockito.atLeastOnce()).execute(sqlCaptor.capture());
+        assertThat(sqlCaptor.getAllValues()).anyMatch(sql -> sql.contains("ADD COLUMN `workflow_space_code`"));
+        assertThat(sqlCaptor.getAllValues()).anyMatch(sql -> sql.contains("INSERT INTO `workflow_space`"));
     }
 
     @Test

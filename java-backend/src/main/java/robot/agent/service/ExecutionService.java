@@ -28,6 +28,8 @@ import robot.agent.model.ExecutionStatus;
 import robot.agent.model.Session;
 import robot.agent.repository.ExecutionNodeLogRepository;
 import robot.agent.repository.ExecutionRepository;
+import robot.agent.service.robot.RobotConfigService;
+import robot.agent.service.robot.RobotRuntimeContext;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -59,6 +61,7 @@ public class ExecutionService {
     private final robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver;
     private final ChatFallbackProperties chatFallbackProperties;
     private final WorkflowPromptProperties workflowPromptProperties;
+    private final RobotConfigService robotConfigService;
 
     @Autowired
     public ExecutionService(
@@ -75,7 +78,8 @@ public class ExecutionService {
             EntryProtectionService entryProtectionService,
             robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver,
             ChatFallbackProperties chatFallbackProperties,
-            WorkflowPromptProperties workflowPromptProperties
+            WorkflowPromptProperties workflowPromptProperties,
+            RobotConfigService robotConfigService
     ) {
         this.sessionService = sessionService;
         this.workflowService = workflowService;
@@ -91,6 +95,7 @@ public class ExecutionService {
         this.apiRuntimeResolver = apiRuntimeResolver;
         this.chatFallbackProperties = chatFallbackProperties;
         this.workflowPromptProperties = workflowPromptProperties;
+        this.robotConfigService = robotConfigService;
     }
 
     public ExecutionService(
@@ -122,7 +127,42 @@ public class ExecutionService {
                 entryProtectionService,
                 apiRuntimeResolver,
                 chatFallbackProperties,
-                new WorkflowPromptProperties()
+                null
+        );
+    }
+
+    public ExecutionService(
+            SessionService sessionService,
+            WorkflowService workflowService,
+            ExecutionRepository executionRepository,
+            ExecutionNodeLogRepository executionNodeLogRepository,
+            PythonClient pythonClient,
+            UserConnectionManager userConnectionManager,
+            AuditService auditService,
+            ObjectMapper objectMapper,
+            AccessControlService accessControlService,
+            ConfirmationService confirmationService,
+            EntryProtectionService entryProtectionService,
+            robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver,
+            ChatFallbackProperties chatFallbackProperties,
+            RobotConfigService robotConfigService
+    ) {
+        this(
+                sessionService,
+                workflowService,
+                executionRepository,
+                executionNodeLogRepository,
+                pythonClient,
+                userConnectionManager,
+                auditService,
+                objectMapper,
+                accessControlService,
+                confirmationService,
+                entryProtectionService,
+                apiRuntimeResolver,
+                chatFallbackProperties,
+                new WorkflowPromptProperties(),
+                robotConfigService
         );
     }
 
@@ -154,7 +194,8 @@ public class ExecutionService {
                 entryProtectionService,
                 apiRuntimeResolver,
                 new ChatFallbackProperties(),
-                new WorkflowPromptProperties()
+                new WorkflowPromptProperties(),
+                null
         );
     }
 
@@ -221,11 +262,27 @@ public class ExecutionService {
                 forcedRoutingDecision != null,
                 explicitWorkflowExecution
         );
+        RobotRuntimeContext robotRuntimeContext = null;
+        if (forcedRoutingDecision == null && !explicitWorkflowExecution) {
+            if (request.getRobotCode() == null || request.getRobotCode().isBlank()) {
+                return buildRobotConfigResponse(session, "robot_required", "robot_code is required", null);
+            }
+            if (robotConfigService == null) {
+                return buildRobotConfigResponse(session, "robot_unavailable", "robot config service unavailable", request.getRobotCode());
+            }
+            try {
+                robotRuntimeContext = robotConfigService.resolveRuntimeContext(request.getRobotCode());
+            } catch (IllegalArgumentException exception) {
+                return buildRobotConfigResponse(session, "robot_not_found", exception.getMessage(), request.getRobotCode());
+            } catch (IllegalStateException exception) {
+                return buildRobotConfigResponse(session, "robot_disabled", exception.getMessage(), request.getRobotCode());
+            }
+        }
         RoutingDecision routingDecision = forcedRoutingDecision != null
                 ? forcedRoutingDecision
                 : (explicitWorkflowExecution
                 ? buildExplicitRoutingDecision(request, activeExecution)
-                : workflowService.routeMessage(request.getContent(), activeExecution, session.getId(), effectiveUserId));
+                : workflowService.routeMessage(request.getContent(), activeExecution, session.getId(), effectiveUserId, robotRuntimeContext));
         log.info(
                 "execution.route sessionId={} workflowCode={} workflowVersion={} decision={} reason={} confidence={}",
                 session.getId(),
@@ -1241,6 +1298,29 @@ public class ExecutionService {
         response.setExecutionId(null);
         response.setStatus("clarification_required");
         response.setRouteDecision("clarification_required");
+        return response;
+    }
+
+    private SendMessageResponse buildRobotConfigResponse(
+            Session session,
+            String status,
+            String reason,
+            String robotCode
+    ) {
+        SendMessageResponse response = new SendMessageResponse();
+        response.setSessionId(session.getId());
+        response.setExecutionId(null);
+        response.setStatus(status);
+        response.setRouteDecision(status);
+        response.setRouteReason(reason);
+        response.setClarificationQuestion(reason);
+        log.info(
+                "execution.robot_config.blocked sessionId={} robotCode={} status={} reason={}",
+                session.getId(),
+                robotCode,
+                status,
+                reason
+        );
         return response;
     }
 

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import robot.agent.config.ChatFallbackProperties;
 import robot.agent.dto.request.SendMessageRequest;
 import robot.agent.dto.response.SendMessageResponse;
@@ -15,6 +17,8 @@ import robot.agent.model.ExecutionStatus;
 import robot.agent.model.Session;
 import robot.agent.repository.ExecutionNodeLogRepository;
 import robot.agent.repository.ExecutionRepository;
+import robot.agent.service.robot.RobotConfigService;
+import robot.agent.service.robot.RobotRuntimeContext;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,6 +26,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,6 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class ExecutionServiceFallbackTest {
 
     @Mock
@@ -65,6 +71,9 @@ class ExecutionServiceFallbackTest {
     @Mock
     private robot.agent.apicenter.service.ApiRuntimeResolver apiRuntimeResolver;
 
+    @Mock
+    private RobotConfigService robotConfigService;
+
     private ChatFallbackProperties chatFallbackProperties;
 
     private ExecutionService executionService;
@@ -85,8 +94,32 @@ class ExecutionServiceFallbackTest {
                 confirmationService,
                 entryProtectionService,
                 apiRuntimeResolver,
-                chatFallbackProperties
+                chatFallbackProperties,
+                robotConfigService
         );
+        when(robotConfigService.resolveRuntimeContext(any())).thenReturn(robotContext());
+    }
+
+    @Test
+    void startExecutionRequiresRobotCodeForUnforcedChat() {
+        Session session = new Session();
+        session.setId("session-1");
+        session.setWorkspaceId(1L);
+        session.setUserId("session-user");
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setUserId("request-user");
+        request.setContent("warranty period");
+
+        when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
+
+        SendMessageResponse response = executionService.startExecution("session-1", request);
+
+        assertThat(response.getSessionId()).isEqualTo("session-1");
+        assertThat(response.getStatus()).isEqualTo("robot_required");
+        assertThat(response.getRouteDecision()).isEqualTo("robot_required");
+        verify(workflowService, never()).routeMessage(any(), any(), any(), any());
+        verify(workflowService, never()).routeMessage(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -178,6 +211,7 @@ class ExecutionServiceFallbackTest {
 
         SendMessageRequest request = new SendMessageRequest();
         request.setUserId("request-user");
+        request.setRobotCode("robot_after_sale");
         request.setContent("保修期多久");
 
         RoutingDecision routingDecision = new RoutingDecision(
@@ -198,7 +232,13 @@ class ExecutionServiceFallbackTest {
         );
 
         when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
-        when(workflowService.routeMessage("保修期多久", null, "session-1", "request-user")).thenReturn(routingDecision);
+        when(workflowService.routeMessage(
+                eq(request.getContent()),
+                isNull(),
+                eq("session-1"),
+                eq("request-user"),
+                any(RobotRuntimeContext.class)
+        )).thenReturn(routingDecision);
 
         SendMessageResponse response = executionService.startExecution("session-1", request);
 
@@ -209,7 +249,13 @@ class ExecutionServiceFallbackTest {
         assertThat(response.getRouteReason()).isEqualTo("knowledge_primary");
         assertThat(response.getClarificationQuestion()).isEqualTo("保修期为一年。");
         verify(executionRepository, never()).save(any(Execution.class));
-        verify(workflowService).routeMessage("保修期多久", null, "session-1", "request-user");
+        verify(workflowService).routeMessage(
+                eq(request.getContent()),
+                isNull(),
+                eq("session-1"),
+                eq("request-user"),
+                argThat(context -> context != null && "robot_after_sale".equals(context.robotCode()))
+        );
     }
 
     @Test
@@ -221,6 +267,7 @@ class ExecutionServiceFallbackTest {
 
         SendMessageRequest request = new SendMessageRequest();
         request.setUserId("request-user");
+        request.setRobotCode("robot_after_sale");
         request.setContent("保修期多久");
 
         RoutingDecision routingDecision = new RoutingDecision(
@@ -241,7 +288,13 @@ class ExecutionServiceFallbackTest {
         );
 
         when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
-        when(workflowService.routeMessage("保修期多久", null, "session-1", "request-user")).thenReturn(routingDecision);
+        when(workflowService.routeMessage(
+                eq(request.getContent()),
+                isNull(),
+                eq("session-1"),
+                eq("request-user"),
+                any(RobotRuntimeContext.class)
+        )).thenReturn(routingDecision);
 
         SendMessageResponse response = executionService.startExecution("session-1", request);
 
@@ -269,6 +322,17 @@ class ExecutionServiceFallbackTest {
                 eq(true)
         );
         verify(executionRepository, never()).save(any(Execution.class));
+    }
+
+    private RobotRuntimeContext robotContext() {
+        return new RobotRuntimeContext(
+                "robot_after_sale",
+                1L,
+                1,
+                List.of("after_sale_ticket"),
+                List.of("kb_warranty_policy"),
+                "PARALLEL_AGGREGATE"
+        );
     }
 
     @Test

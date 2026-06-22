@@ -10,4 +10,5 @@ public interface WorkflowRepository extends JpaRepository<Workflow, Long> {
     Optional<Workflow> findByWorkflowCode(String workflowCode);
     List<Workflow> findByStatusOrderByCreatedAtDesc(WorkflowStatus status);
     List<Workflow> findByStatusNotOrderByCreatedAtDesc(WorkflowStatus status);
+    List<Workflow> findByWorkflowSpaceCodeAndStatusNotOrderByCreatedAtDesc(String workflowSpaceCode, WorkflowStatus status);
 }

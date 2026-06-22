@@ -29,6 +29,8 @@ public class SendMessageRequest {
     private String intentCandidateTargetCode;
     @JsonProperty("workflow_code")
     private String workflowCode;
+    @JsonProperty("robot_code")
+    private String robotCode;
     @JsonProperty("workflow_id")
     private Long workflowId;
     @JsonProperty("workflow_version")
@@ -75,6 +77,9 @@ public class SendMessageRequest {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public String getRobotCode() { return robotCode; }
+    public void setRobotCode(String robotCode) { this.robotCode = robotCode; }
 
     public Long getWorkflowId() { return workflowId; }
     public void setWorkflowId(Long workflowId) { this.workflowId = workflowId; }

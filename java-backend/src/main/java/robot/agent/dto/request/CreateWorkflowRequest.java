@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class CreateWorkflowRequest {
     @JsonProperty("workflow_code")
     private String workflowCode;
+    @JsonProperty("workflow_space_code")
+    private String workflowSpaceCode;
     private String name;
     private String description;
     @JsonProperty("workspace_id")
@@ -12,6 +14,9 @@ public class CreateWorkflowRequest {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public String getWorkflowSpaceCode() { return workflowSpaceCode; }
+    public void setWorkflowSpaceCode(String workflowSpaceCode) { this.workflowSpaceCode = workflowSpaceCode; }
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }

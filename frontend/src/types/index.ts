@@ -333,14 +333,54 @@ export interface KnowledgeSearchResult {
   bestScore: number
 }
 
+export type RobotStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED' | 'ARCHIVED' | string
+export type RobotBindingType = 'WORKFLOW_SPACE' | 'KNOWLEDGE_SPACE' | string
+
+export interface RobotConfig {
+  id?: number
+  workspace_id?: number
+  robot_code: string
+  name: string
+  description?: string | null
+  avatar?: string | null
+  opening_message?: string | null
+  status: RobotStatus
+  default_model_code?: string | null
+  route_strategy?: string | null
+  workflow_binding_count?: number
+  knowledge_binding_count?: number
+}
+
+export interface RobotBinding {
+  id?: number
+  robot_code: string
+  binding_type: RobotBindingType
+  target_code: string
+  enabled: boolean
+  binding_version?: number
+}
+
 export interface SubflowRecommendationResponse {
   workflow_code: string
   recommendations: Array<Record<string, unknown>>
 }
 
+export interface WorkflowSpace {
+  id: number
+  workspace_id: number
+  space_code: string
+  name: string
+  description?: string | null
+  status: string
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
 export interface WorkflowSummary {
   id: number
   workflowCode: string
+  workflowSpaceCode?: string
   name: string
   description?: string
   status: string
@@ -367,6 +407,7 @@ export interface WorkflowVersionSummary {
 
 export interface WorkflowEditorSelection {
   workflowCode: string
+  workflowSpaceCode?: string
   workflowName?: string | null
   workflowDescription?: string | null
   publishedVersion?: string

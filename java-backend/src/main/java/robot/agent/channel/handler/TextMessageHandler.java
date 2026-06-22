@@ -39,6 +39,9 @@ public class TextMessageHandler implements BusinessEventHandler {
             if (!hasText(request.getUserId())) {
                 request.setUserId(context.userId());
             }
+            if (!hasText(request.getRobotCode())) {
+                request.setRobotCode(context.robotCode());
+            }
             if (!hasText(request.getWorkflowCode())) {
                 request.setWorkflowCode(context.workflowCode());
             }

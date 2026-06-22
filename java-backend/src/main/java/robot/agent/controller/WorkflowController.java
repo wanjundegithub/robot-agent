@@ -35,6 +35,7 @@ public class WorkflowController {
                 workflowService.createWorkflow(
                         userId,
                         request.getWorkflowCode(),
+                        request.getWorkflowSpaceCode(),
                         request.getName(),
                         request.getDescription(),
                         request.getWorkspaceId()

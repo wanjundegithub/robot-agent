@@ -15,6 +15,8 @@ import type {
   Message,
   RagEvaluationResponse,
   ReplayResponse,
+  RobotBinding,
+  RobotConfig,
   SubflowRecommendationResponse,
   OperationalReadiness,
   ModelRecordConfig,
@@ -23,6 +25,7 @@ import type {
   ProviderValidationResult,
   SessionSummary,
   WorkflowDraftValidationResponse,
+  WorkflowSpace,
   WorkflowSummary,
   WorkflowVersionSummary,
 } from '../types'
@@ -63,6 +66,98 @@ export type ApiAuthConfigPayload = {
   nonce?: string
   algorithm?: string
   qop?: string
+}
+
+export type RobotConfigPayload = {
+  workspace_id?: number
+  robot_code: string
+  name: string
+  description?: string
+  avatar?: string
+  opening_message?: string
+  status?: string
+  default_model_code?: string
+  route_strategy?: string
+  created_by?: string
+}
+
+export async function getRobots(): Promise<RobotConfig[]> {
+  const response = await apiFetch(`${API_BASE_URL}/robots`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveRobot(payload: RobotConfigPayload): Promise<RobotConfig> {
+  const response = await apiFetch(`${API_BASE_URL}/robots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function publishRobot(robotCode: string): Promise<RobotConfig> {
+  const response = await apiFetch(`${API_BASE_URL}/robots/${encodeURIComponent(robotCode)}/publish`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getRobotBindings(robotCode: string): Promise<RobotBinding[]> {
+  const response = await apiFetch(`${API_BASE_URL}/robots/${encodeURIComponent(robotCode)}/bindings`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function updateRobotBindings(
+  robotCode: string,
+  payload: { workspace_id?: number; workflow_space_codes: string[]; kb_codes: string[] }
+): Promise<RobotBinding[]> {
+  const response = await apiFetch(`${API_BASE_URL}/robots/${encodeURIComponent(robotCode)}/bindings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function getWorkflowSpaces(): Promise<WorkflowSpace[]> {
+  const response = await apiFetch(`${API_BASE_URL}/workflow-spaces`)
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
+}
+
+export async function saveWorkflowSpace(
+  payload: { workspace_id?: number; space_code: string; name: string; description?: string; created_by?: string },
+  currentUserId: string
+): Promise<WorkflowSpace> {
+  const response = await apiFetch(`${API_BASE_URL}/workflow-spaces`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await response.json()
 }
 
 async function parseApiError(response: Response): Promise<never> {
@@ -655,6 +750,7 @@ export async function testModelRecordConnection(
 export async function saveWorkflowDraft(
   workflowCode: string,
   payload: {
+    workflowSpaceCode?: string
     workflowName: string
     workflowDescription?: string
     version: string
@@ -679,6 +775,7 @@ export async function saveWorkflowDraft(
     },
     body: JSON.stringify({
       workflow_code: workflowCode,
+      workflow_space_code: payload.workflowSpaceCode,
       workflow_name: payload.workflowName,
       workflow_description: payload.workflowDescription ?? '',
       version: payload.version,

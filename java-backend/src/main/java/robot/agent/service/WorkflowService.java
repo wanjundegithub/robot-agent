@@ -28,6 +28,7 @@ import robot.agent.repository.WorkflowRepository;
 import robot.agent.repository.WorkflowVersionRepository;
 import robot.agent.service.knowledge.KnowledgeBindingService;
 import robot.agent.service.knowledge.KnowledgeRouteDecisionService;
+import robot.agent.service.robot.RobotRuntimeContext;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -160,12 +161,17 @@ public class WorkflowService {
     }
 
 
-    public WorkflowResponse createWorkflow(String userId, String workflowCode, String name, String description, Long workspaceId) {
+    public WorkflowResponse createWorkflow(String userId, String workflowCode, String workflowSpaceCode, String name, String description, Long workspaceId) {
         Long effectiveWorkspaceId = workspaceId != null ? workspaceId : ApplicationConstants.DEFAULT_WORKSPACE_ID;
         accessControlService.requireWorkflowAdminAction(userId, effectiveWorkspaceId, workflowCode, "workflow.create");
 
         Workflow workflow = new Workflow();
         workflow.setWorkflowCode(workflowCode);
+        workflow.setWorkflowSpaceCode(
+                workflowSpaceCode == null || workflowSpaceCode.isBlank()
+                        ? WorkflowSpaceService.DEFAULT_SPACE_CODE
+                        : workflowSpaceCode
+        );
         workflow.setName(name);
         workflow.setDescription(description);
         workflow.setWorkspaceId(effectiveWorkspaceId);
@@ -334,6 +340,7 @@ public class WorkflowService {
                 .orElseGet(() -> {
                     Workflow created = new Workflow();
                     created.setWorkflowCode(workflowCode);
+                    created.setWorkflowSpaceCode(resolveWorkflowSpaceCode(request));
                     created.setName(resolveWorkflowName(request, workflowCode));
                     created.setDescription(resolveWorkflowDescription(request));
                     created.setWorkspaceId(ApplicationConstants.DEFAULT_WORKSPACE_ID);
@@ -352,6 +359,11 @@ public class WorkflowService {
         if (request.getWorkflowDescription() != null
                 && !request.getWorkflowDescription().trim().equals(String.valueOf(workflow.getDescription() == null ? "" : workflow.getDescription()))) {
             workflow.setDescription(request.getWorkflowDescription().trim());
+            workflowMetadataChanged = true;
+        }
+        String resolvedWorkflowSpaceCode = resolveWorkflowSpaceCode(request);
+        if (!resolvedWorkflowSpaceCode.equals(workflow.getWorkflowSpaceCode())) {
+            workflow.setWorkflowSpaceCode(resolvedWorkflowSpaceCode);
             workflowMetadataChanged = true;
         }
         if (workflowMetadataChanged) {
@@ -680,6 +692,23 @@ public class WorkflowService {
     }
 
     public RoutingDecision routeMessage(String content, Execution activeExecution, String sessionId, String userId) {
+        return routeMessage(content, activeExecution, sessionId, userId, null);
+    }
+
+    private String resolveWorkflowSpaceCode(CreateWorkflowVersionRequest request) {
+        if (request != null && request.getWorkflowSpaceCode() != null && !request.getWorkflowSpaceCode().isBlank()) {
+            return request.getWorkflowSpaceCode().trim();
+        }
+        return WorkflowSpaceService.DEFAULT_SPACE_CODE;
+    }
+
+    public RoutingDecision routeMessage(
+            String content,
+            Execution activeExecution,
+            String sessionId,
+            String userId,
+            RobotRuntimeContext robotRuntimeContext
+    ) {
         log.info(
                 "workflow.route.start contentLength={} contentPreview={} activeExecutionId={} activeWorkflowCode={} sessionId={}",
                 content == null ? 0 : content.length(),
@@ -688,11 +717,19 @@ public class WorkflowService {
                 activeExecution == null ? null : activeExecution.getWorkflowCode(),
                 sessionId
         );
-        List<WorkflowVersion> versions = resolveCurrentWorkflowVersions();
+        List<WorkflowVersion> versions = resolveCurrentWorkflowVersions(robotRuntimeContext);
         if (versions.isEmpty()) {
             versions = filterVisibleWorkflowVersions(
                     workflowVersionRepository.findByStatusOrderByCreatedAtDesc(WorkflowVersionStatus.DRAFT)
             );
+            if (robotRuntimeContext != null
+                    && robotRuntimeContext.workflowSpaceCodes() != null
+                    && !robotRuntimeContext.workflowSpaceCodes().isEmpty()) {
+                Set<String> scopedWorkflowCodes = workflowCodesInSpaces(robotRuntimeContext.workflowSpaceCodes());
+                versions = versions.stream()
+                        .filter(version -> scopedWorkflowCodes.contains(version.getWorkflowCode()))
+                        .toList();
+            }
         }
         if (versions.isEmpty()) {
             throw new RuntimeException("No workflow versions available");
@@ -799,7 +836,8 @@ public class WorkflowService {
                 userId,
                 modelIntent,
                 ragCandidates,
-                versions
+                versions,
+                robotRuntimeContext
         );
         if (knowledgeDecision != null) {
             return knowledgeDecision;
@@ -964,7 +1002,8 @@ public class WorkflowService {
             String userId,
             ModelIntent modelIntent,
             List<RoutingDecision.IntentCandidate> ragCandidates,
-            List<WorkflowVersion> versions
+            List<WorkflowVersion> versions,
+            RobotRuntimeContext robotRuntimeContext
     ) {
         if (knowledgeBindingService == null
                 || knowledgeRouteDecisionService == null
@@ -981,7 +1020,9 @@ public class WorkflowService {
             );
             return buildLlmRoutingDecision(modelIntent, ragCandidates, versions, activeExecution, normalizedContent);
         }
-        List<String> boundKbCodes = boundKnowledgeBaseCodes(sessionId, activeExecution);
+        List<String> boundKbCodes = robotRuntimeContext == null
+                ? boundKnowledgeBaseCodes(sessionId, activeExecution)
+                : robotRuntimeContext.kbCodes();
         if (boundKbCodes.isEmpty()) {
             log.info("workflow.knowledge.route.skip reason=no_bound_knowledge sessionId={}", sessionId);
             return null;
@@ -1570,7 +1611,19 @@ public class WorkflowService {
     }
 
     private List<WorkflowVersion> resolveCurrentWorkflowVersions() {
+        return resolveCurrentWorkflowVersions(null);
+    }
+
+    private List<WorkflowVersion> resolveCurrentWorkflowVersions(RobotRuntimeContext robotRuntimeContext) {
         List<Workflow> workflows = workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED);
+        if (robotRuntimeContext != null
+                && robotRuntimeContext.workflowSpaceCodes() != null
+                && !robotRuntimeContext.workflowSpaceCodes().isEmpty()) {
+            Set<String> scopedSpaceCodes = new HashSet<>(robotRuntimeContext.workflowSpaceCodes());
+            workflows = workflows.stream()
+                    .filter(workflow -> scopedSpaceCodes.contains(workflow.getWorkflowSpaceCode()))
+                    .toList();
+        }
         List<WorkflowVersion> currentVersions = new ArrayList<>();
         for (Workflow workflow : workflows) {
             if (!isVisibleWorkflow(workflow)) {
@@ -1583,6 +1636,24 @@ public class WorkflowService {
                     .ifPresent(currentVersions::add);
         }
         return currentVersions;
+    }
+
+    private Set<String> workflowCodesInSpaces(List<String> workflowSpaceCodes) {
+        if (workflowSpaceCodes == null || workflowSpaceCodes.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> workflowCodes = new HashSet<>();
+        for (String workflowSpaceCode : workflowSpaceCodes) {
+            if (workflowSpaceCode == null || workflowSpaceCode.isBlank()) {
+                continue;
+            }
+            workflowRepository.findByWorkflowSpaceCodeAndStatusNotOrderByCreatedAtDesc(workflowSpaceCode, WorkflowStatus.ARCHIVED)
+                    .stream()
+                    .map(Workflow::getWorkflowCode)
+                    .filter(code -> code != null && !code.isBlank())
+                    .forEach(workflowCodes::add);
+        }
+        return workflowCodes;
     }
 
     private int scoreEntryRule(String entryRuleJson, String normalizedContent) {

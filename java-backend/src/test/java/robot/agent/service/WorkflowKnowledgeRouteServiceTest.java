@@ -25,6 +25,7 @@ import robot.agent.repository.WorkflowRepository;
 import robot.agent.repository.WorkflowVersionRepository;
 import robot.agent.service.knowledge.KnowledgeBindingService;
 import robot.agent.service.knowledge.KnowledgeRouteDecisionService;
+import robot.agent.service.robot.RobotRuntimeContext;
 
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -155,6 +157,79 @@ class WorkflowKnowledgeRouteServiceTest {
     }
 
     @Test
+    void routeMessageWithRobotContextSearchesOnlyRobotKnowledgeSpaces() throws Exception {
+        arrangeWorkflowAndLowIntent();
+        KnowledgeSearchResponse searchResponse = new KnowledgeSearchResponse();
+        searchResponse.setQuery("warranty period");
+        searchResponse.setAnswer("Warranty is one year.");
+        searchResponse.setBestScore(0.93d);
+        when(knowledgeService.searchKnowledge(eq("demo-user"), any(KnowledgeSearchRequest.class))).thenReturn(searchResponse);
+        RobotRuntimeContext robotContext = new RobotRuntimeContext(
+                "robot_after_sale",
+                1L,
+                7,
+                List.of("sales_space"),
+                List.of("kb_robot_only"),
+                "PARALLEL_AGGREGATE"
+        );
+
+        RoutingDecision decision = workflowService.routeMessage("warranty period", null, "session_1", "demo-user", robotContext);
+
+        assertThat(decision.decision()).isEqualTo("knowledge_answer");
+        assertThat(decision.confidence()).isEqualTo(0.93d);
+        assertThat(decision.clarificationQuestion()).isEqualTo("Warranty is one year.");
+        ArgumentCaptor<KnowledgeSearchRequest> requestCaptor = ArgumentCaptor.forClass(KnowledgeSearchRequest.class);
+        verify(knowledgeService).searchKnowledge(eq("demo-user"), requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getKbCodes()).containsExactly("kb_robot_only");
+    }
+
+    @Test
+    void routeMessageWithRobotContextScopesIntentToWorkflowSpaces() throws Exception {
+        WorkflowVersion salesVersion = publishedVersion("sales_ticket", "1.0.0");
+        Workflow salesWorkflow = publishedWorkflow("sales_ticket", "1.0.0");
+        salesWorkflow.setWorkflowSpaceCode("sales_space");
+        Workflow financeWorkflow = publishedWorkflow("finance_ticket", "1.0.0");
+        financeWorkflow.setWorkflowSpaceCode("finance_space");
+        when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED)).thenReturn(List.of(salesWorkflow, financeWorkflow));
+        when(workflowVersionRepository.findByWorkflowCodeAndVersion("sales_ticket", "1.0.0")).thenReturn(Optional.of(salesVersion));
+        when(workflowRepository.findByWorkflowCode("sales_ticket")).thenReturn(Optional.of(salesWorkflow));
+        when(modelConfigService.resolveRoutingModelCode(anyCollection())).thenReturn("route-model");
+        when(modelConfigService.buildRuntimeBundle(anyCollection(), eq("route-model")))
+                .thenReturn(new ModelConfigService.RuntimeModelBundle(
+                        List.of(Map.of("provider_code", "demo")),
+                        List.of(Map.of("model_code", "route-model", "provider_code", "demo"))
+                ));
+        when(pythonClient.classifyIntent(anyMap())).thenReturn(Mono.just(Map.of(
+                "matched", true,
+                "confidence", 0.9d,
+                "reason", "workflow intent",
+                "target_type", "workflow",
+                "target_code", "sales_ticket",
+                "workflow_code", "sales_ticket",
+                "intent_code", "sales_ticket",
+                "need_clarification", false,
+                "clarification_question", ""
+        )));
+        RobotRuntimeContext robotContext = new RobotRuntimeContext(
+                "robot_sales",
+                1L,
+                1,
+                List.of("sales_space"),
+                List.of(),
+                "PARALLEL_AGGREGATE"
+        );
+
+        RoutingDecision decision = workflowService.routeMessage("sales ticket", null, "session_1", "demo-user", robotContext);
+
+        assertThat(decision.decision()).isEqualTo("start");
+        assertThat(decision.workflowCode()).isEqualTo("sales_ticket");
+        verify(pythonClient).classifyIntent(argThat(payload -> {
+            Object candidates = payload.get("candidate_workflows");
+            return candidates instanceof List<?> list && list.size() == 1;
+        }));
+    }
+
+    @Test
     void routeMessageWithHighIntentDoesNotSearchBoundKnowledge() throws Exception {
         arrangeWorkflowAndHighIntent();
         lenient().when(knowledgeBindingService.getBindings(KnowledgeBindingScope.SESSION, "session_1"))
@@ -178,6 +253,7 @@ class WorkflowKnowledgeRouteServiceTest {
     private void arrangeWorkflowAndIntent(boolean matched, double confidence, String reason) throws Exception {
         WorkflowVersion version = publishedVersion("flight_booking", "1.0.0");
         Workflow workflow = publishedWorkflow("flight_booking", "1.0.0");
+        workflow.setWorkflowSpaceCode("sales_space");
         when(workflowRepository.findByStatusOrderByCreatedAtDesc(WorkflowStatus.PUBLISHED)).thenReturn(List.of(workflow));
         when(workflowVersionRepository.findByWorkflowCodeAndVersion("flight_booking", "1.0.0")).thenReturn(Optional.of(version));
         when(workflowRepository.findByWorkflowCode("flight_booking")).thenReturn(Optional.of(workflow));

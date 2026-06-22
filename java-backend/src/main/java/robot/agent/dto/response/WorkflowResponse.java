@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 public class WorkflowResponse {
     private Long id;
     private String workflowCode;
+    private String workflowSpaceCode;
     private String name;
     private String description;
     private WorkflowStatus status;
@@ -19,6 +20,7 @@ public class WorkflowResponse {
         WorkflowResponse response = new WorkflowResponse();
         response.setId(workflow.getId());
         response.setWorkflowCode(workflow.getWorkflowCode());
+        response.setWorkflowSpaceCode(workflow.getWorkflowSpaceCode());
         response.setName(workflow.getName());
         response.setDescription(workflow.getDescription());
         response.setStatus(workflow.getStatus());
@@ -35,6 +37,9 @@ public class WorkflowResponse {
 
     public String getWorkflowCode() { return workflowCode; }
     public void setWorkflowCode(String workflowCode) { this.workflowCode = workflowCode; }
+
+    public String getWorkflowSpaceCode() { return workflowSpaceCode; }
+    public void setWorkflowSpaceCode(String workflowSpaceCode) { this.workflowSpaceCode = workflowSpaceCode; }
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }

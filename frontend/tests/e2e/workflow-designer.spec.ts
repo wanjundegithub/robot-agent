@@ -304,6 +304,111 @@ test.describe('workflow designer v2 contract', () => {
     await expect(page.getByTestId('workflow-link-chat')).toHaveCount(0)
   })
 
+  test('creates workflow spaces from a modal with optional description', async ({ page }) => {
+    let nextSessionIndex = 1
+    let createdSpacePayload: Record<string, unknown> | null = null
+
+    await page.route('**/api/**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const { pathname } = url
+
+      if (pathname === '/api/workflows/published' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/workflow-spaces' && request.method() === 'GET') {
+        await route.fulfill({
+          json: [
+            {
+              id: 1,
+              workspace_id: 1,
+              space_code: 'default_workflow_space',
+              name: '默认工作流空间',
+              description: '默认空间',
+              status: 'PUBLISHED',
+            },
+          ],
+        })
+        return
+      }
+      if (pathname === '/api/workflow-spaces' && request.method() === 'POST') {
+        createdSpacePayload = request.postDataJSON() as Record<string, unknown>
+        await route.fulfill({
+          json: {
+            id: 2,
+            workspace_id: 1,
+            space_code: createdSpacePayload.space_code,
+            name: createdSpacePayload.name,
+            description: createdSpacePayload.description,
+            status: 'PUBLISHED',
+          },
+        })
+        return
+      }
+      if (pathname === '/api/robots' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'POST') {
+        const createdId = `session-e2e-${nextSessionIndex}`
+        nextSessionIndex += 1
+        await route.fulfill({
+          json: {
+            id: createdId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/sessions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && pathname.endsWith('/messages') && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+      if (pathname.startsWith('/api/sessions/') && request.method() === 'GET') {
+        const sessionId = pathname.split('/').pop() || 'session-e2e-1'
+        await route.fulfill({
+          json: {
+            id: sessionId,
+            workspaceId: 1,
+            userId: 'demo-user',
+            status: 'active',
+            currentExecutionId: null,
+          },
+        })
+        return
+      }
+      if (pathname === '/api/executions' && request.method() === 'GET') {
+        await route.fulfill({ json: [] })
+        return
+      }
+
+      await route.fulfill({ status: 404, json: { message: `Unhandled ${request.method()} ${pathname}` } })
+    })
+
+    await page.goto('/#workflow')
+
+    await expect(page.getByTestId('workflow-list-page')).toBeVisible()
+    await expect(page.getByTestId('workflow-space-name-input')).toHaveCount(0)
+    await page.getByRole('button', { name: '创建空间' }).click()
+    await expect(page.getByRole('dialog', { name: '创建工作流空间' })).toBeVisible()
+    await page.getByTestId('workflow-space-dialog-name').fill('售后工作流空间')
+    await page.getByTestId('workflow-space-dialog-description').fill('售后流程专用空间')
+    await page.getByRole('button', { name: '保存' }).click()
+
+    expect(createdSpacePayload).toMatchObject({
+      name: '售后工作流空间',
+      description: '售后流程专用空间',
+    })
+  })
+
   test('edits current published version and deletes from published list', async ({ page }) => {
     let nextSessionIndex = 1
     let deletedPath = ''

@@ -141,6 +141,7 @@ export interface OrchestratorHandle {
 
 interface OrchestratorProps {
   currentUserId: string
+  workflowSpaceCode?: string
   editorSelection?: WorkflowEditorSelection | null
   onWorkflowDraftChange?: (draft: WorkflowDraftPayload) => void
   onWorkflowSidebarStateChange?: (state: WorkflowSidebarState) => void
@@ -358,6 +359,7 @@ const subflowNodeGroups: Array<{
 const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function Orchestrator(
   {
     currentUserId,
+    workflowSpaceCode = 'default_workflow_space',
     editorSelection,
     onWorkflowDraftChange,
     onWorkflowSidebarStateChange,
@@ -813,6 +815,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     const definition = {
       ...currentDefinition,
       workflow_code: basics.workflowCode,
+      workflow_space_code: workflowSpaceCode,
       workflow_name: basics.workflowName,
       workflow_description: resolvedWorkflowDescription,
       workflow_version: version,
@@ -827,6 +830,7 @@ const Orchestrator = forwardRef<OrchestratorHandle, OrchestratorProps>(function 
     })
 
     const response = await saveWorkflowDraft(basics.workflowCode, {
+      workflowSpaceCode,
       workflowName: basics.workflowName,
       workflowDescription: resolvedWorkflowDescription,
       version,

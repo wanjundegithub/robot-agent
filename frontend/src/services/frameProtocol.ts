@@ -1,4 +1,4 @@
-import type { UserFrameEnvelope, WorkflowSummary } from '../types'
+import type { UserFrameEnvelope } from '../types'
 
 export const CONNECT_FRAME = 8
 export const INTERACTIVE_FRAME = 9
@@ -28,12 +28,12 @@ export const createInitFrame = ({
   requestId,
   userId,
   sessionId,
-  workflow,
+  robotCode,
 }: {
   requestId: string
   userId: string
   sessionId: string
-  workflow: WorkflowSummary | null
+  robotCode?: string | null
 }): UserFrameEnvelope => ({
   frame: CONNECT_FRAME,
   request_id: requestId,
@@ -41,8 +41,7 @@ export const createInitFrame = ({
   session_id: sessionId,
   event_type: 'connection.init',
   payload: {
-    workflow_code: workflow?.workflowCode ?? null,
-    workflow_version: workflow?.currentVersion ?? null,
+    robot_code: robotCode ?? null,
     client_version: 'web',
   },
 })

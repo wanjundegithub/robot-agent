@@ -31,6 +31,7 @@ public class ConnectHandler implements FrameHandler {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("success", true);
         payload.put("connection_id", context.connectionId());
+        payload.put("robot_code", context.robotCode());
         payload.put("workflow_code", context.workflowCode());
         payload.put("workflow_version", context.workflowVersion());
         nettyContext.writeAndFlush(UserFrame.response(frame, "connection.initialized", payload));

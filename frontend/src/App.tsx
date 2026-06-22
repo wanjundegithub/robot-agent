@@ -8,17 +8,21 @@ import MessageList from './components/MessageList'
 import ModelConfigPanel from './components/ModelConfigPanel'
 import Orchestrator from './components/Orchestrator'
 import ReplayPanel from './components/ReplayPanel'
+import RobotConfigPanel from './components/RobotConfigPanel'
 import SessionReplayPanel from './components/SessionReplayPanel'
 import {
   createSession,
   deleteSession,
   deleteWorkflow,
   getPublishedWorkflows,
+  getRobots,
   getSession,
   getSessionExecutions,
   getSessionMessages,
   getSessionsByUserId,
+  getWorkflowSpaces,
   getWorkflowVersions,
+  saveWorkflowSpace,
 } from './services/api'
 import { downloadCallLogs, logGatewayEvent } from './services/callLogger'
 import { createInitFrame, createInteractiveFrame, isUserFrameEnvelope, toInteractiveEventType } from './services/frameProtocol'
@@ -33,28 +37,27 @@ import type {
   IntentCandidate,
   Message,
   MessageDeltaEnvelope,
+  RobotConfig,
   SessionSummary,
   SendMessageResponse,
   SocketState,
   UserFrameEnvelope,
   WebSocketEnvelope,
+  WorkflowSpace,
   WorkflowEditorSelection,
   WorkflowSummary,
 } from './types'
 import type { WorkflowVersionMutation } from './components/Orchestrator'
 
-type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'api-center' | 'knowledge'
+type PageKey = 'chat' | 'workflow' | 'execution' | 'models' | 'api-center' | 'knowledge' | 'robots'
 type WorkflowPageMode = 'list' | 'editor'
 
 const WORKFLOW_LIST_PAGE_SIZE = 10
-const AUTO_ROUTE_WORKFLOW_MODE = '__AUTO_ROUTE__'
 
-const buildSocketBindingKey = (activeSessionId: string, workflow: WorkflowSummary | null) => {
+const buildSocketBindingKey = (activeSessionId: string, robotCode?: string) => {
   if (!activeSessionId) return ''
-  if (!workflow?.workflowCode || !workflow.currentVersion) {
-    return `${activeSessionId}|base`
-  }
-  return `${activeSessionId}|${workflow.workflowCode}|${workflow.currentVersion}`
+  const robotPart = robotCode || 'no-robot'
+  return `${activeSessionId}|${robotPart}|base`
 }
 
 const formatSendFailureMessage = (error: unknown) => {
@@ -146,14 +149,20 @@ const App: React.FC = () => {
     executionId: string
     form: FormDefinition
   } | null>(null)
+  const [robotOptions, setRobotOptions] = useState<RobotConfig[]>([])
+  const [chatRobotCode, setChatRobotCode] = useState('')
   const [publishedWorkflowOptions, setPublishedWorkflowOptions] = useState<WorkflowSummary[]>([])
-  const [chatWorkflowMode, setChatWorkflowMode] = useState('')
   const [workflowVersionMutation, setWorkflowVersionMutation] = useState<WorkflowVersionMutation | null>(null)
   const [workflowEditorSelection, setWorkflowEditorSelection] = useState<WorkflowEditorSelection | null>(null)
   const [workflowEditorInstance, setWorkflowEditorInstance] = useState(0)
   const [workflowPageMode, setWorkflowPageMode] = useState<WorkflowPageMode>('list')
   const [workflowListPage, setWorkflowListPage] = useState(1)
   const [workflowListStatus, setWorkflowListStatus] = useState('')
+  const [workflowSpaces, setWorkflowSpaces] = useState<WorkflowSpace[]>([])
+  const [selectedWorkflowSpaceCode, setSelectedWorkflowSpaceCode] = useState('default_workflow_space')
+  const [newWorkflowSpaceName, setNewWorkflowSpaceName] = useState('')
+  const [newWorkflowSpaceDescription, setNewWorkflowSpaceDescription] = useState('')
+  const [isWorkflowSpaceDialogOpen, setIsWorkflowSpaceDialogOpen] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const activeSocketSessionIdRef = useRef<string | null>(null)
   const activeSocketBindingKeyRef = useRef<string | null>(null)
@@ -170,47 +179,52 @@ const App: React.FC = () => {
       const items = await getPublishedWorkflows()
       const filteredItems = items.filter(isDisplayableWorkflow)
       setPublishedWorkflowOptions(filteredItems)
-      setChatWorkflowMode((current) =>
-        current === '' || current === AUTO_ROUTE_WORKFLOW_MODE
-          ? current
-          : filteredItems.some((item) => item.workflowCode === current)
-            ? current
-            : ''
-      )
     } catch (error) {
       console.error('Failed to load published workflow options:', error)
     }
   }, [])
 
-  const selectedChatWorkflow = useMemo(() => {
-    if (chatWorkflowMode === '' || chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE) {
-      return null
+  const loadRobotOptions = useCallback(async () => {
+    try {
+      const items = await getRobots()
+      const publishedItems = items.filter((item) => item.status === 'PUBLISHED')
+      setRobotOptions(publishedItems)
+      setChatRobotCode((current) =>
+        current && publishedItems.some((item) => item.robot_code === current)
+          ? current
+          : publishedItems[0]?.robot_code || ''
+      )
+    } catch (error) {
+      console.error('Failed to load robot options:', error)
     }
-    return publishedWorkflowOptions.find((item) => item.workflowCode === chatWorkflowMode) ?? null
-  }, [chatWorkflowMode, publishedWorkflowOptions])
+  }, [])
 
-  const selectedChatWorkflowVersion = selectedChatWorkflow?.currentVersion || ''
-  const chatWorkflowModeLabel =
-    chatWorkflowMode === ''
-      ? '请选择工作流模式'
-      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
-        ? '无固定工作流'
-        : selectedChatWorkflow?.workflowCode || chatWorkflowMode
-  const chatWorkflowModeDetail =
-    chatWorkflowMode === ''
-      ? '先选择后再发送'
-      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
-        ? '由路由自动决定'
-        : selectedChatWorkflowVersion || '未知版本'
-  const chatWorkflowModeFooter =
-    chatWorkflowMode === ''
-      ? '请选择工作流模式'
-      : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
-        ? '无固定工作流'
-        : `${selectedChatWorkflow?.workflowCode || chatWorkflowMode}@${selectedChatWorkflowVersion || 'latest'}`
+  const handleRobotsChanged = useCallback((items: RobotConfig[]) => {
+    setRobotOptions(items.filter((item) => item.status === 'PUBLISHED'))
+  }, [])
+
+  const loadWorkflowSpaces = useCallback(async () => {
+    try {
+      const items = await getWorkflowSpaces()
+      setWorkflowSpaces(items)
+      setSelectedWorkflowSpaceCode((current) =>
+        current && items.some((item) => item.space_code === current)
+          ? current
+          : items[0]?.space_code || 'default_workflow_space'
+      )
+    } catch (error) {
+      console.error('Failed to load workflow spaces:', error)
+    }
+  }, [])
+
+  const selectedChatRobot = useMemo(
+    () => robotOptions.find((item) => item.robot_code === chatRobotCode) ?? null,
+    [chatRobotCode, robotOptions]
+  )
+
   const chatWorkflowConnectionKey = useMemo(() => {
-    return buildSocketBindingKey(socketSessionId, selectedChatWorkflow)
-  }, [selectedChatWorkflow, selectedChatWorkflowVersion, socketSessionId])
+    return buildSocketBindingKey(socketSessionId, selectedChatRobot?.robot_code)
+  }, [selectedChatRobot?.robot_code, socketSessionId])
 
   const resetSessionView = useCallback(() => {
     setMessages([])
@@ -335,7 +349,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadPublishedWorkflowOptions()
-  }, [loadPublishedWorkflowOptions])
+    void loadRobotOptions()
+    void loadWorkflowSpaces()
+  }, [loadPublishedWorkflowOptions, loadRobotOptions, loadWorkflowSpaces])
 
   useEffect(() => {
     let cancelled = false
@@ -471,7 +487,8 @@ const App: React.FC = () => {
         value === 'models' ||
         value === 'chat' ||
         value === 'api-center' ||
-        value === 'knowledge'
+        value === 'knowledge' ||
+        value === 'robots'
       ) {
         setActivePage(value)
         return
@@ -514,7 +531,7 @@ const App: React.FC = () => {
       }
     })()
 
-    const wsUrl = buildWsUrl(socketSessionId, selectedChatWorkflow)
+    const wsUrl = buildWsUrl(socketSessionId)
     let isCancelled = false
 
     const connect = (attempt = 0) => {
@@ -538,7 +555,7 @@ const App: React.FC = () => {
           requestId: createId('init'),
           userId: currentUserId,
           sessionId: socketSessionId,
-          workflow: selectedChatWorkflow,
+          robotCode: selectedChatRobot?.robot_code ?? null,
         })
         socket.send(JSON.stringify(initFrame))
         gatewayLog('ws.init_frame_sent', {
@@ -636,26 +653,16 @@ const App: React.FC = () => {
     }
   }, [activePage, chatWorkflowConnectionKey, currentUserId])
 
-  const buildWsUrl = (activeSessionId: string, workflow: WorkflowSummary | null) => {
+  const buildWsUrl = (activeSessionId: string) => {
     const base = import.meta.env.VITE_NETTY_WS_BASE_URL || import.meta.env.VITE_WS_BASE_URL
     const origin =
       base ||
       `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
     const url = new URL(`${origin}/ws/robot`)
     url.searchParams.set('session_id', activeSessionId)
-    if (workflow?.workflowCode && workflow.currentVersion) {
-      url.searchParams.set('workflow_code', workflow.workflowCode)
-      url.searchParams.set('workflow_version', workflow.currentVersion)
-    }
     gatewayLog('workflow.ws_url_built', {
       session_id: activeSessionId,
-      workflow_mode:
-        chatWorkflowMode === ''
-          ? 'unselected'
-          : chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE
-            ? 'auto_route'
-            : 'fixed',
-      has_workflow: Boolean(workflow?.workflowCode && workflow.currentVersion),
+      has_workflow: false,
     })
     return url.toString()
   }
@@ -1146,11 +1153,10 @@ const App: React.FC = () => {
   const sendInteractiveFrame = (
     requestedEventType: string,
     payload: Record<string, unknown>,
-    targetSessionId = sessionId,
-    targetWorkflow = selectedChatWorkflow
+    targetSessionId = sessionId
   ): Promise<unknown> => {
     const requestId = createId('req')
-    const targetBindingKey = buildSocketBindingKey(targetSessionId, targetWorkflow)
+    const targetBindingKey = buildSocketBindingKey(targetSessionId, selectedChatRobot?.robot_code)
     const eventType = toInteractiveEventType(requestedEventType)
 
     return new Promise((resolve, reject) => {
@@ -1254,23 +1260,14 @@ const App: React.FC = () => {
     fixedMessageId?: string
   ) => {
     if (!content.trim()) return
-    if (chatWorkflowMode === '') {
-      appendSystemMessage('请先选择工作流模式：无固定工作流，或指定固定工作流。')
-      gatewayLog('workflow.send_blocked', {
-        reason: 'mode_unselected',
+    if (!selectedChatRobot) {
+      appendSystemMessage('请先选择已发布机器人配置')
+      gatewayLog('robot.send_blocked', {
+        reason: 'robot_unselected',
         session_id: sessionId || null,
       })
       return
     }
-    if (chatWorkflowMode !== AUTO_ROUTE_WORKFLOW_MODE && !selectedChatWorkflow) {
-      appendSystemMessage('当前选择的固定工作流不可用，请重新选择工作流模式。')
-      gatewayLog('workflow.send_blocked', {
-        reason: 'fixed_workflow_unavailable',
-        session_id: sessionId || null,
-      })
-      return
-    }
-
     const messageId = fixedMessageId || createId('msg')
     const shouldAppendUserMessage =
       !options?.confirmSwitch &&
@@ -1327,15 +1324,13 @@ const App: React.FC = () => {
         cacheSessionMessages(activeSessionId, nextHistory)
       }
 
-      const shouldSendFixedWorkflow = Boolean(
-        selectedChatWorkflow?.workflowCode && selectedChatWorkflow.currentVersion
-      )
       const chatSendPayload: Record<string, unknown> = {
         session_id: activeSessionId,
         message_id: messageId,
         content,
         attachments: [],
         user_id: currentUserId,
+        robot_code: selectedChatRobot.robot_code,
         confirm_switch: options?.confirmSwitch ?? false,
         requested_tool_code: options?.requestedToolCode ?? null,
         confirmation_id: options?.confirmationId ?? null,
@@ -1343,17 +1338,10 @@ const App: React.FC = () => {
         intent_candidate_action: options?.intentCandidateAction ?? null,
         intent_candidate_target_code: options?.intentCandidateTargetCode ?? null,
       }
-      if (shouldSendFixedWorkflow) {
-        chatSendPayload.workflow_id = selectedChatWorkflow?.id ?? null
-        chatSendPayload.workflow_code = selectedChatWorkflow?.workflowCode
-        chatSendPayload.workflow_version = selectedChatWorkflow?.currentVersion
-      }
-
       gatewayLog('workflow.chat_send_payload', {
         session_id: activeSessionId,
-        workflow_mode:
-          chatWorkflowMode === AUTO_ROUTE_WORKFLOW_MODE ? 'auto_route' : 'fixed',
-        has_workflow: shouldSendFixedWorkflow,
+        has_workflow: false,
+        robot_code: selectedChatRobot.robot_code,
       })
       const response = (await sendInteractiveFrame('message.text', chatSendPayload, activeSessionId)) as unknown as SendMessageResponse
       gatewayLog('send_message.response', {
@@ -1627,30 +1615,6 @@ const App: React.FC = () => {
     setActivePage(page)
   }
 
-  const handleChatWorkflowSelect = (workflowCode: string) => {
-    const previousMode = chatWorkflowMode
-    setChatWorkflowMode(workflowCode)
-    console.info('[chat] workflow mode changed', {
-      workflow_mode:
-        workflowCode === ''
-          ? 'unselected'
-          : workflowCode === AUTO_ROUTE_WORKFLOW_MODE
-            ? 'auto_route'
-            : 'fixed',
-    })
-    gatewayLog('workflow.mode_changed', {
-      workflow_mode:
-        workflowCode === ''
-          ? 'unselected'
-          : workflowCode === AUTO_ROUTE_WORKFLOW_MODE
-            ? 'auto_route'
-            : 'fixed',
-    })
-    if (workflowCode === AUTO_ROUTE_WORKFLOW_MODE && previousMode && previousMode !== AUTO_ROUTE_WORKFLOW_MODE) {
-      void handleCreateNewSession()
-    }
-  }
-
   const openNewWorkflowEditor = () => {
     setWorkflowEditorSelection(null)
     setWorkflowEditorInstance((current) => current + 1)
@@ -1680,6 +1644,7 @@ const App: React.FC = () => {
       }
       setWorkflowEditorSelection({
         workflowCode: workflow.workflowCode,
+        workflowSpaceCode: workflow.workflowSpaceCode || selectedWorkflowSpaceCode,
         workflowName: workflow.name,
         workflowDescription: workflow.description,
         publishedVersion: workflow.currentVersion,
@@ -1693,6 +1658,36 @@ const App: React.FC = () => {
     }
   }
 
+  const handleCreateWorkflowSpace = async () => {
+    const name = newWorkflowSpaceName.trim()
+    if (!name) {
+      setWorkflowListStatus('请填写工作流空间名称。')
+      return
+    }
+    const spaceCode = `workflow_space_${Date.now()}`
+    setWorkflowListStatus('正在创建工作流空间...')
+    try {
+      const created = await saveWorkflowSpace(
+        {
+          workspace_id: 1,
+          space_code: spaceCode,
+          name,
+          description: newWorkflowSpaceDescription.trim() || undefined,
+          created_by: currentUserId,
+        },
+        currentUserId
+      )
+      await loadWorkflowSpaces()
+      setSelectedWorkflowSpaceCode(created.space_code)
+      setNewWorkflowSpaceName('')
+      setNewWorkflowSpaceDescription('')
+      setIsWorkflowSpaceDialogOpen(false)
+      setWorkflowListStatus('工作流空间已创建。')
+    } catch (error) {
+      setWorkflowListStatus(error instanceof Error ? `创建失败：${error.message}` : '创建失败。')
+    }
+  }
+
   const handleDeletePublishedWorkflow = async (workflow: WorkflowSummary) => {
     const confirmed = window.confirm(`确定删除工作流 ${workflow.name || workflow.workflowCode} 吗？删除后将不再出现在已发布列表。`)
     if (!confirmed) return
@@ -1701,7 +1696,6 @@ const App: React.FC = () => {
     try {
       await deleteWorkflow(workflow.workflowCode, currentUserId)
       setPublishedWorkflowOptions((current) => current.filter((item) => item.workflowCode !== workflow.workflowCode))
-      setChatWorkflowMode((current) => (current === workflow.workflowCode ? '' : current))
       setWorkflowVersionMutation({
         workflowCode: workflow.workflowCode,
         version: workflow.currentVersion || '',
@@ -1877,10 +1871,13 @@ const App: React.FC = () => {
 
   const renderPageContent = () => {
     if (activePage === 'workflow') {
-      const workflowTotalPages = Math.max(1, Math.ceil(publishedWorkflowOptions.length / WORKFLOW_LIST_PAGE_SIZE))
+      const filteredWorkflowOptions = publishedWorkflowOptions.filter(
+        (workflow) => (workflow.workflowSpaceCode || 'default_workflow_space') === selectedWorkflowSpaceCode
+      )
+      const workflowTotalPages = Math.max(1, Math.ceil(filteredWorkflowOptions.length / WORKFLOW_LIST_PAGE_SIZE))
       const normalizedWorkflowListPage = Math.min(workflowListPage, workflowTotalPages)
       const workflowListStart = (normalizedWorkflowListPage - 1) * WORKFLOW_LIST_PAGE_SIZE
-      const visibleWorkflows = publishedWorkflowOptions.slice(
+      const visibleWorkflows = filteredWorkflowOptions.slice(
         workflowListStart,
         workflowListStart + WORKFLOW_LIST_PAGE_SIZE
       )
@@ -1892,7 +1889,7 @@ const App: React.FC = () => {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">工作流列表</div>
-                  <div className="text-xs text-slate-500">仅展示已发布工作流。点击新增或编辑后进入工作流设计页面。</div>
+                  <div className="text-xs text-slate-500">当前空间下可创建多个工作流。点击新增或编辑后进入工作流设计页面。</div>
                 </div>
                 <button
                   className="prompt-primary"
@@ -1901,6 +1898,36 @@ const App: React.FC = () => {
                   data-testid="workflow-new-version"
                 >
                   新增工作流版本
+                </button>
+              </div>
+
+              <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <select
+                  value={selectedWorkflowSpaceCode}
+                  onChange={(event) => {
+                    setSelectedWorkflowSpaceCode(event.target.value)
+                    setWorkflowListPage(1)
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  data-testid="workflow-space-select"
+                >
+                  {workflowSpaces.map((space) => (
+                    <option key={space.space_code} value={space.space_code}>
+                      {space.name} ({space.space_code})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="prompt-secondary"
+                  type="button"
+                  onClick={() => {
+                    setNewWorkflowSpaceName('')
+                    setNewWorkflowSpaceDescription('')
+                    setIsWorkflowSpaceDialogOpen(true)
+                    setWorkflowListStatus('')
+                  }}
+                >
+                  创建空间
                 </button>
               </div>
 
@@ -1960,7 +1987,7 @@ const App: React.FC = () => {
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600">
                 <div data-testid="workflow-list-page-summary">
-                  第 {normalizedWorkflowListPage} / {workflowTotalPages} 页 · 共 {publishedWorkflowOptions.length} 个
+                  第 {normalizedWorkflowListPage} / {workflowTotalPages} 页 · 共 {filteredWorkflowOptions.length} 个
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -2004,6 +2031,7 @@ const App: React.FC = () => {
             <Orchestrator
               key={workflowEditorInstance}
               currentUserId={currentUserId}
+              workflowSpaceCode={workflowEditorSelection?.workflowSpaceCode || selectedWorkflowSpaceCode}
               editorSelection={workflowEditorSelection}
               onWorkflowVersionMutation={setWorkflowVersionMutation}
             />
@@ -2055,6 +2083,17 @@ const App: React.FC = () => {
       )
     }
 
+    if (activePage === 'robots') {
+      return (
+        <section className="page-robots">
+          <RobotConfigPanel
+            currentUserId={currentUserId}
+            onRobotsChanged={handleRobotsChanged}
+          />
+        </section>
+      )
+    }
+
     return (
       <section className="page-grid page-grid-chat">
         <div className="page-stack">
@@ -2084,39 +2123,34 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="mb-4 rounded-2xl border border-sky-100 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))] px-4 py-4">
-              <div className="text-sm font-semibold text-slate-800">选择已发布工作流</div>
-              <div className="mt-1 text-sm text-slate-600">
-                请先选择工作流模式：无固定工作流，或指定固定工作流。
-              </div>
+            <div className="mb-4 rounded-2xl border border-emerald-100 bg-[linear-gradient(135deg,rgba(236,253,245,0.95),rgba(255,255,255,0.98))] px-4 py-4">
+              <div className="text-sm font-semibold text-slate-800">选择机器人配置</div>
+              <div className="mt-1 text-sm text-slate-600">聊天必须绑定已发布机器人，知识检索仅使用机器人绑定的知识空间。</div>
               <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
                 <select
-                  value={chatWorkflowMode}
-                  onChange={(event) => handleChatWorkflowSelect(event.target.value)}
+                  value={chatRobotCode}
+                  onChange={(event) => setChatRobotCode(event.target.value)}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                  data-testid="chat-workflow-select"
+                  data-testid="chat-robot-select"
                 >
-                  <option value="">请选择工作流模式</option>
-                  <option value={AUTO_ROUTE_WORKFLOW_MODE}>无固定工作流</option>
-                  {publishedWorkflowOptions.map((workflow) => (
-                    <option key={workflow.workflowCode} value={workflow.workflowCode}>
-                      {workflow.name} ({workflow.workflowCode} / {workflow.currentVersion || '未知版本'})
+                  <option value="">请选择机器人配置</option>
+                  {robotOptions.map((robot) => (
+                    <option key={robot.robot_code} value={robot.robot_code}>
+                      {robot.name} ({robot.robot_code})
                     </option>
                   ))}
                 </select>
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500" data-testid="chat-workflow-target">
-                  当前目标：
-                  {' '}
-                  {chatWorkflowModeLabel} / {chatWorkflowModeDetail}
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500" data-testid="chat-robot-target">
+                  当前机器人：{selectedChatRobot?.robot_code || '未选择'}
                 </div>
               </div>
             </div>
             <MessageList messages={messages} isLoading={isLoading} />
             <div className="panel-footer">
               <div className="mb-2 text-xs text-slate-400">
-                用户：{displayUserLabel(currentUserId)} / 当前模式：{chatWorkflowModeFooter} / 已启用流式输出
+                用户：{displayUserLabel(currentUserId)} / 机器人：{selectedChatRobot?.robot_code || '未选择'} / 已启用流式输出
               </div>
-              <fieldset className="min-w-0 border-0 p-0" disabled={isLoading || chatWorkflowMode === ''}>
+              <fieldset className="min-w-0 border-0 p-0" disabled={isLoading || !selectedChatRobot}>
                 <ChatInput onSendMessage={(content) => void handleSendMessage(content)} isLoading={isLoading} />
               </fieldset>
             </div>
@@ -2165,6 +2199,9 @@ const App: React.FC = () => {
             </button>
             <button className={`nav-tab ${activePage === 'knowledge' ? 'active' : ''}`} onClick={() => navigateToPage('knowledge')}>
               知识库
+            </button>
+            <button className={`nav-tab ${activePage === 'robots' ? 'active' : ''}`} onClick={() => navigateToPage('robots')}>
+              机器人
             </button>
           </nav>
           <label className="flex items-center gap-2">
@@ -2217,6 +2254,64 @@ const App: React.FC = () => {
       <main className="page-shell">
         {renderPageContent()}
       </main>
+
+      {isWorkflowSpaceDialogOpen && (
+        <div className="form-overlay">
+          <div
+            className="knowledge-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workflow-space-dialog-title"
+          >
+            <div className="knowledge-modal-header">
+              <div id="workflow-space-dialog-title" className="panel-title">创建工作流空间</div>
+              <button
+                type="button"
+                className="knowledge-modal-close"
+                onClick={() => setIsWorkflowSpaceDialogOpen(false)}
+              >
+                关闭
+              </button>
+            </div>
+            <div className="knowledge-modal-body">
+              <div className="knowledge-form-grid">
+                <div>
+                  <label htmlFor="workflow-space-dialog-name" className="mb-2 block text-xs font-semibold text-slate-500">
+                    空间名称
+                  </label>
+                  <input
+                    id="workflow-space-dialog-name"
+                    className="form-input"
+                    value={newWorkflowSpaceName}
+                    onChange={(event) => setNewWorkflowSpaceName(event.target.value)}
+                    data-testid="workflow-space-dialog-name"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label htmlFor="workflow-space-dialog-description" className="mb-2 block text-xs font-semibold text-slate-500">
+                    空间描述（选填）
+                  </label>
+                  <textarea
+                    id="workflow-space-dialog-description"
+                    className="form-textarea"
+                    value={newWorkflowSpaceDescription}
+                    onChange={(event) => setNewWorkflowSpaceDescription(event.target.value)}
+                    data-testid="workflow-space-dialog-description"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="knowledge-modal-actions">
+              <button className="prompt-secondary" type="button" onClick={() => setIsWorkflowSpaceDialogOpen(false)}>
+                取消
+              </button>
+              <button className="prompt-primary" type="button" onClick={() => void handleCreateWorkflowSpace()}>
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingForm && (
         <FormDialog

@@ -19,6 +19,7 @@ public class UserChannelContext {
     private volatile String userId;
     private volatile String sessionId;
     private volatile String executionId;
+    private volatile String robotCode;
     private volatile String workflowCode;
     private volatile String workflowVersion;
 
@@ -40,8 +41,12 @@ public class UserChannelContext {
         if (hasText(frame.getExecutionId())) {
             this.executionId = frame.getExecutionId();
         }
+        Object robotCodeValue = frame.getPayload().get("robot_code");
         Object workflowCodeValue = frame.getPayload().get("workflow_code");
         Object workflowVersionValue = frame.getPayload().get("workflow_version");
+        if (robotCodeValue != null && hasText(String.valueOf(robotCodeValue))) {
+            this.robotCode = String.valueOf(robotCodeValue);
+        }
         if (workflowCodeValue != null && hasText(String.valueOf(workflowCodeValue))) {
             this.workflowCode = String.valueOf(workflowCodeValue);
         }
@@ -93,6 +98,10 @@ public class UserChannelContext {
 
     public String executionId() {
         return executionId;
+    }
+
+    public String robotCode() {
+        return robotCode;
     }
 
     public String workflowCode() {
