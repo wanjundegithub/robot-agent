@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.argThat;
@@ -101,7 +102,7 @@ class ExecutionServiceFallbackTest {
     }
 
     @Test
-    void startExecutionRequiresRobotCodeForUnforcedChat() {
+    void startExecutionRejectsMissingRobotCodeForUnforcedChat() {
         Session session = new Session();
         session.setId("session-1");
         session.setWorkspaceId(1L);
@@ -113,11 +114,34 @@ class ExecutionServiceFallbackTest {
 
         when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
 
-        SendMessageResponse response = executionService.startExecution("session-1", request);
+        assertThatThrownBy(() -> executionService.startExecution("session-1", request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("robot_code is required");
 
-        assertThat(response.getSessionId()).isEqualTo("session-1");
-        assertThat(response.getStatus()).isEqualTo("robot_required");
-        assertThat(response.getRouteDecision()).isEqualTo("robot_required");
+        verify(workflowService, never()).routeMessage(any(), any(), any(), any());
+        verify(workflowService, never()).routeMessage(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void startExecutionPropagatesRobotRuntimeContextFailure() {
+        Session session = new Session();
+        session.setId("session-1");
+        session.setWorkspaceId(1L);
+        session.setUserId("session-user");
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setUserId("request-user");
+        request.setRobotCode("missing_robot");
+        request.setContent("hello");
+
+        when(sessionService.getOrCreateSession("session-1", "request-user")).thenReturn(session);
+        when(robotConfigService.resolveRuntimeContext("missing_robot"))
+                .thenThrow(new IllegalArgumentException("Robot not found: missing_robot"));
+
+        assertThatThrownBy(() -> executionService.startExecution("session-1", request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Robot not found: missing_robot");
+
         verify(workflowService, never()).routeMessage(any(), any(), any(), any());
         verify(workflowService, never()).routeMessage(any(), any(), any(), any(), any());
     }

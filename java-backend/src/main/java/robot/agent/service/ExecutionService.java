@@ -265,18 +265,12 @@ public class ExecutionService {
         RobotRuntimeContext robotRuntimeContext = null;
         if (forcedRoutingDecision == null && !explicitWorkflowExecution) {
             if (request.getRobotCode() == null || request.getRobotCode().isBlank()) {
-                return buildRobotConfigResponse(session, "robot_required", "robot_code is required", null);
+                throw new IllegalArgumentException("robot_code is required");
             }
             if (robotConfigService == null) {
-                return buildRobotConfigResponse(session, "robot_unavailable", "robot config service unavailable", request.getRobotCode());
+                throw new IllegalStateException("robot config service unavailable");
             }
-            try {
-                robotRuntimeContext = robotConfigService.resolveRuntimeContext(request.getRobotCode());
-            } catch (IllegalArgumentException exception) {
-                return buildRobotConfigResponse(session, "robot_not_found", exception.getMessage(), request.getRobotCode());
-            } catch (IllegalStateException exception) {
-                return buildRobotConfigResponse(session, "robot_disabled", exception.getMessage(), request.getRobotCode());
-            }
+            robotRuntimeContext = robotConfigService.resolveRuntimeContext(request.getRobotCode());
         }
         RoutingDecision routingDecision = forcedRoutingDecision != null
                 ? forcedRoutingDecision
@@ -1298,29 +1292,6 @@ public class ExecutionService {
         response.setExecutionId(null);
         response.setStatus("clarification_required");
         response.setRouteDecision("clarification_required");
-        return response;
-    }
-
-    private SendMessageResponse buildRobotConfigResponse(
-            Session session,
-            String status,
-            String reason,
-            String robotCode
-    ) {
-        SendMessageResponse response = new SendMessageResponse();
-        response.setSessionId(session.getId());
-        response.setExecutionId(null);
-        response.setStatus(status);
-        response.setRouteDecision(status);
-        response.setRouteReason(reason);
-        response.setClarificationQuestion(reason);
-        log.info(
-                "execution.robot_config.blocked sessionId={} robotCode={} status={} reason={}",
-                session.getId(),
-                robotCode,
-                status,
-                reason
-        );
         return response;
     }
 

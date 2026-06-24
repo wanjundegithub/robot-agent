@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -129,6 +130,19 @@ class WorkflowKnowledgeRouteServiceTest {
         verify(knowledgeService).searchKnowledge(eq("demo-user"), requestCaptor.capture());
         assertThat(requestCaptor.getValue().getKbCodes()).containsExactly("kb_product");
         assertThat(requestCaptor.getValue().getGenerateAnswer()).isFalse();
+    }
+
+    @Test
+    void routeMessagePropagatesKnowledgeSearchFailure() throws Exception {
+        arrangeWorkflowAndLowIntent();
+        when(knowledgeBindingService.getBindings(KnowledgeBindingScope.SESSION, "session_1"))
+                .thenReturn(List.of(binding("kb_warranty_policy")));
+        when(knowledgeService.searchKnowledge(eq("demo-user"), any(KnowledgeSearchRequest.class)))
+                .thenThrow(new IllegalArgumentException("Knowledge base not found: kb_warranty_policy"));
+
+        assertThatThrownBy(() -> workflowService.routeMessage("开源的容器编排平台", null, "session_1", "demo-user"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Knowledge base not found: kb_warranty_policy");
     }
 
     @Test

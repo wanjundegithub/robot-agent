@@ -1028,24 +1028,13 @@ public class WorkflowService {
             return null;
         }
 
-        KnowledgeSearchResponse knowledgeResponse;
-        try {
-            KnowledgeSearchRequest request = new KnowledgeSearchRequest();
-            request.setQuery(normalizedContent);
-            request.setKbCodes(boundKbCodes);
-            request.setRetrievalMode("hybrid");
-            request.setTopK(5);
-            request.setGenerateAnswer(false);
-            knowledgeResponse = knowledgeService.searchKnowledge(userId, request);
-        } catch (RuntimeException exception) {
-            log.warn(
-                    "workflow.knowledge.route.search_failed sessionId={} kbCodes={} message={}",
-                    sessionId,
-                    boundKbCodes,
-                    exception.getMessage()
-            );
-            return null;
-        }
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery(normalizedContent);
+        request.setKbCodes(boundKbCodes);
+        request.setRetrievalMode("hybrid");
+        request.setTopK(5);
+        request.setGenerateAnswer(false);
+        KnowledgeSearchResponse knowledgeResponse = knowledgeService.searchKnowledge(userId, request);
 
         double knowledgeBestScore = knowledgeResponse == null || knowledgeResponse.getBestScore() == null
                 ? 0.0d
