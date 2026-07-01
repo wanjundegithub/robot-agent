@@ -171,25 +171,46 @@ test.beforeEach(async ({ page }) => {
     }
     await route.continue()
   })
-  await page.route('**/api/knowledge-bases/search', async (route) => {
+  await page.route('**/api/knowledge-bases/search/stream', async (route) => {
     expect(route.request().headers()['x-user-id']).toBe('demo-user')
+    const result = {
+      query: '保修期',
+      documents: [
+        {
+          chunkId: 'chunk_1',
+          docId: 'doc_1',
+          kbCode: 'kb_product',
+          title: '产品手册',
+          content: '保修期为一年。',
+          score: 0.92,
+        },
+      ],
+      answer: '根据产品手册，保修期为一年。',
+      citations: [{ chunkId: 'chunk_1', docId: 'doc_1', score: 0.92 }],
+      bestScore: 0.92,
+    }
     await route.fulfill({
-      json: {
-        query: '保修期',
-        documents: [
-          {
-            chunkId: 'chunk_1',
-            docId: 'doc_1',
-            kbCode: 'kb_product',
-            title: '产品手册',
-            content: '保修期为一年。',
-            score: 0.92,
-          },
-        ],
-        answer: '根据产品手册，保修期为一年。',
-        citations: [{ chunkId: 'chunk_1', docId: 'doc_1', score: 0.92 }],
-        bestScore: 0.92,
-      },
+      contentType: 'text/event-stream; charset=utf-8',
+      body: [
+        'event: started',
+        `data: ${JSON.stringify({ type: 'started', query: '保修期', kbCodes: ['kb_product'], firstFrameDeadlineMs: 1000, content: '检索中' })}`,
+        '',
+        'event: delta',
+        `data: ${JSON.stringify({ type: 'delta', content: '根据产品', deltaIndex: 1, elapsedMs: 8 })}`,
+        '',
+        'event: delta',
+        `data: ${JSON.stringify({ type: 'delta', content: '手册，保', deltaIndex: 2, elapsedMs: 9 })}`,
+        '',
+        'event: delta',
+        `data: ${JSON.stringify({ type: 'delta', content: '修期为一', deltaIndex: 3, elapsedMs: 10 })}`,
+        '',
+        'event: delta',
+        `data: ${JSON.stringify({ type: 'delta', content: '年。', deltaIndex: 4, elapsedMs: 10 })}`,
+        '',
+        'event: completed',
+        `data: ${JSON.stringify({ type: 'completed', query: '保修期', elapsedMs: 10, result })}`,
+        '',
+      ].join('\n'),
     })
   })
 })

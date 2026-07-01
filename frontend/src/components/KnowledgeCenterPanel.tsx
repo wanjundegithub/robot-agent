@@ -9,7 +9,7 @@ import {
   getKnowledgeDocuments,
   getKnowledgeSpaces,
   retryKnowledgeTask,
-  searchKnowledge,
+  searchKnowledgeStream,
   updateKnowledgeDocument,
   updateKnowledgeSpace,
   uploadKnowledgeDocument,
@@ -77,6 +77,7 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false)
   const [isLoadingTasks, setIsLoadingTasks] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
+  const [searchStreamText, setSearchStreamText] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -327,16 +328,29 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
     }
     setIsSearching(true)
     setSearchResult(null)
+    setSearchStreamText('')
+    setStatusMessage(null)
     try {
-      const result = await searchKnowledge({
-        query,
-        kbCodes: searchKbCodes,
-        retrievalMode: 'hybrid',
-        topK: searchTopK,
-        generateAnswer: true,
-        currentUserId,
-      })
+      const result = await searchKnowledgeStream(
+        {
+          query,
+          kbCodes: searchKbCodes,
+          retrievalMode: 'hybrid',
+          topK: searchTopK,
+          generateAnswer: true,
+          currentUserId,
+        },
+        (event) => {
+          if (event.type === 'started') {
+            setStatusMessage(event.content || '已开始检索，正在等待结果。')
+          }
+          if (event.type === 'delta' && event.content) {
+            setSearchStreamText((current) => `${current}${event.content}`)
+          }
+        }
+      )
       setSearchResult(result)
+      setSearchStreamText('')
       setStatusMessage(null)
       setError(null)
     } catch {
@@ -647,6 +661,12 @@ const KnowledgeCenterPanel: React.FC<KnowledgeCenterPanelProps> = ({ currentUser
                       <div className="knowledge-section-title">总结答案</div>
                       <p>{searchResult.answer}</p>
                       <div className="knowledge-section-meta">最高命中分：{formatScore(searchResult.bestScore)}</div>
+                    </section>
+                  )}
+                  {!searchResult && searchStreamText && (
+                    <section className="knowledge-answer-panel">
+                      <div className="knowledge-section-title">检索输出</div>
+                      <p>{searchStreamText}</p>
                     </section>
                   )}
                   <div className="knowledge-hit-list">

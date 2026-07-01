@@ -49,3 +49,43 @@ async def test_knowledge_search_api_returns_hits_and_citations(monkeypatch):
     assert captured["kb_codes"] == ["kb_product"]
     assert captured["embedding_model_code"] == "model-431c4581ab84"
     assert captured["embedding"] == [0.2] * 1024
+
+
+@pytest.mark.asyncio
+async def test_knowledge_search_hybrid_falls_back_to_keyword_when_embedding_fails(monkeypatch):
+    captured = {}
+
+    class StubKnowledgeStore:
+        def search_many(self, **kwargs):
+            captured.update(kwargs)
+            return [
+                {
+                    "chunk_id": "chunk_fallback",
+                    "doc_id": "doc_fallback",
+                    "kb_code": "kb_product",
+                    "title": "Fallback document",
+                    "content": "Fallback keyword content.",
+                    "score": 0.7,
+                }
+            ]
+
+    async def failing_embed_texts_with_model(**_kwargs):
+        raise RuntimeError("embedding provider unavailable")
+
+    monkeypatch.setattr(main, "get_knowledge_store", lambda: StubKnowledgeStore())
+    monkeypatch.setattr(main, "embed_texts_with_model", failing_embed_texts_with_model)
+    request = main.KnowledgeSearchRequest(
+        query="fallback keyword",
+        kb_codes=["kb_product"],
+        retrieval_mode="hybrid",
+        score_threshold=0.65,
+        embedding_model_code="model-431c4581ab84",
+        provider_configs=[{"provider_code": "model-431c4581ab84-provider"}],
+        model_records=[{"model_code": "model-431c4581ab84"}],
+    )
+
+    payload = await main.search_knowledge(request)
+
+    assert payload["documents"][0]["doc_id"] == "doc_fallback"
+    assert captured["retrieval_mode"] == "keyword"
+    assert captured["embedding"] is None

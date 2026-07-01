@@ -1,8 +1,14 @@
 package robot.agent.service;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.task.TaskExecutor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import robot.agent.common.ApplicationConstants;
 import robot.agent.config.KnowledgeProperties;
@@ -52,6 +58,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class KnowledgeService {
+    private static final Logger logger = LoggerFactory.getLogger(KnowledgeService.class);
+
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final KnowledgeVersionRepository knowledgeVersionRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
@@ -64,6 +72,7 @@ public class KnowledgeService {
     private final PythonKnowledgeClient pythonKnowledgeClient;
     private final ModelConfigService modelConfigService;
     private final LegacyDocTextExtractor legacyDocTextExtractor;
+    private final TaskExecutor taskExecutor;
 
     @Autowired
     public KnowledgeService(
@@ -78,7 +87,8 @@ public class KnowledgeService {
             KnowledgeProperties knowledgeProperties,
             PythonKnowledgeClient pythonKnowledgeClient,
             ModelConfigService modelConfigService,
-            LegacyDocTextExtractor legacyDocTextExtractor
+            LegacyDocTextExtractor legacyDocTextExtractor,
+            TaskExecutor taskExecutor
     ) {
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeVersionRepository = knowledgeVersionRepository;
@@ -92,6 +102,7 @@ public class KnowledgeService {
         this.pythonKnowledgeClient = pythonKnowledgeClient;
         this.modelConfigService = modelConfigService;
         this.legacyDocTextExtractor = legacyDocTextExtractor;
+        this.taskExecutor = taskExecutor;
     }
 
     public List<KnowledgeBaseResponse> getKnowledgeBases(Long workspaceId) {
@@ -250,7 +261,7 @@ public class KnowledgeService {
 
         KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
         KnowledgeTask task = createQueuedTask(saved);
-        runIngestion(knowledgeBase, saved, task, null);
+        scheduleIngestion(task.getTaskId(), null);
         auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.create_text", "knowledge_document", saved.getDocId(), request, ApplicationConstants.HTTP_STATUS_OK);
         return KnowledgeDocumentResponse.fromEntity(saved);
     }
@@ -296,7 +307,7 @@ public class KnowledgeService {
             document.setIndexVersion(1);
             KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
             KnowledgeTask task = createQueuedTask(saved);
-            runIngestion(knowledgeBase, saved, task, extractLegacyDocTextIfNeeded(extension, file));
+            scheduleIngestion(task.getTaskId(), extractLegacyDocTextIfNeeded(extension, file));
             auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.upload", "knowledge_document", saved.getDocId(), filename, ApplicationConstants.HTTP_STATUS_OK);
             return KnowledgeDocumentResponse.fromEntity(saved);
         } catch (IOException exc) {
@@ -337,7 +348,7 @@ public class KnowledgeService {
             document.setIndexVersion((document.getIndexVersion() == null ? 0 : document.getIndexVersion()) + 1);
             KnowledgeDocument saved = knowledgeDocumentRepository.save(document);
             KnowledgeTask task = createQueuedTask(saved);
-            runIngestion(knowledgeBase, saved, task, null);
+            scheduleIngestion(task.getTaskId(), null);
             auditService.logAction(knowledgeBase.getWorkspaceId(), userId, "knowledge.document.update_text", "knowledge_document", saved.getDocId(), request, ApplicationConstants.HTTP_STATUS_OK);
             return KnowledgeDocumentResponse.fromEntity(saved);
         }
@@ -386,7 +397,8 @@ public class KnowledgeService {
         task.setProgress(0);
         task.setErrorMessage(null);
         task.setUpdatedAt(LocalDateTime.now());
-        runIngestion(knowledgeBase, document, task, null);
+        knowledgeTaskRepository.save(task);
+        scheduleIngestion(task.getTaskId(), null);
         return KnowledgeTaskResponse.fromEntity(task);
     }
 
@@ -463,6 +475,31 @@ public class KnowledgeService {
         return knowledgeTaskRepository.save(task);
     }
 
+    private void scheduleIngestion(String taskId, String legacyDocText) {
+        Runnable work = () -> runIngestionByTaskId(taskId, legacyDocText);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    taskExecutor.execute(work);
+                }
+            });
+            return;
+        }
+        taskExecutor.execute(work);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void runIngestionByTaskId(String taskId, String legacyDocText) {
+        KnowledgeTask task = knowledgeTaskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new RuntimeException("Knowledge task not found: " + taskId));
+        KnowledgeDocument document = knowledgeDocumentRepository.findByDocId(task.getDocId())
+                .orElseThrow(() -> new RuntimeException("Knowledge document not found: " + task.getDocId()));
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByKbCode(task.getKbCode())
+                .orElseThrow(() -> new RuntimeException("Knowledge base not found: " + task.getKbCode()));
+        runIngestion(knowledgeBase, document, task, legacyDocText);
+    }
+
     private void runIngestion(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {
         task.setStatus(KnowledgeTaskStatus.RUNNING);
         task.setStartedAt(LocalDateTime.now());
@@ -472,7 +509,7 @@ public class KnowledgeService {
             Map<String, Object> response = pythonKnowledgeClient.ingest(buildIngestRequest(knowledgeBase, document, task, legacyDocText));
             String status = String.valueOf(response == null ? "" : response.getOrDefault("status", ""));
             if (!"SUCCEEDED".equalsIgnoreCase(status)) {
-                throw new IllegalStateException(String.valueOf(response == null ? "Python ingestion failed" : response.getOrDefault("error_message", "Python ingestion failed")));
+                throw new IllegalStateException(formatPythonFailure(response));
             }
 
             task.setStatus(KnowledgeTaskStatus.SUCCEEDED);
@@ -488,15 +525,36 @@ public class KnowledgeService {
             document.setErrorMessage(null);
             document.setProcessedAt(LocalDateTime.now());
         } catch (Exception exc) {
+            String errorMessage = formatException(exc);
+            logger.warn("knowledge.ingestion.failed taskId={} docId={} kbCode={} error={}", task.getTaskId(), document.getDocId(), document.getKbCode(), errorMessage, exc);
             task.setStatus(KnowledgeTaskStatus.FAILED);
-            task.setErrorMessage(exc.getMessage());
+            task.setErrorMessage(errorMessage);
             task.setCompletedAt(LocalDateTime.now());
             task.setUpdatedAt(LocalDateTime.now());
             document.setStatus(KnowledgeDocumentStatus.FAILED);
-            document.setErrorMessage(exc.getMessage());
+            document.setErrorMessage(errorMessage);
         }
         knowledgeTaskRepository.save(task);
         knowledgeDocumentRepository.save(document);
+    }
+
+    private String formatPythonFailure(Map<String, Object> response) {
+        if (response == null) {
+            return "Python ingestion failed: empty response";
+        }
+        Object errorMessage = response.get("error_message");
+        if (errorMessage != null && !String.valueOf(errorMessage).isBlank()) {
+            return String.valueOf(errorMessage);
+        }
+        return "Python ingestion failed: " + response;
+    }
+
+    private String formatException(Exception exc) {
+        String message = exc.getMessage();
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+        return exc.getClass().getSimpleName();
     }
 
     private Map<String, Object> buildIngestRequest(KnowledgeBase knowledgeBase, KnowledgeDocument document, KnowledgeTask task, String legacyDocText) {

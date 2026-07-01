@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -70,9 +72,11 @@ class KnowledgeTaskServiceTest {
     private LegacyDocTextExtractor legacyDocTextExtractor;
 
     private KnowledgeService knowledgeService;
+    private List<Runnable> scheduledTasks;
 
     @BeforeEach
     void setUp() {
+        scheduledTasks = new ArrayList<>();
         knowledgeService = new KnowledgeService(
                 knowledgeBaseRepository,
                 knowledgeVersionRepository,
@@ -85,19 +89,32 @@ class KnowledgeTaskServiceTest {
                 new KnowledgeProperties(),
                 pythonKnowledgeClient,
                 modelConfigService,
-                legacyDocTextExtractor
+                legacyDocTextExtractor,
+                scheduledTasks::add
         );
     }
 
     @Test
-    void createTextKnowledgeDocumentCreatesTaskAndMarksDocumentReadyAfterPythonIngest() {
+    void createTextKnowledgeDocumentQueuesTaskAndMarksDocumentReadyAfterBackgroundIngest() {
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setWorkspaceId(1L);
         knowledgeBase.setKbCode("kb_product");
         knowledgeBase.setCurrentVersion("v1");
+        AtomicReference<KnowledgeDocument> documentRef = new AtomicReference<>();
+        AtomicReference<KnowledgeTask> taskRef = new AtomicReference<>();
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
-        when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> {
+            KnowledgeDocument document = invocation.getArgument(0);
+            documentRef.set(document);
+            return document;
+        });
+        when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> {
+            KnowledgeTask task = invocation.getArgument(0);
+            taskRef.set(task);
+            return task;
+        });
+        when(knowledgeDocumentRepository.findByDocId(any())).thenAnswer(invocation -> Optional.of(documentRef.get()));
+        when(knowledgeTaskRepository.findByTaskId(any())).thenAnswer(invocation -> Optional.of(taskRef.get()));
         when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
@@ -112,13 +129,23 @@ class KnowledgeTaskServiceTest {
 
         KnowledgeDocumentResponse response = knowledgeService.createTextKnowledgeDocument("demo-admin", "kb_product", request);
 
-        assertThat(response.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
-        assertThat(response.getChunkCount()).isEqualTo(2);
+        assertThat(response.getStatus()).isEqualTo(KnowledgeDocumentStatus.PENDING);
+        assertThat(response.getChunkCount()).isNull();
+        assertThat(scheduledTasks).hasSize(1);
         ArgumentCaptor<KnowledgeTask> taskCaptor = ArgumentCaptor.forClass(KnowledgeTask.class);
         verify(knowledgeTaskRepository, atLeastOnce()).save(taskCaptor.capture());
         assertThat(taskCaptor.getAllValues()).anySatisfy(task -> {
             assertThat(task.getDocId()).startsWith("doc_");
             assertThat(task.getKbCode()).isEqualTo("kb_product");
+            assertThat(task.getStatus()).isEqualTo(KnowledgeTaskStatus.QUEUED);
+        });
+
+        scheduledTasks.get(0).run();
+
+        assertThat(documentRef.get().getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
+        assertThat(documentRef.get().getChunkCount()).isEqualTo(2);
+        assertThat(taskRef.get().getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
+        assertThat(taskCaptor.getAllValues()).anySatisfy(task -> {
             assertThat(task.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
         });
         ArgumentCaptor<Map<String, Object>> ingestRequestCaptor = ArgumentCaptor.forClass(Map.class);
@@ -180,7 +207,9 @@ class KnowledgeTaskServiceTest {
 
         KnowledgeTaskResponse response = knowledgeService.retryKnowledgeTask("demo-admin", "task_failed");
 
-        assertThat(response.getStatus()).isEqualTo(KnowledgeTaskStatus.SUCCEEDED);
+        assertThat(response.getStatus()).isEqualTo(KnowledgeTaskStatus.QUEUED);
+        assertThat(scheduledTasks).hasSize(1);
+        scheduledTasks.get(0).run();
         ArgumentCaptor<KnowledgeDocument> documentCaptor = ArgumentCaptor.forClass(KnowledgeDocument.class);
         verify(knowledgeDocumentRepository).save(documentCaptor.capture());
         KnowledgeDocument savedDocument = documentCaptor.getValue();

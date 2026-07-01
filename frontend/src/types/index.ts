@@ -333,6 +333,18 @@ export interface KnowledgeSearchResult {
   bestScore: number
 }
 
+export interface KnowledgeSearchStreamEvent {
+  type: 'started' | 'delta' | 'completed' | 'failed' | string
+  query?: string | null
+  kbCodes?: string[]
+  firstFrameDeadlineMs?: number | null
+  elapsedMs?: number | null
+  result?: KnowledgeSearchResult | null
+  message?: string | null
+  content?: string | null
+  deltaIndex?: number | null
+}
+
 export type RobotStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED' | 'ARCHIVED' | string
 export type RobotBindingType = 'WORKFLOW_SPACE' | 'KNOWLEDGE_SPACE' | string
 

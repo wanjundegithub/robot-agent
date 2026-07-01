@@ -10,6 +10,7 @@ import type {
   FunctionFragmentValidationResult,
   KnowledgeDocument,
   KnowledgeSearchResult,
+  KnowledgeSearchStreamEvent,
   KnowledgeSpace,
   KnowledgeTask,
   Message,
@@ -485,7 +486,7 @@ export async function deleteKnowledgeTask(taskId: string, currentUserId: string)
   }
 }
 
-export async function searchKnowledge(payload: {
+export type KnowledgeSearchPayload = {
   query: string
   kbCodes: string[]
   retrievalMode?: 'hybrid' | 'keyword' | 'vector' | string
@@ -493,7 +494,9 @@ export async function searchKnowledge(payload: {
   scoreThreshold?: number
   generateAnswer?: boolean
   currentUserId?: string
-}): Promise<KnowledgeSearchResult> {
+}
+
+export async function searchKnowledge(payload: KnowledgeSearchPayload): Promise<KnowledgeSearchResult> {
   const { currentUserId, ...requestPayload } = payload
   const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/search`, {
     method: 'POST',
@@ -512,6 +515,112 @@ export async function searchKnowledge(payload: {
     await parseApiError(response)
   }
   return await response.json()
+}
+
+export async function searchKnowledgeStream(
+  payload: KnowledgeSearchPayload,
+  onEvent?: (event: KnowledgeSearchStreamEvent) => void
+): Promise<KnowledgeSearchResult> {
+  const { currentUserId, ...requestPayload } = payload
+  const response = await apiFetch(`${API_BASE_URL}/knowledge-bases/search/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      'X-User-Id': currentUserId || ADMIN_USER_ID,
+    },
+    body: JSON.stringify({
+      retrievalMode: 'hybrid',
+      topK: 5,
+      generateAnswer: true,
+      ...requestPayload,
+    }),
+  })
+  if (!response.ok) {
+    await parseApiError(response)
+  }
+  return await readKnowledgeSearchStream(response, onEvent)
+}
+
+async function readKnowledgeSearchStream(
+  response: Response,
+  onEvent?: (event: KnowledgeSearchStreamEvent) => void
+): Promise<KnowledgeSearchResult> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('Knowledge search stream is not readable')
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: KnowledgeSearchResult | null = null
+  let failureMessage: string | null = null
+
+  const handleBlock = (block: string) => {
+    const event = parseKnowledgeSearchStreamBlock(block)
+    if (!event) return
+    onEvent?.(event)
+    if (event.type === 'completed' && event.result) {
+      result = event.result
+    }
+    if (event.type === 'failed') {
+      failureMessage = event.message || 'Knowledge search failed'
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = findSseBoundary(buffer)
+    while (boundary) {
+      const block = buffer.slice(0, boundary.index)
+      buffer = buffer.slice(boundary.index + boundary.length)
+      handleBlock(block)
+      boundary = findSseBoundary(buffer)
+    }
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) {
+    handleBlock(buffer)
+  }
+  if (failureMessage) {
+    throw new Error(failureMessage)
+  }
+  if (!result) {
+    throw new Error('Knowledge search stream ended without result')
+  }
+  return result
+}
+
+function findSseBoundary(buffer: string): { index: number; length: number } | null {
+  const lfIndex = buffer.indexOf('\n\n')
+  const crlfIndex = buffer.indexOf('\r\n\r\n')
+  if (lfIndex < 0 && crlfIndex < 0) return null
+  if (lfIndex >= 0 && (crlfIndex < 0 || lfIndex < crlfIndex)) {
+    return { index: lfIndex, length: 2 }
+  }
+  return { index: crlfIndex, length: 4 }
+}
+
+function parseKnowledgeSearchStreamBlock(block: string): KnowledgeSearchStreamEvent | null {
+  const lines = block.split(/\r?\n/)
+  let eventType = ''
+  const dataLines: string[] = []
+  lines.forEach((line) => {
+    if (line.startsWith('event:')) {
+      eventType = line.slice('event:'.length).trim()
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart())
+    }
+  })
+  if (dataLines.length === 0) {
+    return null
+  }
+  const event = JSON.parse(dataLines.join('\n')) as KnowledgeSearchStreamEvent
+  return event.type ? event : { ...event, type: eventType }
 }
 
 export async function getWorkflows(): Promise<WorkflowSummary[]> {

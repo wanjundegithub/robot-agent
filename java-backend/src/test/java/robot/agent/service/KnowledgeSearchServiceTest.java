@@ -79,7 +79,8 @@ class KnowledgeSearchServiceTest {
                 new KnowledgeProperties(),
                 pythonKnowledgeClient,
                 modelConfigService,
-                legacyDocTextExtractor
+                legacyDocTextExtractor,
+                Runnable::run
         );
     }
 

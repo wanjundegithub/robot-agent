@@ -28,6 +28,8 @@ import robot.agent.service.knowledge.SafeObjectKeyFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -70,9 +72,11 @@ class KnowledgeServiceManagementTest {
     private LegacyDocTextExtractor legacyDocTextExtractor;
 
     private KnowledgeService knowledgeService;
+    private List<Runnable> scheduledTasks;
 
     @BeforeEach
     void setUp() {
+        scheduledTasks = new ArrayList<>();
         knowledgeService = new KnowledgeService(
                 knowledgeBaseRepository,
                 knowledgeVersionRepository,
@@ -85,7 +89,8 @@ class KnowledgeServiceManagementTest {
                 new KnowledgeProperties(),
                 pythonKnowledgeClient,
                 modelConfigService,
-                legacyDocTextExtractor
+                legacyDocTextExtractor,
+                scheduledTasks::add
         );
     }
 
@@ -184,10 +189,16 @@ class KnowledgeServiceManagementTest {
         knowledgeBase.setCurrentVersion("v1");
         KnowledgeDocument document = textDocument("doc_1", "kb_product", "旧标题", "旧正文");
         document.setIndexVersion(1);
+        AtomicReference<KnowledgeTask> taskRef = new AtomicReference<>();
         when(knowledgeBaseRepository.findByKbCode("kb_product")).thenReturn(Optional.of(knowledgeBase));
         when(knowledgeDocumentRepository.findByDocId("doc_1")).thenReturn(Optional.of(document));
         when(knowledgeDocumentRepository.save(any(KnowledgeDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(knowledgeTaskRepository.save(any(KnowledgeTask.class))).thenAnswer(invocation -> {
+            KnowledgeTask task = invocation.getArgument(0);
+            taskRef.set(task);
+            return task;
+        });
+        when(knowledgeTaskRepository.findByTaskId(any())).thenAnswer(invocation -> Optional.of(taskRef.get()));
         when(modelConfigService.buildRuntimeBundleForModel("model-431c4581ab84"))
                 .thenReturn(new ModelConfigService.RuntimeModelBundle(List.of(Map.of("provider_code", "model-431c4581ab84-provider")), List.of(Map.of("model_code", "model-431c4581ab84"))));
         when(pythonKnowledgeClient.ingest(anyMap())).thenReturn(Map.of(
@@ -206,9 +217,12 @@ class KnowledgeServiceManagementTest {
 
         assertThat(response.getTitle()).isEqualTo("新标题");
         assertThat(response.getDescription()).isEqualTo("新描述");
-        assertThat(response.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
+        assertThat(response.getStatus()).isEqualTo(KnowledgeDocumentStatus.PENDING);
         assertThat(document.getRawContent()).isEqualTo("新正文");
         assertThat(document.getIndexVersion()).isEqualTo(2);
+        assertThat(scheduledTasks).hasSize(1);
+        scheduledTasks.get(0).run();
+        assertThat(document.getStatus()).isEqualTo(KnowledgeDocumentStatus.READY);
         ArgumentCaptor<Map<String, Object>> requestCaptor = ArgumentCaptor.forClass(Map.class);
         verify(pythonKnowledgeClient).ingest(requestCaptor.capture());
         assertThat(requestCaptor.getValue()).containsEntry("index_version", 2);

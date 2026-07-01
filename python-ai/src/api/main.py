@@ -333,19 +333,32 @@ async def search_knowledge(request: KnowledgeSearchRequest):
         if item.get("model_code")
     }
     query_embedding = None
-    if request.retrieval_mode in {"vector", "hybrid"}:
-        vectors = await embed_texts_with_model(
-            texts=[request.query],
-            model_code=request.embedding_model_code,
-            provider_configs=provider_configs,
-            model_records=model_records,
-            expected_dimension=settings.vector_dimension,
-        )
-        query_embedding = vectors[0] if vectors else None
+    retrieval_mode = request.retrieval_mode
+    if retrieval_mode in {"vector", "hybrid"}:
+        try:
+            vectors = await embed_texts_with_model(
+                texts=[request.query],
+                model_code=request.embedding_model_code,
+                provider_configs=provider_configs,
+                model_records=model_records,
+                expected_dimension=settings.vector_dimension,
+            )
+            query_embedding = vectors[0] if vectors else None
+        except Exception:
+            if retrieval_mode == "vector":
+                raise
+            logger.warning(
+                "knowledge.search.embedding_failed_fallback queryLength=%s kbCount=%s retrievalMode=%s",
+                len(request.query or ""),
+                len(request.kb_codes),
+                retrieval_mode,
+                exc_info=True,
+            )
+            retrieval_mode = "keyword"
     documents = get_knowledge_store().search_many(
         kb_codes=request.kb_codes,
         query=request.query,
-        retrieval_mode=request.retrieval_mode,
+        retrieval_mode=retrieval_mode,
         top_k=request.top_k,
         score_threshold=request.score_threshold,
         embedding=query_embedding,
