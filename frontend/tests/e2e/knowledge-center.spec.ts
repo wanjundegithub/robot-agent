@@ -192,9 +192,6 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       contentType: 'text/event-stream; charset=utf-8',
       body: [
-        'event: started',
-        `data: ${JSON.stringify({ type: 'started', query: '保修期', kbCodes: ['kb_product'], firstFrameDeadlineMs: 1000, content: '检索中' })}`,
-        '',
         'event: delta',
         `data: ${JSON.stringify({ type: 'delta', content: '根据产品', deltaIndex: 1, elapsedMs: 8 })}`,
         '',

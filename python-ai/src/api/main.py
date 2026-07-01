@@ -332,9 +332,10 @@ async def search_knowledge(request: KnowledgeSearchRequest):
         for item in request.model_records
         if item.get("model_code")
     }
-    query_embedding = None
     retrieval_mode = request.retrieval_mode
-    if retrieval_mode in {"vector", "hybrid"}:
+    if retrieval_mode == "hybrid":
+        documents = await _search_hybrid_concurrently(request, provider_configs, model_records)
+    elif retrieval_mode == "vector":
         try:
             vectors = await embed_texts_with_model(
                 texts=[request.query],
@@ -343,29 +344,23 @@ async def search_knowledge(request: KnowledgeSearchRequest):
                 model_records=model_records,
                 expected_dimension=settings.vector_dimension,
             )
-            query_embedding = vectors[0] if vectors else None
-        except Exception:
-            if retrieval_mode == "vector":
-                raise
-            logger.warning(
-                "knowledge.search.embedding_failed_fallback queryLength=%s kbCount=%s retrievalMode=%s",
-                len(request.query or ""),
-                len(request.kb_codes),
-                retrieval_mode,
-                exc_info=True,
+            documents = await _search_documents(
+                request=request,
+                retrieval_mode="vector",
+                embedding=vectors[0] if vectors else None,
+                provider_configs=provider_configs,
+                model_records=model_records,
             )
-            retrieval_mode = "keyword"
-    documents = get_knowledge_store().search_many(
-        kb_codes=request.kb_codes,
-        query=request.query,
-        retrieval_mode=retrieval_mode,
-        top_k=request.top_k,
-        score_threshold=request.score_threshold,
-        embedding=query_embedding,
-        embedding_model_code=request.embedding_model_code,
-        provider_configs=provider_configs,
-        model_records=model_records,
-    )
+        except Exception:
+            raise
+    else:
+        documents = await _search_documents(
+            request=request,
+            retrieval_mode="keyword",
+            embedding=None,
+            provider_configs=provider_configs,
+            model_records=model_records,
+        )
     return {
         "query": request.query,
         "documents": documents,
@@ -376,6 +371,120 @@ async def search_knowledge(request: KnowledgeSearchRequest):
         ],
         "bestScore": max([float(item.get("score", 0.0)) for item in documents], default=0.0),
     }
+
+
+async def _search_hybrid_concurrently(
+    request: KnowledgeSearchRequest,
+    provider_configs: dict[str, dict],
+    model_records: dict[str, dict],
+) -> list[dict]:
+    keyword_task = asyncio.create_task(
+        _search_documents(
+            request=request,
+            retrieval_mode="keyword",
+            embedding=None,
+            provider_configs=provider_configs,
+            model_records=model_records,
+            score_threshold=0.0,
+        )
+    )
+    embedding_task = asyncio.create_task(
+        embed_texts_with_model(
+            texts=[request.query],
+            model_code=request.embedding_model_code,
+            provider_configs=provider_configs,
+            model_records=model_records,
+            expected_dimension=settings.vector_dimension,
+        )
+    )
+    try:
+        vectors = await embedding_task
+    except Exception:
+        logger.warning(
+            "knowledge.search.embedding_failed_fallback queryLength=%s kbCount=%s retrievalMode=%s",
+            len(request.query or ""),
+            len(request.kb_codes),
+            request.retrieval_mode,
+            exc_info=True,
+        )
+        return await keyword_task
+
+    vector_task = asyncio.create_task(
+        _search_documents(
+            request=request,
+            retrieval_mode="vector",
+            embedding=vectors[0] if vectors else None,
+            provider_configs=provider_configs,
+            model_records=model_records,
+            score_threshold=0.0,
+        )
+    )
+    vector_documents, keyword_documents = await asyncio.gather(vector_task, keyword_task)
+    return _merge_hybrid_documents(
+        vector_documents=vector_documents,
+        keyword_documents=keyword_documents,
+        top_k=request.top_k,
+        score_threshold=request.score_threshold,
+    )
+
+
+async def _search_documents(
+    request: KnowledgeSearchRequest,
+    retrieval_mode: str,
+    embedding: list[float] | None,
+    provider_configs: dict[str, dict],
+    model_records: dict[str, dict],
+    score_threshold: float | None = None,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        get_knowledge_store().search_many,
+        kb_codes=request.kb_codes,
+        query=request.query,
+        retrieval_mode=retrieval_mode,
+        top_k=request.top_k,
+        score_threshold=request.score_threshold if score_threshold is None else score_threshold,
+        embedding=embedding,
+        embedding_model_code=request.embedding_model_code,
+        provider_configs=provider_configs,
+        model_records=model_records,
+    )
+
+
+def _merge_hybrid_documents(
+    vector_documents: list[dict],
+    keyword_documents: list[dict],
+    top_k: int,
+    score_threshold: float,
+) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for item in vector_documents:
+        chunk_id = str(item.get("chunk_id") or "")
+        if not chunk_id:
+            continue
+        vector_score = float(item.get("vector_score", item.get("score", 0.0)) or 0.0)
+        merged[chunk_id] = {**item, "vector_score": vector_score, "keyword_score": 0.0}
+    for item in keyword_documents:
+        chunk_id = str(item.get("chunk_id") or "")
+        if not chunk_id:
+            continue
+        keyword_score = float(item.get("keyword_score", item.get("score", 0.0)) or 0.0)
+        current = merged.setdefault(chunk_id, {**item, "vector_score": 0.0, "keyword_score": 0.0})
+        current["keyword_score"] = keyword_score
+
+    for item in merged.values():
+        vector_score = float(item.get("vector_score", 0.0))
+        keyword_score = float(item.get("keyword_score", 0.0))
+        weighted_score = (
+            vector_score * settings.knowledge_retrieval_vector_weight
+            + keyword_score * settings.knowledge_retrieval_keyword_weight
+            + settings.knowledge_retrieval_metadata_boost
+        )
+        item["score"] = round(max(weighted_score, vector_score, keyword_score), 6)
+    return sorted(
+        [item for item in merged.values() if float(item["score"]) >= score_threshold],
+        key=lambda value: float(value["score"]),
+        reverse=True,
+    )[:top_k]
 
 
 @app.post("/api/phase4/route-thresholds/resolve")

@@ -21,15 +21,15 @@ import robot.agent.service.KnowledgeService;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/knowledge-bases")
 public class KnowledgeController {
     private static final long SEARCH_STREAM_TIMEOUT_MS = 60_000L;
-    private static final int SEARCH_STREAM_FIRST_FRAME_DEADLINE_MS = 1_000;
     private static final int SEARCH_STREAM_DELTA_CHARS = 6;
-    private static final String SEARCH_STREAM_STARTED_CONTENT = "检索中";
     private static final String SEARCH_STREAM_EMPTY_CONTENT = "未命中";
 
     private final KnowledgeService knowledgeService;
@@ -203,68 +203,87 @@ public class KnowledgeController {
     private SseEmitter streamSearch(String userId, KnowledgeSearchRequest request) {
         SseEmitter emitter = new SseEmitter(SEARCH_STREAM_TIMEOUT_MS);
         long startedAtNanos = System.nanoTime();
-        try {
-            sendStreamEvent(
-                    emitter,
-                    "started",
-                    KnowledgeSearchStreamEvent.started(
-                            request == null ? null : request.getQuery(),
-                            request == null ? List.of() : request.getKbCodes(),
-                            SEARCH_STREAM_FIRST_FRAME_DEADLINE_MS,
-                            SEARCH_STREAM_STARTED_CONTENT
-                    )
-            );
-        } catch (IOException exc) {
-            emitter.completeWithError(exc);
-            return emitter;
-        }
+        AtomicBoolean deltaSent = new AtomicBoolean(false);
+        AtomicBoolean completed = new AtomicBoolean(false);
+        CompletableFuture<KnowledgeSearchResponse> completeFuture = CompletableFuture.supplyAsync(
+                () -> completeSearch(userId, request),
+                taskExecutor
+        );
+        CompletableFuture<KnowledgeSearchResponse> fastFuture = CompletableFuture.supplyAsync(
+                () -> fastKeywordSearchIfPossible(userId, request),
+                taskExecutor
+        );
 
-        Runnable searchTask = () -> {
+        fastFuture.thenAccept(response -> {
+            if (response == null || completed.get()) {
+                return;
+            }
             try {
-                KnowledgeSearchResponse response = knowledgeService.searchKnowledge(userId, request);
-                streamDeltaEvents(emitter, response, startedAtNanos);
+                if (streamDeltaEvents(emitter, response, startedAtNanos, false)) {
+                    deltaSent.set(true);
+                }
+            } catch (IOException exc) {
+                completeWithError(emitter, completed, exc);
+            }
+        });
+        completeFuture.whenComplete((response, throwable) -> {
+            if (!completed.compareAndSet(false, true)) {
+                return;
+            }
+            if (throwable != null) {
+                sendFailure(emitter, startedAtNanos, completed);
+                return;
+            }
+            try {
+                if (!deltaSent.get()) {
+                    streamDeltaEvents(emitter, response, startedAtNanos, true);
+                }
                 sendStreamEvent(
                         emitter,
                         "completed",
                         KnowledgeSearchStreamEvent.completed(response, elapsedMs(startedAtNanos))
                 );
                 emitter.complete();
-            } catch (Exception exc) {
-                try {
-                    sendStreamEvent(
-                            emitter,
-                            "failed",
-                            KnowledgeSearchStreamEvent.failed("Knowledge search failed", elapsedMs(startedAtNanos))
-                    );
-                    emitter.complete();
-                } catch (IOException sendError) {
-                    emitter.completeWithError(sendError);
-                }
+            } catch (IOException exc) {
+                emitter.completeWithError(exc);
             }
-        };
-        try {
-            taskExecutor.execute(searchTask);
-        } catch (RuntimeException exc) {
-            try {
-                sendStreamEvent(
-                        emitter,
-                        "failed",
-                        KnowledgeSearchStreamEvent.failed("Knowledge search failed", elapsedMs(startedAtNanos))
-                );
-                emitter.complete();
-            } catch (IOException sendError) {
-                emitter.completeWithError(sendError);
-            }
-        }
+        });
         return emitter;
     }
 
-    private void sendStreamEvent(SseEmitter emitter, String eventName, KnowledgeSearchStreamEvent event) throws IOException {
-        emitter.send(SseEmitter.event().name(eventName).data(event, MediaType.APPLICATION_JSON));
+    private KnowledgeSearchResponse fastKeywordSearchIfPossible(
+            String userId,
+            KnowledgeSearchRequest request
+    ) {
+        String retrievalMode = normalizedRetrievalMode(request);
+        if (!"hybrid".equals(retrievalMode) && !"keyword".equals(retrievalMode)) {
+            return null;
+        }
+        KnowledgeSearchRequest keywordRequest = copySearchRequest(request);
+        keywordRequest.setRetrievalMode("keyword");
+        return knowledgeService.searchKnowledge(userId, keywordRequest);
     }
 
-    private void streamDeltaEvents(SseEmitter emitter, KnowledgeSearchResponse response, long startedAtNanos) throws IOException {
-        String content = streamContent(response);
+    private KnowledgeSearchResponse completeSearch(String userId, KnowledgeSearchRequest request) {
+        return knowledgeService.searchKnowledge(userId, request);
+    }
+
+    private void sendStreamEvent(SseEmitter emitter, String eventName, KnowledgeSearchStreamEvent event) throws IOException {
+        synchronized (emitter) {
+            emitter.send(SseEmitter.event().name(eventName).data(event, MediaType.APPLICATION_JSON));
+        }
+    }
+
+    private boolean streamDeltaEvents(
+            SseEmitter emitter,
+            KnowledgeSearchResponse response,
+            long startedAtNanos,
+            boolean emitEmptyContent
+    ) throws IOException {
+        String content = streamContent(response, emitEmptyContent);
+        if (content.isBlank()) {
+            return false;
+        }
         List<String> chunks = splitByCodePoint(content, SEARCH_STREAM_DELTA_CHARS);
         for (int index = 0; index < chunks.size(); index++) {
             sendStreamEvent(
@@ -273,11 +292,12 @@ public class KnowledgeController {
                     KnowledgeSearchStreamEvent.delta(chunks.get(index), index + 1, elapsedMs(startedAtNanos))
             );
         }
+        return !chunks.isEmpty();
     }
 
-    private String streamContent(KnowledgeSearchResponse response) {
+    private String streamContent(KnowledgeSearchResponse response, boolean emitEmptyContent) {
         if (response == null) {
-            return SEARCH_STREAM_EMPTY_CONTENT;
+            return emitEmptyContent ? SEARCH_STREAM_EMPTY_CONTENT : "";
         }
         if (response.getAnswer() != null && !response.getAnswer().isBlank()) {
             return response.getAnswer().trim();
@@ -287,7 +307,10 @@ public class KnowledgeController {
                 .filter(content -> content != null && !content.isBlank())
                 .map(String::trim)
                 .collect(Collectors.joining("\n"));
-        return joinedContent.isBlank() ? SEARCH_STREAM_EMPTY_CONTENT : joinedContent;
+        if (!joinedContent.isBlank()) {
+            return joinedContent;
+        }
+        return emitEmptyContent ? SEARCH_STREAM_EMPTY_CONTENT : "";
     }
 
     private List<String> splitByCodePoint(String content, int chunkSize) {
@@ -302,6 +325,44 @@ public class KnowledgeController {
             chunks.add(new String(codePoints, offset, length));
         }
         return chunks;
+    }
+
+    private KnowledgeSearchRequest copySearchRequest(KnowledgeSearchRequest source) {
+        KnowledgeSearchRequest copy = new KnowledgeSearchRequest();
+        if (source == null) {
+            return copy;
+        }
+        copy.setQuery(source.getQuery());
+        copy.setKbCodes(source.getKbCodes() == null ? List.of() : List.copyOf(source.getKbCodes()));
+        copy.setRetrievalMode(source.getRetrievalMode());
+        copy.setTopK(source.getTopK());
+        copy.setScoreThreshold(source.getScoreThreshold());
+        copy.setGenerateAnswer(source.getGenerateAnswer());
+        return copy;
+    }
+
+    private String normalizedRetrievalMode(KnowledgeSearchRequest request) {
+        String retrievalMode = request == null ? null : request.getRetrievalMode();
+        return retrievalMode == null || retrievalMode.isBlank() ? "hybrid" : retrievalMode.trim().toLowerCase();
+    }
+
+    private void sendFailure(SseEmitter emitter, long startedAtNanos, AtomicBoolean completed) {
+        try {
+            sendStreamEvent(
+                    emitter,
+                    "failed",
+                    KnowledgeSearchStreamEvent.failed("Knowledge search failed", elapsedMs(startedAtNanos))
+            );
+            emitter.complete();
+        } catch (IOException exc) {
+            completeWithError(emitter, completed, exc);
+        }
+    }
+
+    private void completeWithError(SseEmitter emitter, AtomicBoolean completed, Throwable throwable) {
+        if (completed.compareAndSet(false, true)) {
+            emitter.completeWithError(throwable);
+        }
     }
 
     private long elapsedMs(long startedAtNanos) {

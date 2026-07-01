@@ -11,6 +11,9 @@ async def test_knowledge_search_api_returns_hits_and_citations(monkeypatch):
     class StubKnowledgeStore:
         def search_many(self, **kwargs):
             captured.update(kwargs)
+            is_keyword = kwargs.get("retrieval_mode") == "keyword"
+            score_key = "keyword_score" if is_keyword else "vector_score"
+            branch_score = 0.2 if is_keyword else 0.92
             return [
                 {
                     "chunk_id": "chunk_1",
@@ -19,6 +22,7 @@ async def test_knowledge_search_api_returns_hits_and_citations(monkeypatch):
                     "title": "产品手册",
                     "content": "保修期为一年",
                     "score": 0.92,
+                    score_key: branch_score,
                 }
             ]
 
